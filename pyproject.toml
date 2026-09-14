@@ -1,0 +1,39 @@
+[project]
+name = "agent-service"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Arthur Marques", email = "joao_arthur@discente.ufg.br" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "agno>=3.0.9",
+    "asyncpg>=0.31.0",
+    "fastapi>=0.141.1",
+    "google-genai>=2.23.0",
+    "langsmith>=0.12.4",
+    "pgvector>=0.5.0",
+    "psycopg[binary]>=3.3.5",
+    "pydantic-settings>=2.15.0",
+    "python-multipart>=0.0.32",
+    "redis>=8.1.0",
+    "sqlalchemy>=2.0.52",
+    "sse-starlette>=3.4.11",
+    "uvicorn[standard]>=0.53.0",
+]
+
+[project.optional-dependencies]
+mem0 = [
+    "mem0ai>=2.0.20",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.33,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
