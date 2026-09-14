@@ -25,5 +25,38 @@ services:
       timeout: 5s
       retries: 10
 
+  agent-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      # Sobrepõe o .env (feito para `uv run` local): dentro da rede do
+      # compose os serviços se enxergam pelo nome, na porta interna.
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/agent_service
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "58000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      # Server-side apenas (sem prefixo NEXT_PUBLIC_) — o browser nunca
+      # fala direto com o agent-service, só com o BFF do Next.js.
+      AGENT_SERVICE_URL: http://agent-service:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      agent-service:
+        condition: service_started
+
 volumes:
   agent_service_postgres_data:

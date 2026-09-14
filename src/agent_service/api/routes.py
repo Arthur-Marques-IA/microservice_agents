@@ -94,16 +94,25 @@ async def search_collection(collection_name: str, query: str, limit: int = 5) ->
     return [SearchResult(content=doc.content, metadata=doc.meta_data) for doc in documents]
 
 
-@router.get("/chat/stream")
-async def chat_stream(agent_type: str, user_id: str, session_id: str, message: str) -> EventSourceResponse:
+@router.post("/chat/stream")
+async def chat_stream(request: ChatRequest) -> EventSourceResponse:
+    """Streaming via POST (não GET): a mensagem do usuário vai no corpo, não
+    na query string — evita acabar em log de acesso. `EventSource` do browser
+    só faz GET, então o cliente precisa consumir isso com `fetch` + leitura
+    manual do stream (ver `frontend/`), não com a API `EventSource`.
+    """
     try:
-        agent = get_agent(agent_type)
+        agent = get_agent(request.agent_type)
     except UnknownAgentTypeError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     async def event_generator():
         async for event in agent.arun(
-            message, user_id=user_id, session_id=session_id, stream=True, stream_events=False
+            request.message,
+            user_id=request.user_id,
+            session_id=request.session_id,
+            stream=True,
+            stream_events=False,
         ):
             content = getattr(event, "content", None)
             if content:

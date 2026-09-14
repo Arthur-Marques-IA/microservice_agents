@@ -17,6 +17,7 @@ from typing import Any
 from agno.knowledge.content import Content, FileData
 from agno.knowledge.embedder.google import GeminiEmbedder
 from agno.knowledge.knowledge import Knowledge
+from agno.utils.string import generate_id
 from agno.vectordb.pgvector import PgVector
 
 from agent_service.config import get_settings
@@ -64,8 +65,14 @@ async def add_text(
         file_data=FileData(content=text.encode("utf-8"), type="manual"),
         metadata=metadata,
     )
-    await knowledge._aload_content(content, upsert=False, skip_if_exists=False)
-    return content.id or ""
+    # Mesmo padrão do router do AgentOS (`/knowledge/content`): sem isso,
+    # `content.id` fica None e o Agno acaba gerando um id não-determinístico
+    # por baixo dos panos — o que fez duas ingestões de textos diferentes
+    # colidirem no mesmo id durante os testes deste endpoint.
+    content.content_hash = knowledge._build_content_hash(content)
+    content.id = generate_id(content.content_hash)
+    await knowledge._aload_content(content, upsert=False, skip_if_exists=True)
+    return content.id
 
 
 async def search(collection_name: str, *, query: str, limit: int = 5) -> list[Any]:
