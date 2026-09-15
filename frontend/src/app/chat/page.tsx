@@ -1,18 +1,19 @@
 import { backendUrl } from "@/lib/api";
 import { ChatClient } from "@/components/chat/chat-client";
+import type { AgentDefinition } from "@/lib/types";
 
-async function getAgentTypes(): Promise<string[]> {
+async function getAgents(): Promise<AgentDefinition[]> {
   try {
-    const res = await fetch(backendUrl("/agent-types"), { cache: "no-store" });
-    if (!res.ok) return ["conversational"];
-    const data = (await res.json()) as { agent_types: string[] };
-    return data.agent_types.length > 0 ? data.agent_types : ["conversational"];
+    const res = await fetch(backendUrl("/agents"), { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = (await res.json()) as AgentDefinition[];
+    return data;
   } catch {
-    return ["conversational"];
+    return [];
   }
 }
 
 export default async function ChatPage() {
-  const agentTypes = await getAgentTypes();
-  return <ChatClient agentTypes={agentTypes} />;
+  const agents = await getAgents();
+  return <ChatClient agents={agents} />;
 }

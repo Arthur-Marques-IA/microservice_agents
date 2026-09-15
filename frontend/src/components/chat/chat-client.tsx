@@ -4,8 +4,10 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Select } from "@/components/ui/select";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { useChat } from "@/lib/use-chat";
+import type { AgentDefinition } from "@/lib/types";
 
 function getOrCreateId(key: string): string {
   if (typeof window === "undefined") return "";
@@ -16,8 +18,10 @@ function getOrCreateId(key: string): string {
   return created;
 }
 
-export function ChatClient({ agentTypes }: { agentTypes: string[] }) {
-  const [agentType, setAgentType] = useState(agentTypes[0] ?? "conversational");
+export function ChatClient({ agents }: { agents: AgentDefinition[] }) {
+  const options: Pick<AgentDefinition, "agent_type" | "name">[] =
+    agents.length > 0 ? agents : [{ agent_type: "conversational", name: "conversational" }];
+  const [agentType, setAgentType] = useState(options[0].agent_type);
   const [userId, setUserId] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [input, setInput] = useState("");
@@ -25,7 +29,7 @@ export function ChatClient({ agentTypes }: { agentTypes: string[] }) {
 
   useEffect(() => {
     setUserId(getOrCreateId("agent-service:user-id"));
-    setSessionId(crypto.randomUUID());
+    setSessionId(getOrCreateId("agent-service:session-id"));
   }, []);
 
   const { messages, sendMessage, isStreaming, error } = useChat({ agentType, userId, sessionId });
@@ -42,7 +46,9 @@ export function ChatClient({ agentTypes }: { agentTypes: string[] }) {
   }
 
   function startNewSession() {
-    setSessionId(crypto.randomUUID());
+    const created = crypto.randomUUID();
+    window.localStorage.setItem("agent-service:session-id", created);
+    setSessionId(created);
   }
 
   if (!userId || !sessionId) return null;
@@ -50,17 +56,13 @@ export function ChatClient({ agentTypes }: { agentTypes: string[] }) {
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 p-4">
       <div className="flex items-center justify-between gap-2">
-        <select
-          value={agentType}
-          onChange={(e) => setAgentType(e.target.value)}
-          className="h-9 rounded-md border border-border bg-card px-3 text-sm"
-        >
-          {agentTypes.map((type) => (
-            <option key={type} value={type}>
-              {type}
+        <Select value={agentType} onChange={(e) => setAgentType(e.target.value)} className="w-64">
+          {options.map((option) => (
+            <option key={option.agent_type} value={option.agent_type}>
+              {option.name}
             </option>
           ))}
-        </select>
+        </Select>
         <Button type="button" variant="outline" size="sm" onClick={startNewSession}>
           Nova sessão
         </Button>

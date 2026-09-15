@@ -10,6 +10,10 @@ from agno.os import AgentOS
 from fastapi import FastAPI
 
 from agent_service.agents.registry import all_agents
+from agent_service.agents.seed import seed_default_agents
+from agent_service.agents.store import init_store
+from agent_service.api.agents_routes import router as agents_router
+from agent_service.api.agents_routes import tools_router
 from agent_service.api.routes import router
 from agent_service.config import get_settings
 from agent_service.db import get_db
@@ -20,8 +24,13 @@ configure_tracing()
 
 settings = get_settings()
 
+init_store()
+seed_default_agents()
+
 base_app = FastAPI(title=settings.app_name)
 base_app.include_router(router)
+base_app.include_router(agents_router)
+base_app.include_router(tools_router)
 
 agent_os = AgentOS(
     id=settings.app_name,

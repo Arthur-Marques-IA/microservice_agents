@@ -6,7 +6,9 @@ import { cn } from "@/lib/cn";
 
 const links = [
   { href: "/chat", label: "Chat" },
+  { href: "/agents", label: "Agentes" },
   { href: "/admin", label: "Admin" },
+  { href: "/docs", label: "Docs" },
 ];
 
 export function Nav() {

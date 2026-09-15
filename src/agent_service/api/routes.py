@@ -13,9 +13,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from agno.run.agent import RunEvent
+
 from agent_service.agents.registry import UnknownAgentTypeError, get_agent, list_agent_types
 from agent_service.documents.collections import COLLECTION_NAMES, add_text, search
-from agent_service.observability.tracing import traced_agent_run
+from agent_service.observability.tracing import traced_agent_run, traced_agent_stream
 
 router = APIRouter()
 
@@ -25,6 +27,9 @@ class ChatRequest(BaseModel):
     user_id: str
     session_id: str
     message: str
+    dependencies: dict[str, Any] | None = None
+    """Metadados opcionais (ex: cpf, nome) injetados como contexto estruturado
+    no prompt — ver `/docs` no frontend para exemplos."""
 
 
 class ChatResponse(BaseModel):
@@ -51,7 +56,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     run_output = await traced_agent_run(
-        agent, message=request.message, user_id=request.user_id, session_id=request.session_id
+        agent,
+        message=request.message,
+        user_id=request.user_id,
+        session_id=request.session_id,
+        dependencies=request.dependencies,
     )
     return ChatResponse(
         agent_type=request.agent_type,
@@ -107,16 +116,17 @@ async def chat_stream(request: ChatRequest) -> EventSourceResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     async def event_generator():
-        async for event in agent.arun(
-            request.message,
+        async for event in traced_agent_stream(
+            agent,
+            message=request.message,
             user_id=request.user_id,
             session_id=request.session_id,
-            stream=True,
-            stream_events=False,
+            dependencies=request.dependencies,
         ):
-            content = getattr(event, "content", None)
-            if content:
-                yield {"event": "message", "data": json.dumps({"content": content})}
+            if event.event == RunEvent.run_content.value and event.content:
+                yield {"event": "message", "data": json.dumps({"content": event.content})}
+            elif event.event == RunEvent.run_completed.value and event.metrics:
+                yield {"event": "usage", "data": json.dumps(event.metrics.to_dict())}
         yield {"event": "done", "data": "{}"}
 
     return EventSourceResponse(event_generator())

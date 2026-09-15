@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { parseSseStream } from "@/lib/sse";
-import type { ChatMessage } from "@/lib/types";
+import type { ChatMessage, UsageMetrics } from "@/lib/types";
 
 function newId(): string {
   return crypto.randomUUID();
@@ -15,7 +15,7 @@ export function useChat(params: { agentType: string; userId: string; sessionId: 
   const [error, setError] = useState<string | null>(null);
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, dependencies?: Record<string, unknown>) => {
       if (!text.trim() || isStreaming) return;
 
       setError(null);
@@ -28,7 +28,13 @@ export function useChat(params: { agentType: string; userId: string; sessionId: 
         const response = await fetch("/api/chat/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agent_type: agentType, user_id: userId, session_id: sessionId, message: text }),
+          body: JSON.stringify({
+            agent_type: agentType,
+            user_id: userId,
+            session_id: sessionId,
+            message: text,
+            dependencies,
+          }),
         });
 
         if (!response.ok || !response.body) {
@@ -36,12 +42,16 @@ export function useChat(params: { agentType: string; userId: string; sessionId: 
         }
 
         for await (const sseEvent of parseSseStream(response.body)) {
-          if (sseEvent.event !== "message") continue;
-          const parsed = JSON.parse(sseEvent.data) as { content?: string };
-          if (!parsed.content) continue;
-          setMessages((prev) =>
-            prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + parsed.content } : m))
-          );
+          if (sseEvent.event === "message") {
+            const parsed = JSON.parse(sseEvent.data) as { content?: string };
+            if (!parsed.content) continue;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + parsed.content } : m))
+            );
+          } else if (sseEvent.event === "usage") {
+            const usage = JSON.parse(sseEvent.data) as UsageMetrics;
+            setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, usage } : m)));
+          }
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Erro desconhecido");

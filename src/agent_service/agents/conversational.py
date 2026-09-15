@@ -1,14 +1,10 @@
-"""Agente conversacional: atende diálogo geral com o usuário final.
+"""Agente conversacional: definição original, usada só como seed.
 
-Primeiro tipo de agente implementado ponta a ponta (ver roadmap para
-orquestrador e analista).
+Desde que a resolução de agentes passou a ser dinâmica (`agents/registry.py`
+lê de `agents/store.py`), este módulo não constrói mais um `Agent` — só
+expõe as constantes que `agents/seed.py` usa pra semear a primeira linha em
+`agent_definitions` no startup, se ela ainda não existir.
 """
-
-from agno.agent import Agent
-
-from agent_service.agents.base import build_agent
-from agent_service.config import get_settings
-from agent_service.tools.registry import get_tools
 
 AGENT_TYPE = "conversational"
 
@@ -17,14 +13,3 @@ INSTRUCTIONS = [
     "Responda de forma direta e cordial, em português por padrão.",
     "Use o histórico e as memórias do usuário para manter contexto entre mensagens.",
 ]
-
-
-def create_conversational_agent() -> Agent:
-    memory_backend = "mem0" if get_settings().mem0_enabled else "common"
-    return build_agent(
-        agent_id=AGENT_TYPE,
-        name="Agente Conversacional",
-        instructions=INSTRUCTIONS,
-        tools=get_tools(AGENT_TYPE),
-        memory_backend=memory_backend,
-    )

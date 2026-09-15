@@ -31,8 +31,8 @@ e admin de collections. Todo o stack roda via Docker Compose.
 
 ```
 src/agent_service/
-  api/            # contrato estável de API (/chat, /chat/stream, /health)
-  agents/         # tipos de agente (conversacional implementado; orquestrador/analista no roadmap)
+  api/            # contrato estável de API (/chat, /chat/stream, /health) + agents_routes.py (CRUD)
+  agents/         # store.py (definições+versionamento no Postgres), registry.py (resolução dinâmica)
   memory/         # abstração de memória (comum via Agno/Postgres; Mem0 como backend plugável)
   models/         # abstração de provedor de modelo (LLM)
   tools/          # registro de tools por tipo de agente
@@ -96,7 +96,7 @@ docker-compose.yml  # postgres, redis, agent-service, frontend
    `http://localhost:58000` — o AgentOS já expõe as rotas que o playground
    consome (sessões, execução, streaming, tracing).
 
-5. **Docs da API própria** (`/health`, `/chat`, `/agent-types`, `/collections`): `http://localhost:58000/docs`.
+5. **Docs da API própria** (`/health`, `/chat`, `/agents`, `/tools`, `/collections`): `http://localhost:58000/docs`.
 
 ## Rodando sem Docker (dev do backend isolado)
 
@@ -108,6 +108,52 @@ uv run uvicorn agent_service.main:app --app-dir src --reload
 Usa o `DATABASE_URL`/`REDIS_URL` do `.env.example` (localhost, portas
 publicadas pelo compose) — então ainda precisa de `docker compose up -d
 postgres redis` rodando.
+
+## Agentes: criação dinâmica e versionamento de prompt
+
+Agentes não são mais hardcoded em Python — são linhas em `agent_definitions`
+(Postgres), criadas/editadas via `/agents` (API) ou pela tela `/agents` do
+frontend, e resolvidas em runtime sem restart do processo. O agente
+`conversational` original é só a primeira linha, semeada automaticamente no
+startup (`agents/seed.py`) se ainda não existir.
+
+```bash
+# criar
+curl -X POST http://localhost:58000/agents -H "Content-Type: application/json" -d '{
+  "agent_type": "suporte",
+  "name": "Agente de Suporte",
+  "instructions": ["Você é um agente de suporte técnico.", "Responda de forma objetiva."],
+  "memory_backend": "common"
+}'
+
+# usar imediatamente, sem restart
+curl -X POST http://localhost:58000/chat -H "Content-Type: application/json" \
+  -d '{"agent_type": "suporte", "user_id": "u1", "session_id": "s1", "message": "meu wifi caiu"}'
+
+# editar o prompt (cria uma nova versão automaticamente)
+curl -X PUT http://localhost:58000/agents/suporte -H "Content-Type: application/json" \
+  -d '{"instructions": ["Nova versão do prompt."]}'
+
+# ver o histórico de versões (read-only, sem endpoint de rollback)
+curl http://localhost:58000/agents/suporte/versions
+```
+
+Cada edição de `instructions` grava uma linha nova em `agent_prompt_versions`
+e incrementa `prompt_version` — é auditoria/histórico, não um sistema de
+rollback (reverter = editar de novo copiando o texto de uma versão antiga).
+`memory_backend` (`"common"` ou `"mem0"`) e `model_provider`/`model_id`
+também são campos por-agente agora, em vez da antiga env var global
+`MEM0_ENABLED` (que continua existindo só como guarda de configuração do
+Mem0 — ver seção abaixo).
+
+`GET /tools` lista as tools disponíveis para o campo `tools` (nomes
+resolvidos via `tools/registry.py::resolve_tools`, nunca código arbitrário
+vindo da API).
+
+**Parâmetros opcionais no chat (`dependencies`)**: `ChatRequest` aceita um
+campo livre `dependencies` (ex: `{"cpf": "...", "nome": "..."}`) — vira
+contexto estruturado injetado no prompt via `add_dependencies_to_context` do
+Agno. Ver `/docs` no frontend para exemplos completos com cURL copiável.
 
 ## Collections de documentos (RAG)
 
@@ -141,39 +187,53 @@ confirma que o backend aceitou o conteúdo, não que o embedding já rodou.
 
 ## Memória com Mem0
 
-Por padrão o serviço usa a memória comum (`memory/common.py`, sobre Postgres,
-gerenciada nativamente pelo Agno). Para trocar o agente conversacional para
-usar o [Mem0](https://mem0.ai) como memória semântica:
+Por padrão todo agente usa a memória comum (`memory/common.py`, sobre
+Postgres, gerenciada nativamente pelo Agno — é a memória "autogerenciada" do
+Agno, o default do framework). Para um agente específico usar o
+[Mem0](https://mem0.ai) como memória semântica:
 
 1. Instale o extra: `uv sync --extra mem0`.
 2. No `.env`: `MEM0_ENABLED=true` e `MEM0_API_KEY=<sua chave>`.
+3. Crie ou edite o agente com `"memory_backend": "mem0"` (via `POST/PUT
+   /agents`, ou pelo formulário em `/agents` no frontend).
 
-Com isso, `agents/conversational.py` passa `memory_backend="mem0"` para
-`build_agent`, que liga `memory/mem0_hooks.py` como `pre_hooks`/`post_hooks`
-do Agent: antes de responder, busca memórias relevantes no Mem0 e injeta em
-`dependencies.mem0_memories`; depois de responder, grava a mensagem do
-usuário no Mem0. A memória comum continua ativa em paralelo (histórico de
-sessão), então os dois backends coexistem — não há troca completa, só adição
-da camada semântica do Mem0.
+Com isso, `agents/base.py::build_agent` liga `memory/mem0_hooks.py` como
+`pre_hooks`/`post_hooks` do Agent: antes de responder, busca memórias
+relevantes no Mem0 e injeta em `dependencies.mem0_memories`; depois de
+responder, grava a mensagem do usuário no Mem0. A memória comum continua
+ativa em paralelo (histórico de sessão), então os dois backends coexistem —
+não há troca completa, só adição da camada semântica do Mem0.
 
 ## Frontend
 
-Duas áreas, sem autenticação nesse MVP (`user_id` gerado e guardado no
-`localStorage` do browser):
+Quatro áreas, sem autenticação nesse MVP (`user_id` **e** `session_id`
+gerados e guardados no `localStorage` do browser — os dois persistem entre
+reloads, senão o agente "esquece tudo" a cada F5):
 
-- **`/chat`** — playground de conversa. Deixa escolher o `agent_type` (lista
-  vem de `GET /agent-types`), mantém `session_id` por aba (botão "Nova
-  sessão" gera outro) e renderiza a resposta em streaming token a token.
+- **`/chat`** — playground de conversa. Seletor de agente mostra o `name`
+  de cada um (lista rica vem de `GET /agents`), botão "Nova sessão" gera um
+  `session_id` novo, resposta renderiza em streaming, e ao final aparece um
+  badge com o total de tokens consumidos (`event: usage` do SSE — é o total
+  ao terminar a resposta, não incremental token a token, porque é o que o
+  Agno expõe).
+- **`/agents`** — criar/editar agentes (nome, prompt, modelo, memória,
+  tools) por formulário, sem tocar em código. Cada agente tem uma aba de
+  histórico de prompt (read-only — sem botão de reverter, ver seção acima).
 - **`/admin`** — uma seção por collection configurada (`COLLECTION_NAMES` no
   backend): ingestão de texto, upload de arquivo, e busca semântica. Todo
   upload mostra um badge de status (`Processando... → Concluído/Parcial/Falhou`)
   porque a ingestão é assíncrona no backend.
+- **`/docs`** — exemplo de cURL copiável para `/chat` e `/chat/stream`,
+  parâmetros obrigatórios/opcionais — pensado pra outro time da plataforma
+  copiar e integrar sem precisar ler o código.
 
 Nenhuma página fala com o `agent-service` diretamente — tudo passa pelos
 Route Handlers em `frontend/src/app/api/**`, que fazem proxy usando
 `AGENT_SERVICE_URL` (só server-side, sem prefixo `NEXT_PUBLIC_`). O streaming
 do chat é `fetch` + leitura manual do `ReadableStream` (`lib/sse.ts`), não
-`EventSource`, porque o endpoint é `POST`.
+`EventSource`, porque o endpoint é `POST`. Componentes de UI novos
+(`Select`, `Dialog`, `Tabs`, `CodeBlock`) seguem o mesmo padrão hand-written
+dos já existentes — sem `@radix-ui`/`class-variance-authority`.
 
 Dev sem Docker:
 
@@ -193,35 +253,50 @@ uv run pytest
 
 - Abstrações centrais: `BaseAgent` (`agents/base.py`), memória comum (`memory/common.py`),
   gerenciamento de modelo (`models/provider.py`), registro de tools (`tools/registry.py`).
-- Agente **conversacional** ponta a ponta, usando Gemini, com histórico e memórias
-  persistidos em Postgres.
-- API REST síncrona (`POST /chat`) e streaming (`GET /chat/stream`).
-- Observabilidade via LangSmith (`observability/tracing.py`) + tracing nativo do
-  AgentOS (guardado no Postgres, visível pelo playground).
+- **Agentes dinâmicos**: definições + versionamento de prompt em Postgres
+  (`agents/store.py`), resolvidos em runtime (`agents/registry.py`) sem
+  restart — CRUD completo via `/agents` (API) e pela tela `/agents`
+  (frontend). O agente `conversational` é só a primeira linha semeada.
+- API REST síncrona (`POST /chat`, com `dependencies` opcionais) e streaming
+  (`POST /chat/stream`, com tracing e `event: usage` de tokens ao final).
+- Observabilidade via LangSmith (`observability/tracing.py`, cobrindo tanto
+  `/chat` quanto `/chat/stream`) + tracing nativo do AgentOS (guardado no
+  Postgres, visível pelo playground).
 - Collections de documentos via pgvector, com pipeline de ingestão completo
   (`documents/collections.py` + rotas nativas do AgentOS em `/knowledge/*`,
   mais o atalho `/collections/{name}/documents` para texto simples).
 - Memória semântica via Mem0, plugável por agente através de pre/post hooks
-  (`memory/mem0_backend.py` + `memory/mem0_hooks.py`); o agente conversacional
-  já usa esse backend quando `MEM0_ENABLED=true`.
+  (`memory/mem0_backend.py` + `memory/mem0_hooks.py`) — `memory_backend` é um
+  campo por-agente (`"common"` ou `"mem0"`), configurável via `/agents`.
 - Esqueleto pronto para evoluir: mensageria via Redis Streams (`messaging/`).
 - **Todo o stack containerizado** (`Dockerfile` do backend, `frontend/Dockerfile`,
   `docker-compose.yml` orquestrando os quatro serviços) — `docker compose up
   -d --build` sobe tudo.
-- **Frontend Next.js** (`frontend/`) com chat/playground (streaming real) e
-  admin de collections (ingestão de texto/arquivo + busca), como BFF na frente
-  do `agent-service`.
+- **Frontend Next.js** (`frontend/`) com chat/playground (streaming real,
+  badge de tokens), gerenciamento de agentes (`/agents`), admin de
+  collections e página de integração (`/docs`), como BFF na frente do
+  `agent-service`.
 
 ## Roadmap (fase 2+)
 
+- **Fallback de modelo**: o Agno já suporta `fallback_models`/`fallback_config`
+  nativamente (`agno.models.fallback.FallbackConfig`) — deliberadamente não
+  ligado ainda (hoje só há Gemini configurado). Entra quando houver um
+  segundo modelo/provedor real para compor a cadeia.
 - **Agente orquestrador**: roteia entre conversacional/analista, consumindo o
   stream de tarefas do Redis (`messaging/redis_streams.py::consume_tasks` já
   está pronto para virar a base de um worker).
 - **Agente analista**: usa `documents/collections.py` (knowledge/RAG) via uma
   tool de busca — a base de conhecimento e a ingestão já existem, falta o
   agente que a consome.
-- **Mem0 selecionável por sessão** (hoje é por agente/config global via
-  `MEM0_ENABLED`): permitir escolher o backend de memória por request.
+- **Rollback de versão de prompt**: hoje o histórico em
+  `agent_prompt_versions` é só leitura/auditoria — reverter é editar de novo
+  copiando o texto antigo. Um endpoint `POST /agents/{type}/versions/{v}/activate`
+  fecharia isso.
+- **Reidratar histórico de mensagens na tela**: o fix do bug de memória só
+  persistiu `session_id`/`user_id` no `localStorage` — o agente lembra o
+  contexto entre reloads, mas as bolhas de chat na UI começam vazias até a
+  próxima mensagem. Precisa de um endpoint pra buscar o histórico da sessão.
 - **Upload de arquivo por collection**: `POST /knowledge/content` hoje resolve
   a collection automaticamente porque só existe uma (`general`). Com mais de
   uma em `COLLECTION_NAMES`, o proxy em `frontend/src/app/api/knowledge/content/route.ts`

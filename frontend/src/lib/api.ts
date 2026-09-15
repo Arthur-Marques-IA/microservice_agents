@@ -12,12 +12,19 @@ export function backendUrl(path: string): string {
   return `${AGENT_SERVICE_URL}${path}`;
 }
 
+const NO_BODY_STATUSES = new Set([204, 205, 304]);
+
 /** Proxy simples: repassa a resposta do backend como está (status, corpo, content-type). */
 export async function proxyJson(path: string, init?: RequestInit): Promise<Response> {
   const upstream = await fetch(backendUrl(path), {
     ...init,
     cache: "no-store",
   });
+  // Response não aceita corpo (nem "") quando o status é 204/205/304 — ex.
+  // o DELETE /agents/{type} do backend responde 204 sem corpo.
+  if (NO_BODY_STATUSES.has(upstream.status)) {
+    return new Response(null, { status: upstream.status });
+  }
   const body = await upstream.text();
   return new Response(body, {
     status: upstream.status,
