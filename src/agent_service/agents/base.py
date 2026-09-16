@@ -6,7 +6,7 @@ que todos compartilhem a mesma forma de resolver modelo, memória, persistência
 e histórico — sem duplicar essa configuração em cada agente.
 """
 
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from agno.agent import Agent
 
@@ -22,7 +22,7 @@ def build_agent(
     agent_id: str,
     name: str,
     instructions: list[str],
-    tools: list[Callable[..., Any]] | None = None,
+    tools: list[Any] | None = None,  # Toolkit/Function/callable já resolvidos, ver tools/registry.py
     model_provider: str | None = None,
     model_id: str | None = None,
     num_history_runs: int = 10,

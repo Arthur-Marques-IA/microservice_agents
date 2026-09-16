@@ -1,0 +1,337 @@
+"""CRUD de tools + catálogo de builtins + um jeito de testar uma tool sem
+precisar montar um agente inteiro em volta dela.
+
+Três tipos (`kind`), a mesma tabela (`tools/store.py`) e o mesmo contrato:
+
+- `builtin`: uma toolkit padrão do Agno (`GET /tools/catalog` lista as
+  disponíveis e os parâmetros de cada uma).
+- `api`: chama uma API HTTP existente, descrita em JSON — sem código
+  (`agent_service/tools/api_tool.py` documenta o formato de `config`).
+- `python`: uma função Python enviada pelo usuário, rodada num namespace
+  restrito — best-effort, não uma sandbox forte (ver
+  `agent_service/tools/python_tool.py`); desligada por padrão
+  (`CUSTOM_PYTHON_TOOLS_ENABLED`).
+
+Depois de criada, uma tool entra na lista de um agente pelo nome
+(`AgentDefinitionIn.tools`), do mesmo jeito de sempre.
+"""
+
+import copy
+import re
+from datetime import datetime
+from typing import Any, Literal
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field, model_validator
+
+from agent_service.agents.store import list_definitions as list_agent_definitions
+from agent_service.config import get_settings
+from agent_service.tools import registry, store
+from agent_service.tools.api_tool import ApiToolConfigError, validate_api_config
+from agent_service.tools.catalog import BuiltinConfigError, list_builtin_catalog, validate_builtin_config
+from agent_service.tools.python_tool import PythonToolConfigError, validate_python_config
+from agent_service.tools.registry import ToolBuildError
+
+router = APIRouter(prefix="/tools", tags=["tools"])
+
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_SECRET_MASK = "••••••••"
+ToolKind = Literal["builtin", "api", "python"]
+
+
+# -- validação/normalização por kind, e mascaramento de segredos -----------
+
+
+def _validate_config(kind: str, config: dict[str, Any]) -> dict[str, Any]:
+    try:
+        if kind == "builtin":
+            return validate_builtin_config(config)
+        if kind == "api":
+            return validate_api_config(config)
+        if kind == "python":
+            return validate_python_config(config)
+    except (BuiltinConfigError, ApiToolConfigError, PythonToolConfigError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    raise HTTPException(status_code=422, detail=f"kind desconhecido: {kind!r}")
+
+
+def _mask_config(kind: str, config: dict[str, Any]) -> dict[str, Any]:
+    masked = copy.deepcopy(config)
+    if kind == "api":
+        auth = masked.get("auth") or {}
+        for field_name in ("token", "value", "password"):
+            if auth.get(field_name):
+                auth[field_name] = _SECRET_MASK
+    elif kind == "builtin":
+        from agent_service.tools.catalog import get_builtin_spec
+
+        spec = get_builtin_spec(masked.get("builtin_id", ""))
+        if spec is not None:
+            params = masked.get("params") or {}
+            for p in spec.params:
+                if p.secret and params.get(p.name):
+                    params[p.name] = _SECRET_MASK
+    return masked
+
+
+def _unmask_config(kind: str, incoming: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    """Se o campo secreto veio de volta como a máscara (a UI ecoou o valor
+    mascarado sem editá-lo), restaura o valor real guardado."""
+    merged = copy.deepcopy(incoming)
+    if kind == "api":
+        auth = merged.get("auth") or {}
+        existing_auth = existing.get("auth") or {}
+        for field_name in ("token", "value", "password"):
+            if auth.get(field_name) == _SECRET_MASK:
+                auth[field_name] = existing_auth.get(field_name)
+    elif kind == "builtin":
+        from agent_service.tools.catalog import get_builtin_spec
+
+        spec = get_builtin_spec(merged.get("builtin_id", ""))
+        if spec is not None:
+            params = merged.get("params") or {}
+            existing_params = existing.get("params") or {}
+            for p in spec.params:
+                if p.secret and params.get(p.name) == _SECRET_MASK:
+                    params[p.name] = existing_params.get(p.name)
+    return merged
+
+
+def _row_out(row: dict[str, Any]) -> dict[str, Any]:
+    return {**row, "config": _mask_config(row["kind"], row["config"])}
+
+
+# -- schemas -----------------------------------------------------------
+
+
+class ToolIn(BaseModel):
+    tool_name: str = Field(..., description="Slug estável, usado em AgentDefinition.tools")
+    kind: ToolKind
+    label: str
+    description: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _validate_slug(self) -> "ToolIn":
+        if not _SLUG_RE.match(self.tool_name):
+            raise ValueError("tool_name deve ser um slug: letras minúsculas, números, '-' ou '_'")
+        return self
+
+
+class ToolUpdateIn(BaseModel):
+    label: str | None = None
+    description: str | None = None
+    config: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class ToolOut(BaseModel):
+    tool_name: str
+    kind: ToolKind
+    label: str
+    description: str | None
+    config: dict[str, Any]
+    enabled: bool
+    is_seed: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ToolDetailOut(ToolOut):
+    """Só na leitura de uma tool: introspecção best-effort do que ela expõe."""
+
+    functions: list[str] | None = None
+    """Nomes das funções expostas — só pra `kind="builtin"` (uma toolkit tem várias)."""
+    build_error: str | None = None
+    """Por que a tool não pôde ser construída agora (ex.: dependência opcional ausente)."""
+
+
+class BuiltinParamOut(BaseModel):
+    name: str
+    type: str
+    label: str
+    description: str
+    required: bool
+    secret: bool
+    default: Any
+
+
+class BuiltinCatalogEntryOut(BaseModel):
+    builtin_id: str
+    label: str
+    description: str
+    params: list[BuiltinParamOut]
+
+
+class ToolInvokeIn(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    function_name: str | None = Field(
+        default=None, description="Obrigatório para kind='builtin' — qual função da toolkit chamar."
+    )
+
+
+class ToolInvokeOut(BaseModel):
+    ok: bool
+    result: Any = None
+    error: str | None = None
+
+
+# -- config ---------------------------------------------------------------
+
+
+class PythonToolsConfigOut(BaseModel):
+    enabled: bool
+    """`CUSTOM_PYTHON_TOOLS_ENABLED` — tools kind="python" podem ser criadas mesmo
+    desligado (pra deixar prontas), mas só rodam (num agente ou em /invoke) com isto ligado."""
+
+
+@router.get("/python-config", response_model=PythonToolsConfigOut)
+def get_python_tools_config() -> dict[str, Any]:
+    return {"enabled": get_settings().custom_python_tools_enabled}
+
+
+# -- catálogo de builtins ------------------------------------------------
+
+
+@router.get("/catalog", response_model=list[BuiltinCatalogEntryOut])
+def get_builtin_catalog() -> list[dict[str, Any]]:
+    return [
+        {
+            "builtin_id": spec.builtin_id,
+            "label": spec.label,
+            "description": spec.description,
+            "params": [
+                {
+                    "name": p.name,
+                    "type": p.type,
+                    "label": p.label,
+                    "description": p.description,
+                    "required": p.required,
+                    "secret": p.secret,
+                    "default": p.default,
+                }
+                for p in spec.params
+            ],
+        }
+        for spec in list_builtin_catalog()
+    ]
+
+
+# -- CRUD ----------------------------------------------------------------
+
+
+@router.get("", response_model=list[ToolOut])
+def list_tools() -> list[dict[str, Any]]:
+    return [_row_out(row) for row in store.list_tools()]
+
+
+@router.post("", response_model=ToolOut, status_code=201)
+def create_tool(body: ToolIn) -> dict[str, Any]:
+    if store.get_tool(body.tool_name) is not None:
+        raise HTTPException(status_code=409, detail=f"Tool {body.tool_name!r} já existe")
+    config = _validate_config(body.kind, body.config)
+    created = store.create_tool(
+        tool_name=body.tool_name,
+        kind=body.kind,
+        label=body.label,
+        description=body.description,
+        config=config,
+        enabled=body.enabled,
+    )
+    return _row_out(created)
+
+
+@router.get("/{tool_name}", response_model=ToolDetailOut)
+def get_tool(tool_name: str) -> dict[str, Any]:
+    row = store.get_tool(tool_name)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Tool {tool_name!r} não encontrada")
+    out = _row_out(row)
+    if row["kind"] == "builtin" and row["enabled"]:
+        try:
+            built = registry.build_fresh(row)
+            out["functions"] = sorted(getattr(built, "functions", {}).keys())
+        except ToolBuildError as exc:
+            out["build_error"] = str(exc)
+    return out
+
+
+@router.put("/{tool_name}", response_model=ToolOut)
+def update_tool(tool_name: str, body: ToolUpdateIn) -> dict[str, Any]:
+    current = store.get_tool(tool_name)
+    if current is None:
+        raise HTTPException(status_code=404, detail=f"Tool {tool_name!r} não encontrada")
+
+    config = None
+    if body.config is not None:
+        merged = _unmask_config(current["kind"], body.config, current["config"])
+        config = _validate_config(current["kind"], merged)
+
+    updated = store.update_tool(
+        tool_name,
+        label=body.label,
+        description=body.description,
+        config=config,
+        enabled=body.enabled,
+    )
+    return _row_out(updated)
+
+
+@router.delete("/{tool_name}", status_code=204)
+def delete_tool(tool_name: str) -> None:
+    row = store.get_tool(tool_name)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Tool {tool_name!r} não encontrada")
+    if row["is_seed"]:
+        raise HTTPException(status_code=403, detail="Tool semeada pelo sistema não pode ser removida")
+
+    using = [d["agent_type"] for d in list_agent_definitions() if tool_name in (d["tools"] or [])]
+    if using:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tool {tool_name!r} está em uso por: {', '.join(using)}. Remova-a desses agentes primeiro.",
+        )
+    store.delete_tool(tool_name)
+
+
+# -- testar sem precisar de um agente ------------------------------------
+
+
+@router.post("/{tool_name}/invoke", response_model=ToolInvokeOut)
+def invoke_tool(tool_name: str, body: ToolInvokeIn) -> dict[str, Any]:
+    row = store.get_tool(tool_name)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Tool {tool_name!r} não encontrada")
+    if not row["enabled"]:
+        raise HTTPException(status_code=409, detail=f"Tool {tool_name!r} está desativada")
+    if row["kind"] == "python" and not get_settings().custom_python_tools_enabled:
+        raise HTTPException(status_code=403, detail="Tools Python estão desligadas (CUSTOM_PYTHON_TOOLS_ENABLED=false)")
+
+    try:
+        built = registry.build_fresh(row)
+    except ToolBuildError as exc:
+        return ToolInvokeOut(ok=False, error=str(exc)).model_dump()
+
+    try:
+        if row["kind"] == "api":
+            result = built.entrypoint(**body.arguments)
+        elif row["kind"] == "python":
+            result = built(**body.arguments)
+        else:  # builtin
+            functions = getattr(built, "functions", {})
+            if not body.function_name:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Informe function_name — uma de {sorted(functions.keys())}",
+                )
+            fn = functions.get(body.function_name)
+            if fn is None:
+                raise HTTPException(status_code=404, detail=f"Função {body.function_name!r} não existe em {tool_name!r}")
+            result = fn.entrypoint(**body.arguments)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - erro de execução da tool, não do endpoint
+        return ToolInvokeOut(ok=False, error=f"{type(exc).__name__}: {exc}").model_dump()
+
+    return ToolInvokeOut(ok=True, result=result).model_dump()

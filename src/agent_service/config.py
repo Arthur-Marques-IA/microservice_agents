@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     """Timeout do exportador de spans. O default do SDK (5s) descarta lotes
     silenciosamente quando o Langfuse está ocupado (ex.: logo após subir)."""
 
+    # Tools — kind="python" (ver agent_service/tools/python_tool.py)
+    custom_python_tools_enabled: bool = False
+    """Desligado por padrão: tools Python rodam num namespace restrito, mas
+    NÃO são uma sandbox forte contra um autor mal-intencionado — só ligue se
+    quem tem acesso à API/console já for confiável (o serviço não tem
+    autenticação neste MVP)."""
+
 
 @lru_cache
 def get_settings() -> Settings:

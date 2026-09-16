@@ -1,0 +1,220 @@
+"""Tools `kind="python"`: uma função Python escrita pelo usuário (API/UI),
+`exec`ada num namespace restrito. Existe pra casos que uma chamada de API
+simples (`kind="api"`) não cobre — lógica própria, combinar mais de uma
+chamada, transformar dados.
+
+**Isto NÃO é uma sandbox forte.** É uma barreira de dois níveis — checagem
+estática da árvore (`ast`) recusando imports fora de uma lista permitida e
+qualquer nome/atributo perigoso (`os`, `subprocess`, `eval`, `__globals__`,
+`__subclasses__`...), mais `builtins` restritos na execução — pensada pra
+pegar erros e abuso acidental, não pra conter um autor mal-intencionado
+determinado (um sandbox de verdade precisaria de processo/container
+isolado, fora do escopo deste serviço). Por isso:
+
+- desligado por padrão (`CUSTOM_PYTHON_TOOLS_ENABLED=false`);
+- só ligue se toda genta com acesso à API/console já for confiável — hoje
+  o serviço não tem autenticação (ver README, seção Auth);
+- código pode importar `httpx`: tools Python alcançam a rede de propósito.
+"""
+
+import ast
+import concurrent.futures
+import functools
+import inspect
+from typing import Any, Callable
+
+_ALLOWED_MODULES = {
+    "base64",
+    "collections",
+    "datetime",
+    "decimal",
+    "functools",
+    "hashlib",
+    "httpx",
+    "itertools",
+    "json",
+    "math",
+    "random",
+    "re",
+    "statistics",
+    "string",
+    "textwrap",
+    "time",
+    "uuid",
+}
+
+_BANNED_NAMES = {
+    "eval",
+    "exec",
+    "compile",
+    "__import__",
+    "globals",
+    "locals",
+    "vars",
+    "open",
+    "input",
+    "exit",
+    "quit",
+    "breakpoint",
+    "help",
+    "os",
+    "sys",
+    "subprocess",
+    "socket",
+    "shutil",
+    "pathlib",
+    "importlib",
+    "ctypes",
+    "pickle",
+    "marshal",
+    "signal",
+    "multiprocessing",
+    "threading",
+}
+
+_ALLOWED_TOP_LEVEL = (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef)
+_DEFAULT_TIMEOUT_SECONDS = 10.0
+_MAX_TIMEOUT_SECONDS = 30.0
+_MAX_CODE_CHARS = 20_000
+
+_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="python-tool")
+
+
+class PythonToolConfigError(ValueError):
+    """Código ou config inválidos — reportado como 422 na criação/edição da tool."""
+
+
+class PythonToolDisabledError(RuntimeError):
+    """`CUSTOM_PYTHON_TOOLS_ENABLED=false` — ver o docstring deste módulo."""
+
+
+def validate_python_config(config: dict[str, Any]) -> dict[str, Any]:
+    code = config.get("code")
+    entrypoint_name = config.get("entrypoint")
+    if not isinstance(code, str) or not code.strip():
+        raise PythonToolConfigError("code é obrigatório")
+    if len(code) > _MAX_CODE_CHARS:
+        raise PythonToolConfigError(f"code excede o limite de {_MAX_CODE_CHARS} caracteres")
+    if not isinstance(entrypoint_name, str) or not entrypoint_name.isidentifier():
+        raise PythonToolConfigError("entrypoint deve ser o nome de uma função definida em code")
+    timeout = config.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)
+    if not isinstance(timeout, (int, float)) or not (0 < timeout <= _MAX_TIMEOUT_SECONDS):
+        raise PythonToolConfigError(f"timeout_seconds deve ser > 0 e <= {_MAX_TIMEOUT_SECONDS}")
+
+    _check_ast(code, entrypoint_name)
+    return {"code": code, "entrypoint": entrypoint_name, "timeout_seconds": float(timeout)}
+
+
+def _root_module(dotted: str) -> str:
+    return dotted.split(".", 1)[0]
+
+
+def _check_ast(code: str, entrypoint_name: str) -> None:
+    try:
+        tree = ast.parse(code, mode="exec")
+    except SyntaxError as exc:
+        raise PythonToolConfigError(f"código inválido: {exc}") from exc
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            module = node.module if isinstance(node, ast.ImportFrom) else None
+            names = [module] if module else [alias.name for alias in node.names]
+            for name in names:
+                if name is None or _root_module(name) not in _ALLOWED_MODULES:
+                    raise PythonToolConfigError(f"import não permitido: {name!r} (módulos liberados: {sorted(_ALLOWED_MODULES)})")
+        elif isinstance(node, ast.ClassDef):
+            raise PythonToolConfigError("definição de classe não é permitida — escreva funções")
+        elif isinstance(node, ast.Name) and node.id in _BANNED_NAMES:
+            raise PythonToolConfigError(f"identificador não permitido: {node.id!r}")
+        elif isinstance(node, ast.Attribute):
+            if node.attr in _BANNED_NAMES or (node.attr.startswith("__") and node.attr.endswith("__")):
+                raise PythonToolConfigError(f"acesso a atributo não permitido: {node.attr!r}")
+
+    top_level_defs = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    for node in tree.body:
+        is_docstring = isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+        is_simple_constant = isinstance(node, (ast.Assign, ast.AnnAssign)) and _is_literal(getattr(node, "value", None))
+        if not (isinstance(node, _ALLOWED_TOP_LEVEL) or is_docstring or is_simple_constant):
+            raise PythonToolConfigError(
+                f"só são permitidos no nível do módulo: import, def, docstring e constantes literais "
+                f"(encontrado: {type(node).__name__})"
+            )
+
+    if not any(n.name == entrypoint_name for n in top_level_defs):
+        raise PythonToolConfigError(f"nenhuma função chamada {entrypoint_name!r} foi definida em code")
+
+
+def _is_literal(node: ast.AST | None) -> bool:
+    if node is None:
+        return False
+    try:
+        ast.literal_eval(node)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _safe_import(name: str, *args: Any, **kwargs: Any) -> Any:
+    import importlib
+
+    if _root_module(name) not in _ALLOWED_MODULES:
+        raise ImportError(f"import não permitido em tool Python: {name!r}")
+    return importlib.import_module(name)
+
+
+_SAFE_BUILTIN_NAMES = (
+    "abs all any bool dict enumerate filter float format frozenset int isinstance len list map max min "
+    "next print range repr reversed round set slice sorted str sum tuple zip "
+    "True False None "
+    "Exception ValueError TypeError KeyError IndexError StopIteration RuntimeError ArithmeticError "
+    "ZeroDivisionError AttributeError"
+).split()
+
+
+def _safe_builtins() -> dict[str, Any]:
+    import builtins
+
+    safe = {name: getattr(builtins, name) for name in _SAFE_BUILTIN_NAMES if hasattr(builtins, name)}
+    safe["__import__"] = _safe_import
+    return safe
+
+
+def _run_with_timeout(fn: Callable[..., Any], timeout: float, *args: Any, **kwargs: Any) -> Any:
+    future = _EXECUTOR.submit(fn, *args, **kwargs)
+    try:
+        return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        raise TimeoutError(f"A tool excedeu o limite de {timeout:.0f}s.") from None
+
+
+def compile_python_tool(*, tool_name: str, config: dict[str, Any], enabled: bool) -> Callable[..., Any]:
+    """`config` já validado (`validate_python_config`). Levanta
+    `PythonToolDisabledError` se `enabled=False` — o caller decide a origem
+    (flag global `settings.custom_python_tools_enabled` ou a própria tool)."""
+    if not enabled:
+        raise PythonToolDisabledError(
+            "Tools Python estão desligadas (CUSTOM_PYTHON_TOOLS_ENABLED=false) — ver o docstring de "
+            "agent_service.tools.python_tool."
+        )
+
+    namespace: dict[str, Any] = {"__builtins__": _safe_builtins(), "__name__": f"agent_service.tools.python.{tool_name}"}
+    try:
+        exec(compile(config["code"], filename=f"<tool:{tool_name}>", mode="exec"), namespace)
+    except Exception as exc:  # noqa: BLE001 - reportado como erro de configuração da tool
+        raise PythonToolConfigError(f"falha ao carregar o código: {exc}") from exc
+
+    original = namespace.get(config["entrypoint"])
+    if not callable(original):
+        raise PythonToolConfigError(f"{config['entrypoint']!r} não é uma função em code")
+
+    timeout = config["timeout_seconds"]
+
+    @functools.wraps(original)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        return _run_with_timeout(original, timeout, *args, **kwargs)
+
+    # `functools.wraps` já copia `__wrapped__`/`__doc__`/`__name__`; fixar
+    # `__signature__` explicitamente garante que o Agno monte o schema da
+    # tool a partir da função original mesmo com o wrapper usando *args/**kwargs.
+    wrapper.__signature__ = inspect.signature(original)  # type: ignore[attr-defined]
+    return wrapper

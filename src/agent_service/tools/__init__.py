@@ -1,3 +1,2 @@
-from agent_service.tools.registry import TOOL_REGISTRY, list_available_tools, resolve_tools
-
-__all__ = ["TOOL_REGISTRY", "resolve_tools", "list_available_tools"]
+"""Tools dos agentes: builtins do Agno, chamadas de API e funções Python —
+ver `registry.py` (resolução em runtime) e `store.py` (persistência)."""

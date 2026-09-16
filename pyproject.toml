@@ -28,6 +28,11 @@ dependencies = [
 mem0 = [
     "mem0ai>=2.0.20",
 ]
+tools = [
+    # A tool builtin "Busca na web" (agent_service/tools/catalog.py) precisa
+    # disso; as demais builtins do catálogo já funcionam sem instalar nada.
+    "ddgs>=9.0.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.33,<0.12.0"]

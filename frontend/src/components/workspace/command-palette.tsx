@@ -13,6 +13,7 @@ import {
   Search,
   Settings2,
   SquarePen,
+  Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { sessionTitle } from "@/lib/sessions";
@@ -72,6 +73,7 @@ function PaletteContent({ onClose }: { onClose: () => void }) {
       { id: "toggle-theme", group: "Ações", label: "Alternar tema claro/escuro", icon: Moon, action: "toggle-theme", keywords: "dark light" },
       { id: "nav-chat", group: "Navegar", label: "Playground", icon: MessageSquare, href: "/chat" },
       { id: "nav-agents", group: "Navegar", label: "Agentes", icon: Bot, href: "/agents" },
+      { id: "nav-tools", group: "Navegar", label: "Tools", icon: Wrench, href: "/tools", keywords: "api python builtin função" },
       { id: "nav-knowledge", group: "Navegar", label: "Base de conhecimento", icon: Library, href: "/knowledge", keywords: "collections documentos rag" },
       ...(observability.enabled
         ? [

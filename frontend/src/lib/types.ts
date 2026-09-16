@@ -130,6 +130,104 @@ export interface PromptVersion {
   created_at: string;
 }
 
+// -- Tools ------------------------------------------------------------
+
+export type ToolKind = "builtin" | "api" | "python";
+
+/** `GET /tools` — uma tool disponível para os agentes usarem. */
+export interface ToolSummary {
+  tool_name: string;
+  kind: ToolKind;
+  label: string;
+  description: string | null;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  is_seed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** `GET /tools/{name}` — inclui introspecção best-effort (builtins têm várias funções). */
+export interface ToolDetail extends ToolSummary {
+  functions?: string[] | null;
+  build_error?: string | null;
+}
+
+export interface ToolInput {
+  tool_name: string;
+  kind: ToolKind;
+  label: string;
+  description?: string | null;
+  config: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+export type ToolUpdateInput = Partial<Omit<ToolInput, "tool_name" | "kind">>;
+
+export type BuiltinParamType = "string" | "integer" | "boolean";
+
+export interface BuiltinParam {
+  name: string;
+  type: BuiltinParamType;
+  label: string;
+  description: string;
+  required: boolean;
+  secret: boolean;
+  default: unknown;
+}
+
+/** `GET /tools/catalog` — toolkits padrão do Agno disponíveis para `kind: "builtin"`. */
+export interface BuiltinCatalogEntry {
+  builtin_id: string;
+  label: string;
+  description: string;
+  params: BuiltinParam[];
+}
+
+/** Location de um parâmetro de tool `kind: "api"`. */
+export type ApiParamLocation = "query" | "path" | "header" | "body";
+export type ApiParamType = "string" | "integer" | "number" | "boolean" | "object" | "array";
+
+export interface ApiToolParam {
+  name: string;
+  type: ApiParamType;
+  location: ApiParamLocation;
+  description?: string;
+  required?: boolean;
+}
+
+export type ApiAuth =
+  | { type: "none" }
+  | { type: "bearer"; token: string }
+  | { type: "api_key"; header: string; value: string }
+  | { type: "basic"; username: string; password: string };
+
+export interface ApiToolConfig {
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  url: string;
+  headers?: Record<string, string>;
+  auth?: ApiAuth;
+  parameters: ApiToolParam[];
+  timeout_seconds?: number;
+}
+
+export interface PythonToolConfig {
+  code: string;
+  entrypoint: string;
+  timeout_seconds?: number;
+}
+
+export interface ToolInvokeInput {
+  arguments?: Record<string, unknown>;
+  function_name?: string | null;
+}
+
+export interface ToolInvokeResult {
+  ok: boolean;
+  result?: unknown;
+  error?: string | null;
+}
+
 export interface UsageMetrics {
   input_tokens?: number;
   output_tokens?: number;

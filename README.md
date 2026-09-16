@@ -34,11 +34,11 @@ conhecimento. Todo o stack roda via Docker Compose.
 
 ```
 src/agent_service/
-  api/            # contrato estável de API (/chat, /chat/stream, /health) + agents_routes.py (CRUD)
+  api/            # contrato estável de API (/chat, /chat/stream, /health) + agents_routes.py/tools_routes.py (CRUD)
   agents/         # store.py (definições+versionamento no Postgres), registry.py (resolução dinâmica)
   memory/         # abstração de memória (comum via Agno/Postgres; Mem0 como backend plugável)
   models/         # abstração de provedor de modelo (LLM)
-  tools/          # registro de tools por tipo de agente
+  tools/          # store.py (CRUD), catalog.py (builtins do Agno), api_tool.py, python_tool.py, registry.py (resolução)
   documents/      # collections de documentos (pgvector) para RAG
   messaging/      # producer/consumer Redis Streams
   observability/  # tracing.py: Langfuse + instrumentação do Agno; trace_store.py: leitura de runs/traces
@@ -48,9 +48,9 @@ src/agent_service/
 tests/
 Dockerfile        # imagem do agent-service (uv, multi-stage)
 frontend/
-  src/app/(workspace)/ # console: chat/, agents/, knowledge/ sob um layout com sidebar
+  src/app/(workspace)/ # console: chat/, agents/, tools/, knowledge/, observability/ sob um layout com sidebar
   src/app/api/         # Route Handlers do BFF (proxy pro agent-service)
-  src/components/      # ui/ (primitivas), workspace/ (shell, sidebar, paleta), chat/, agents/, knowledge/, integration/
+  src/components/      # ui/ (primitivas), workspace/ (shell, sidebar, paleta), chat/, agents/, tools/, knowledge/, integration/
   src/lib/             # api.ts (proxy), sse.ts (parser SSE), use-chat.ts, sessions.ts, hooks
   Dockerfile         # multi-stage, output standalone do Next.js
 docker-compose.yml  # postgres, redis, agent-service, frontend + stack do Langfuse
@@ -161,15 +161,82 @@ também são campos por-agente agora, em vez da antiga env var global
 `MEM0_ENABLED` (que continua existindo só como guarda de configuração do
 Mem0 — ver seção abaixo).
 
-`GET /tools` lista as tools disponíveis para o campo `tools` (nomes
-resolvidos via `tools/registry.py::resolve_tools`, nunca código arbitrário
-vindo da API).
+`GET /tools` lista as tools disponíveis para o campo `tools` (só os nomes são
+salvos na definição do agente — a tool em si é resolvida em runtime, ver
+**Tools dos agentes** abaixo).
 
 **Parâmetros opcionais no chat (`dependencies`)**: `ChatRequest` aceita um
 campo livre `dependencies` (ex: `{"cpf": "...", "nome": "..."}`) — vira
 contexto estruturado injetado no prompt via `add_dependencies_to_context` do
 Agno. Ver a aba **Integração** de cada agente no console para exemplos
 completos (cURL, JavaScript e Python).
+
+## Tools dos agentes
+
+Tools são criadas pela API ou pela tela `/tools` do console — nunca editando
+`tools/registry.py`, que só resolve o nome salvo em `AgentDefinition.tools`
+pro objeto real do Agno em runtime (`agents/registry.py` chama isso a cada
+`/chat`, com cache invalidado por `updated_at`, igual ao agente em si). Uma
+tabela só (`tool_definitions`), três formatos (`kind`):
+
+| `kind` | O que é | Onde mora a config |
+|---|---|---|
+| `builtin` | Uma toolkit padrão do Agno, do catálogo curado em `tools/catalog.py` (busca na web, calculadora, Hacker News, e-mail, arquivos...) | `{"builtin_id": "...", "params": {...}}` |
+| `api` | Chama uma API HTTP existente, descrita em JSON — sem escrever código | método, URL (com `{param}` de path), parâmetros que o modelo preenche, autenticação |
+| `python` | Uma função Python enviada por você, `exec`ada num namespace restrito | `{"code": "def handler(...): ...", "entrypoint": "handler"}` |
+
+```bash
+# catálogo de builtins disponíveis (id, params aceitos)
+curl http://localhost:58000/tools/catalog
+
+# criar uma tool builtin
+curl -X POST http://localhost:58000/tools -H "Content-Type: application/json" -d '{
+  "tool_name": "web_search", "kind": "builtin", "label": "Busca na web",
+  "config": {"builtin_id": "web_search", "params": {"max_results": 5}}
+}'
+
+# criar uma tool de API — sem código, só descrição
+curl -X POST http://localhost:58000/tools -H "Content-Type: application/json" -d '{
+  "tool_name": "cep", "kind": "api", "label": "Consulta de CEP",
+  "config": {
+    "method": "GET", "url": "https://viacep.com.br/ws/{cep}/json/",
+    "parameters": [{"name": "cep", "type": "string", "location": "path", "required": true}]
+  }
+}'
+
+# testar uma tool sem montar um agente em volta dela
+curl -X POST http://localhost:58000/tools/cep/invoke -H "Content-Type: application/json" \
+  -d '{"arguments": {"cep": "01310-100"}}'
+
+# usar no agente, como sempre
+curl -X PUT http://localhost:58000/agents/conversational -H "Content-Type: application/json" \
+  -d '{"tools": ["web_search", "cep"]}'
+```
+
+`GET/PUT /tools/{name}` mascaram segredos (token de auth, senha de app de
+e-mail) na resposta — editar sem mexer no campo mascarado preserva o valor
+real salvo. Excluir é bloqueado se a tool for semeada pelo sistema (`is_seed`)
+ou estiver em uso por algum agente (a resposta diz qual). `POST
+/tools/{name}/invoke` roda a tool uma vez fora de um agente — pra `kind:
+"builtin"`, que expõe várias funções por toolkit, é obrigatório informar
+`function_name` (a lista vem em `GET /tools/{name}.functions`).
+
+**Tools Python são desligadas por padrão** (`CUSTOM_PYTHON_TOOLS_ENABLED=false`).
+Dá pra criar e editar mesmo desligado — só não roda (nem num agente, nem em
+`/invoke`) até ligar a env var. A validação (`tools/python_tool.py`) recusa
+código com `import` fora de uma lista liberada (math, json, re, datetime,
+statistics, httpx, random...) e qualquer nome/atributo perigoso (`os`,
+`subprocess`, `eval`, `__globals__`, `__subclasses__`...), mais `builtins`
+restritos na execução. **Isso não é uma sandbox forte** — é uma barreira
+contra erro e abuso acidental, não contra um autor mal-intencionado
+determinado (exigiria isolar por processo/container, fora do escopo deste
+serviço). Só ligue se todo mundo com acesso à API/console já for confiável —
+hoje o serviço não tem autenticação (ver **Roadmap**).
+
+`web_search` (builtin) precisa do extra `tools`: `uv sync --extra tools`
+(instala `ddgs`). As demais builtins do catálogo já funcionam sem instalar
+nada. O seed cria três tools de exemplo prontas pra usar (`calculator`,
+`hackernews`, `cat_fact` — uma tool de API pública, sem segredo nenhum).
 
 ## Collections de documentos (RAG)
 
@@ -344,7 +411,17 @@ Um console único, em vez de abas isoladas. Um layout compartilhado
   chamadas ao agente, de qualquer origem, filtráveis por versão do prompt e
   status, cada uma abrindo o trace), *Conversas* com o
   agente e *Integração* (cURL/JavaScript/Python + referência do contrato
-  `/chat` e `/chat/stream`, no lugar da antiga página `/docs`).
+  `/chat` e `/chat/stream`, no lugar da antiga página `/docs`). O multi-select
+  de tools mostra o tipo (builtin/API/Python) de cada uma, com um link para a
+  tela de gerenciamento.
+- **Tools (`/tools`)** — lista com busca, criação e edição de tools dos três
+  tipos (formulário próprio por tipo: escolher a toolkit e seus parâmetros
+  para builtin; método, URL, parâmetros e autenticação para API; editor de
+  código e função de entrada para Python), um botão **Testar** que roda a
+  tool uma vez fora de um agente (`POST /tools/{name}/invoke`) e exclusão
+  (bloqueada se a tool estiver em uso). Campos secretos (token de auth, senha
+  de app de e-mail) vêm mascarados do backend e só mudam se você de fato
+  editá-los.
 - **Base de conhecimento (`/knowledge`)** — tabela dos documentos ingeridos
   (`GET /knowledge/content`) com status e mensagem de erro, atualização
   automática enquanto algo processa, exclusão, adição por texto, arquivo
@@ -384,11 +461,17 @@ uv run pytest
 ## Escopo do MVP (implementado)
 
 - Abstrações centrais: `BaseAgent` (`agents/base.py`), memória comum (`memory/common.py`),
-  gerenciamento de modelo (`models/provider.py`), registro de tools (`tools/registry.py`).
+  gerenciamento de modelo (`models/provider.py`).
 - **Agentes dinâmicos**: definições + versionamento de prompt em Postgres
   (`agents/store.py`), resolvidos em runtime (`agents/registry.py`) sem
   restart — CRUD completo via `/agents` (API) e pela tela `/agents`
   (frontend). O agente `conversational` é só a primeira linha semeada.
+- **Tools construídas via API/console, sem código** (`tools/store.py` +
+  `api/tools_routes.py`): builtins do Agno (`tools/catalog.py`), chamadas de
+  API descritas em JSON (`tools/api_tool.py`) e funções Python sandboxed
+  (`tools/python_tool.py`, desligadas por padrão) — CRUD e teste (`/invoke`)
+  via API e pela tela `/tools`. `agents/registry.py` resolve os nomes salvos
+  no agente pros objetos reais do Agno em runtime.
 - API REST síncrona (`POST /chat`, com `dependencies` opcionais) e streaming
   (`POST /chat/stream`, com tracing e `event: usage` de tokens ao final).
 - **Observabilidade via Langfuse self-hosted** (`observability/tracing.py`):

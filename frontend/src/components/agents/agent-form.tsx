@@ -1,11 +1,13 @@
 "use client";
 
 import { FormEvent, ReactNode, useEffect, useId, useMemo, useState } from "react";
+import Link from "next/link";
+import { Wrench } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { errorMessage } from "@/lib/http";
 import { formatNumber, slugify } from "@/lib/format";
-import { DEFAULT_MODEL, MEMORY_BACKENDS, MODEL_OPTIONS, type ModelOption } from "@/lib/agent-meta";
-import type { AgentDefinition, AgentDefinitionInput, MemoryBackend } from "@/lib/types";
+import { DEFAULT_MODEL, MEMORY_BACKENDS, MODEL_OPTIONS, TOOL_KIND_META, type ModelOption } from "@/lib/agent-meta";
+import type { AgentDefinition, AgentDefinitionInput, MemoryBackend, ToolSummary } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -75,7 +77,7 @@ interface AgentFormProps {
   agent?: AgentDefinition;
   /** Instruções iniciais diferentes das salvas (ex. versão restaurada do histórico). */
   initialInstructions?: string[];
-  availableTools: string[];
+  availableTools: ToolSummary[];
   onSubmit: (payload: AgentFormPayload) => Promise<void>;
   onCancel?: () => void;
   /** `page`: seções em duas colunas com barra de ações fixa; `sheet`: coluna única para painel lateral. */
@@ -325,26 +327,55 @@ export function AgentForm({
         </div>
       </FormSection>
 
-      <FormSection variant={variant} title="Tools" description="Funções que o agente pode chamar durante a execução.">
+      <FormSection
+        variant={variant}
+        title="Tools"
+        description="Funções que o agente pode chamar durante a execução."
+        action={
+          <Link href="/tools" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+            <Wrench className="size-3" /> Gerenciar tools
+          </Link>
+        }
+      >
         {availableTools.length === 0 ? (
           <p className="rounded-lg border border-dashed border-border px-4 py-3 text-[13px] text-muted-foreground">
-            Nenhuma tool registrada no backend. Novas tools entram em{" "}
-            <code className="font-mono text-xs">tools/registry.py</code> e aparecem aqui automaticamente.
+            Nenhuma tool criada ainda.{" "}
+            <Link href="/tools" className="text-primary hover:underline">
+              Crie uma
+            </Link>{" "}
+            (toolkit padrão do Agno, API ou Python) e ela aparece aqui.
           </p>
         ) : (
           <div className="grid gap-2 sm:grid-cols-2">
             {availableTools.map((tool) => (
               <label
-                key={tool}
-                className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-input px-3 py-2 text-[13px] hover:bg-accent/50"
+                key={tool.tool_name}
+                title={tool.description ?? undefined}
+                className={cn(
+                  "flex cursor-pointer items-start gap-2.5 rounded-lg border border-input px-3 py-2 text-[13px] hover:bg-accent/50",
+                  !tool.enabled && "opacity-60"
+                )}
               >
                 <input
                   type="checkbox"
-                  checked={values.tools.includes(tool)}
-                  onChange={() => toggleTool(tool)}
-                  className="accent-primary"
+                  checked={values.tools.includes(tool.tool_name)}
+                  onChange={() => toggleTool(tool.tool_name)}
+                  className="mt-0.5 accent-primary"
                 />
-                <span className="font-mono">{tool}</span>
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate font-medium">{tool.label}</span>
+                    <Badge variant="outline" className="shrink-0">
+                      {TOOL_KIND_META[tool.kind].label}
+                    </Badge>
+                    {!tool.enabled && (
+                      <Badge variant="secondary" className="shrink-0">
+                        desativada
+                      </Badge>
+                    )}
+                  </span>
+                  <span className="truncate font-mono text-xs text-muted-foreground">{tool.tool_name}</span>
+                </span>
               </label>
             ))}
           </div>
@@ -410,19 +441,24 @@ function FormSection({
   variant,
   title,
   description,
+  action,
   children,
 }: {
   variant: "page" | "sheet";
   title: string;
   description: string;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   if (variant === "sheet") {
     return (
       <section className="flex flex-col gap-3">
-        <div>
-          <h3 className="text-sm font-semibold">{title}</h3>
-          <p className="text-xs text-muted-foreground">{description}</p>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold">{title}</h3>
+            <p className="text-xs text-muted-foreground">{description}</p>
+          </div>
+          {action}
         </div>
         {children}
       </section>
@@ -431,7 +467,10 @@ function FormSection({
   return (
     <section className="grid gap-4 py-8 first:pt-2 lg:grid-cols-[260px_minmax(0,1fr)] lg:gap-10">
       <div className="flex flex-col gap-1">
-        <h3 className="text-sm font-semibold">{title}</h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">{title}</h3>
+          {action}
+        </div>
         <p className="text-[13px] text-muted-foreground">{description}</p>
       </div>
       <Card className="p-5">{children}</Card>

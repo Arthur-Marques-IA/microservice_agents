@@ -23,6 +23,7 @@ import {
   SquarePen,
   Sun,
   Trash,
+  Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { formatDateTime, groupByRecency } from "@/lib/format";
@@ -46,6 +47,7 @@ import { useWorkspace } from "@/components/workspace/workspace-provider";
 const NAV_ITEMS = [
   { href: "/chat", label: "Playground", icon: MessageSquare },
   { href: "/agents", label: "Agentes", icon: Bot },
+  { href: "/tools", label: "Tools", icon: Wrench },
   { href: "/knowledge", label: "Conhecimento", icon: Library },
 ];
 const OBSERVABILITY_ITEM = { href: "/observability", label: "Observabilidade", icon: Activity };

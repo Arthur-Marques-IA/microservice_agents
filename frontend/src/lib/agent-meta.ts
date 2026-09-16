@@ -1,4 +1,4 @@
-import type { MemoryBackend } from "@/lib/types";
+import type { MemoryBackend, ToolKind } from "@/lib/types";
 
 export interface ModelOption {
   provider: string;
@@ -27,6 +27,12 @@ export const MEMORY_BACKENDS: Record<MemoryBackend, { label: string; description
     label: "Mem0",
     description: "Soma memória semântica via Mem0 à memória comum. Requer MEM0_ENABLED no backend.",
   },
+};
+
+export const TOOL_KIND_META: Record<ToolKind, { label: string; description: string }> = {
+  builtin: { label: "Padrão", description: "Uma toolkit pronta do Agno (busca, calculadora...)." },
+  api: { label: "API", description: "Chama uma API HTTP existente, descrita em JSON — sem código." },
+  python: { label: "Python", description: "Uma função Python enviada por você, executada num namespace restrito." },
 };
 
 /** Valida o JSON do campo `dependencies` do chat. */

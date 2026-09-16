@@ -1,9 +1,10 @@
-"""CRUD de definições de agente + histórico de prompt (read-only) + tools.
+"""CRUD de definições de agente + histórico de prompt (read-only).
 
 Separado do contrato de chat (`api/routes.py`) porque é uma superfície
 diferente: isso é gerenciamento (usado pela tela `/agents` do frontend e por
 integrações administrativas), não o contrato estável de execução que outros
-módulos da plataforma consomem.
+módulos da plataforma consomem. Tools têm CRUD próprio em `tools_routes.py`
+(`GET /tools` etc.) — aqui só se valida que os nomes em `tools` existem.
 """
 
 import re
@@ -22,7 +23,7 @@ from agent_service.agents.store import (
     list_prompt_versions,
     update_definition,
 )
-from agent_service.tools.registry import UnknownToolError, list_available_tools, resolve_tools
+from agent_service.tools.registry import tool_exists
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -79,10 +80,12 @@ class PromptVersionOut(BaseModel):
 
 
 def _validate_tools(names: list[str]) -> None:
-    try:
-        resolve_tools(names)
-    except UnknownToolError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    """Só confere que os nomes existem em `tool_definitions` — construir de
+    fato (instanciar toolkit, compilar código Python...) fica pra hora do
+    `/chat` (`agents/registry.py`), não pra cada salvamento do agente."""
+    unknown = [n for n in names if not tool_exists(n)]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Tools desconhecidas: {unknown}")
 
 
 @router.get("", response_model=list[AgentDefinitionOut])
@@ -132,11 +135,3 @@ def get_prompt_versions(agent_type: str) -> list[dict[str, Any]]:
     if get_definition(agent_type) is None:
         raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
     return list_prompt_versions(agent_type)
-
-
-tools_router = APIRouter(tags=["agents"])
-
-
-@tools_router.get("/tools")
-def get_tools() -> dict[str, list[str]]:
-    return {"tools": list_available_tools()}

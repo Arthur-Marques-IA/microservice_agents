@@ -13,7 +13,7 @@ import {
 import { errorMessage, requestJson } from "@/lib/http";
 import { toDate } from "@/lib/format";
 import { useUserId } from "@/lib/use-local-storage";
-import type { AgentDefinition, ObservabilityConfig, Paginated, SessionSummary } from "@/lib/types";
+import type { AgentDefinition, ObservabilityConfig, Paginated, SessionSummary, ToolSummary } from "@/lib/types";
 
 interface SessionsState {
   userId: string;
@@ -24,7 +24,7 @@ interface SessionsState {
 interface WorkspaceContextValue {
   /** Definições de agente carregadas pelo layout (server) — atualizadas via `router.refresh()`. */
   agents: AgentDefinition[];
-  availableTools: string[];
+  availableTools: ToolSummary[];
   collections: string[];
   /** URL do agent-service para exemplos de integração. */
   publicApiUrl: string;
@@ -64,7 +64,7 @@ export function WorkspaceProvider({
   children,
 }: {
   agents: AgentDefinition[];
-  availableTools: string[];
+  availableTools: ToolSummary[];
   collections: string[];
   publicApiUrl: string;
   backendReachable: boolean;
