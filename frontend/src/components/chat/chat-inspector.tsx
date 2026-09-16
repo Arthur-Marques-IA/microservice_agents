@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
 import { MEMORY_BACKENDS, modelLabel } from "@/lib/agent-meta";
 import type { AgentDefinition } from "@/lib/types";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Textarea } from "@/components/ui/textarea";
@@ -124,6 +125,16 @@ export function ChatInspector({
             </>
           }
         >
+          {agent && agent.dependency_fields.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {agent.dependency_fields.map((field) => (
+                <Badge key={field.name} variant={field.required ? "warning" : "outline"} title={field.description || undefined}>
+                  {field.label}
+                  {field.required && " *"}
+                </Badge>
+              ))}
+            </div>
+          )}
           <label htmlFor="chat-dependencies" className="sr-only">
             dependencies (JSON)
           </label>

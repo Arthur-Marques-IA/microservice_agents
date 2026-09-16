@@ -18,6 +18,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from agno.run.agent import RunEvent
 
+from agent_service.agents.dependency_fields import DependencyValidationError, validate_dependencies
 from agent_service.agents.registry import UnknownAgentTypeError, get_agent_with_definition, list_agent_types
 from agent_service.documents.collections import COLLECTION_NAMES, add_text, search
 from agent_service.observability.tracing import RUN_FAILED, RunContext, get_langfuse, traced_run_events
@@ -58,6 +59,11 @@ def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
         # opcional ausente, tool Python desligada...) — problema nosso, não de quem chama.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    try:
+        dependencies = validate_dependencies(definition.get("dependency_fields"), request.dependencies)
+    except DependencyValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     run = RunContext(
         endpoint=endpoint,
         agent_type=request.agent_type,
@@ -66,7 +72,7 @@ def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
         user_id=request.user_id,
         session_id=request.session_id,
         message=request.message,
-        dependencies=request.dependencies,
+        dependencies=dependencies,
     )
     return agent, run
 

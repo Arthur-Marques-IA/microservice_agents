@@ -2,12 +2,20 @@
 
 import { FormEvent, ReactNode, useEffect, useId, useMemo, useState } from "react";
 import Link from "next/link";
-import { Wrench } from "lucide-react";
+import { Plus, Trash, Wrench } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { errorMessage } from "@/lib/http";
 import { formatNumber, slugify } from "@/lib/format";
 import { DEFAULT_MODEL, MEMORY_BACKENDS, MODEL_OPTIONS, TOOL_KIND_META, type ModelOption } from "@/lib/agent-meta";
-import type { AgentDefinition, AgentDefinitionInput, MemoryBackend, ModelProviderSummary, ToolSummary } from "@/lib/types";
+import type {
+  AgentDefinition,
+  AgentDefinitionInput,
+  DependencyField,
+  DependencyFieldType,
+  MemoryBackend,
+  ModelProviderSummary,
+  ToolSummary,
+} from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -21,6 +29,7 @@ import { useWorkspace } from "@/components/workspace/workspace-provider";
 export type AgentFormPayload = Partial<AgentDefinitionInput>;
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+const DEPENDENCY_FIELD_TYPES: DependencyFieldType[] = ["string", "integer", "number", "boolean"];
 
 interface FormValues {
   agentType: string;
@@ -28,6 +37,7 @@ interface FormValues {
   instructions: string;
   tools: string[];
   modelId: string;
+  dependencyFields: DependencyField[];
   memoryBackend: MemoryBackend;
   numHistoryRuns: number;
 }
@@ -39,9 +49,17 @@ function valuesFrom(agent?: AgentDefinition, instructions?: string[]): FormValue
     instructions: (instructions ?? agent?.instructions ?? []).join("\n"),
     tools: agent?.tools ?? [],
     modelId: agent?.model_id ?? DEFAULT_MODEL.id,
+    dependencyFields: agent?.dependency_fields ?? [],
     memoryBackend: agent?.memory_backend ?? "common",
     numHistoryRuns: agent?.num_history_runs ?? 10,
   };
+}
+
+function sameDependencyFields(a: DependencyField[], b: DependencyField[]) {
+  return (
+    a.length === b.length &&
+    a.every((f, i) => f.name === b[i].name && f.type === b[i].type && f.label === b[i].label && f.required === b[i].required)
+  );
 }
 
 function toLines(text: string) {
@@ -77,6 +95,9 @@ function buildUpdate(values: FormValues, agent: AgentDefinition, models: ModelOp
     const model = models.find((m) => m.id === values.modelId) ?? DEFAULT_MODEL;
     payload.model_provider = model.provider;
     payload.model_id = model.id;
+  }
+  if (!sameDependencyFields(values.dependencyFields, agent.dependency_fields)) {
+    payload.dependency_fields = values.dependencyFields;
   }
   if (values.memoryBackend !== agent.memory_backend) payload.memory_backend = values.memoryBackend;
   if (values.numHistoryRuns !== agent.num_history_runs) payload.num_history_runs = values.numHistoryRuns;
@@ -189,6 +210,7 @@ export function AgentForm({
           tools: values.tools,
           model_provider: model.provider,
           model_id: model.id,
+          dependency_fields: values.dependencyFields,
           memory_backend: values.memoryBackend,
           num_history_runs: values.numHistoryRuns,
         });
@@ -361,6 +383,17 @@ export function AgentForm({
 
       <FormSection
         variant={variant}
+        title="Campos de contexto (dependencies)"
+        description="Quais chaves o agente espera no dependencies do /chat (ex.: cpf) — o que não for declarado aqui continua passando livre, sem validação."
+      >
+        <DependencyFieldsEditor
+          fields={values.dependencyFields}
+          onChange={(dependencyFields) => update("dependencyFields", dependencyFields)}
+        />
+      </FormSection>
+
+      <FormSection
+        variant={variant}
         title="Tools"
         description="Funções que o agente pode chamar durante a execução."
         action={
@@ -507,5 +540,77 @@ function FormSection({
       </div>
       <Card className="p-5">{children}</Card>
     </section>
+  );
+}
+
+function emptyDependencyField(): DependencyField {
+  return { name: "", type: "string", label: "", description: "", required: false, default: null };
+}
+
+function DependencyFieldsEditor({
+  fields,
+  onChange,
+}: {
+  fields: DependencyField[];
+  onChange: (fields: DependencyField[]) => void;
+}) {
+  function updateField(index: number, patch: Partial<DependencyField>) {
+    onChange(fields.map((f, i) => (i === index ? { ...f, ...patch } : f)));
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {fields.length === 0 ? (
+        <p className="text-[13px] text-muted-foreground">
+          Nenhum campo declarado — qualquer <code className="font-mono">dependencies</code> enviado passa sem validação.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {fields.map((f, i) => (
+            <div key={i} className="grid grid-cols-[1fr_1fr_110px_auto_auto] items-center gap-1.5">
+              <Input
+                placeholder="nome (ex.: cpf)"
+                value={f.name}
+                onChange={(e) => updateField(i, { name: e.target.value })}
+                className="font-mono text-xs"
+              />
+              <Input
+                placeholder="rótulo (opcional)"
+                value={f.label}
+                onChange={(e) => updateField(i, { label: e.target.value })}
+                className="text-xs"
+              />
+              <Select value={f.type} onChange={(e) => updateField(i, { type: e.target.value as DependencyFieldType })}>
+                {DEPENDENCY_FIELD_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </Select>
+              <label className="flex items-center gap-1 text-xs text-muted-foreground" title="Obrigatório">
+                <input
+                  type="checkbox"
+                  checked={f.required}
+                  onChange={(e) => updateField(i, { required: e.target.checked })}
+                  className="accent-primary"
+                />
+                obrig.
+              </label>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Remover campo"
+                onClick={() => onChange(fields.filter((_, idx) => idx !== i))}
+              >
+                <Trash />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+      <Button variant="outline" size="sm" className="w-fit" onClick={() => onChange([...fields, emptyDependencyField()])}>
+        <Plus /> Campo
+      </Button>
+    </div>
   );
 }

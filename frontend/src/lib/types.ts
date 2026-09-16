@@ -98,6 +98,27 @@ export interface SessionRun {
 
 export type MemoryBackend = "common" | "mem0";
 
+export type DependencyFieldType = "string" | "integer" | "number" | "boolean";
+
+/** Um campo de `dependencies` que o agente espera no `/chat` (ex.: `cpf`, obrigatório). */
+export interface DependencyField {
+  name: string;
+  type: DependencyFieldType;
+  label: string;
+  description: string;
+  required: boolean;
+  default: unknown;
+}
+
+export interface DependencyFieldInput {
+  name: string;
+  type?: DependencyFieldType;
+  label?: string | null;
+  description?: string | null;
+  required?: boolean;
+  default?: unknown;
+}
+
 export interface AgentDefinition {
   agent_type: string;
   name: string;
@@ -105,6 +126,7 @@ export interface AgentDefinition {
   tools: string[];
   model_provider: string | null;
   model_id: string | null;
+  dependency_fields: DependencyField[];
   memory_backend: MemoryBackend;
   num_history_runs: number;
   is_seed: boolean;
@@ -120,6 +142,7 @@ export interface AgentDefinitionInput {
   tools?: string[];
   model_provider?: string | null;
   model_id?: string | null;
+  dependency_fields?: DependencyFieldInput[];
   memory_backend?: MemoryBackend;
   num_history_runs?: number;
 }

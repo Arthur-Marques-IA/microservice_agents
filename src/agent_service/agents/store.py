@@ -44,6 +44,10 @@ agent_definitions = Table(
     Column("tools", JSON, nullable=False, default=list),
     Column("model_provider", String, nullable=True),
     Column("model_id", String, nullable=True),
+    # Campos de `dependencies` que este agente espera no /chat — ver
+    # `agents/dependency_fields.py`. Lista de {name, type, label, description,
+    # required, default}; [] (default) = sem validação, qualquer dependencies passa.
+    Column("dependency_fields", JSON, nullable=False, default=list),
     Column("memory_backend", String, nullable=False, default="common"),
     Column("num_history_runs", Integer, nullable=False, default=10),
     Column("is_seed", Boolean, nullable=False, default=False),
@@ -99,6 +103,7 @@ def create_definition(
     tools: list[str] | None = None,
     model_provider: str | None = None,
     model_id: str | None = None,
+    dependency_fields: list[dict[str, Any]] | None = None,
     memory_backend: str = "common",
     num_history_runs: int = 10,
     is_seed: bool = False,
@@ -113,6 +118,7 @@ def create_definition(
                 tools=tools or [],
                 model_provider=model_provider,
                 model_id=model_id,
+                dependency_fields=dependency_fields or [],
                 memory_backend=memory_backend,
                 num_history_runs=num_history_runs,
                 is_seed=is_seed,
@@ -149,6 +155,7 @@ def update_definition(
     tools: list[str] | None = None,
     model_provider: str | None = None,
     model_id: str | None = None,
+    dependency_fields: list[dict[str, Any]] | None = None,
     memory_backend: str | None = None,
     num_history_runs: int | None = None,
 ) -> dict[str, Any]:
@@ -165,6 +172,8 @@ def update_definition(
         values["model_provider"] = model_provider
     if model_id is not None:
         values["model_id"] = model_id
+    if dependency_fields is not None:
+        values["dependency_fields"] = dependency_fields
     if memory_backend is not None:
         values["memory_backend"] = memory_backend
     if num_history_runs is not None:

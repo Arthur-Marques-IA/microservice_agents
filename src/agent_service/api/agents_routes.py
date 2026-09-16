@@ -14,6 +14,11 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
+from agent_service.agents.dependency_fields import (
+    DependencyFieldSpecError,
+    FieldType,
+    validate_field_specs,
+)
 from agent_service.agents.store import (
     DefinitionNotFoundError,
     create_definition,
@@ -30,6 +35,24 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
+class DependencyFieldIn(BaseModel):
+    name: str
+    type: FieldType = "string"
+    label: str | None = None
+    description: str | None = None
+    required: bool = False
+    default: Any = None
+
+
+class DependencyFieldOut(BaseModel):
+    name: str
+    type: FieldType
+    label: str
+    description: str
+    required: bool
+    default: Any
+
+
 class AgentDefinitionIn(BaseModel):
     agent_type: str = Field(..., description="Slug estável, usado como agent_id no /chat")
     name: str
@@ -37,6 +60,7 @@ class AgentDefinitionIn(BaseModel):
     tools: list[str] = []
     model_provider: str | None = None
     model_id: str | None = None
+    dependency_fields: list[DependencyFieldIn] = []
     memory_backend: Literal["common", "mem0"] = "common"
     num_history_runs: int = 10
 
@@ -47,6 +71,12 @@ class AgentDefinitionIn(BaseModel):
             raise ValueError("agent_type deve ser um slug: letras minúsculas, números, '-' ou '_'")
         return v
 
+    @field_validator("dependency_fields")
+    @classmethod
+    def _validate_dependency_fields(cls, v: list[DependencyFieldIn]) -> list[DependencyFieldIn]:
+        _normalize_dependency_fields(v)
+        return v
+
 
 class AgentDefinitionUpdate(BaseModel):
     name: str | None = None
@@ -54,8 +84,16 @@ class AgentDefinitionUpdate(BaseModel):
     tools: list[str] | None = None
     model_provider: str | None = None
     model_id: str | None = None
+    dependency_fields: list[DependencyFieldIn] | None = None
     memory_backend: Literal["common", "mem0"] | None = None
     num_history_runs: int | None = None
+
+    @field_validator("dependency_fields")
+    @classmethod
+    def _validate_dependency_fields(cls, v: list[DependencyFieldIn] | None) -> list[DependencyFieldIn] | None:
+        if v is not None:
+            _normalize_dependency_fields(v)
+        return v
 
 
 class AgentDefinitionOut(BaseModel):
@@ -65,12 +103,20 @@ class AgentDefinitionOut(BaseModel):
     tools: list[str]
     model_provider: str | None
     model_id: str | None
+    dependency_fields: list[DependencyFieldOut]
     memory_backend: str
     num_history_runs: int
     is_seed: bool
     prompt_version: int
     created_at: datetime
     updated_at: datetime
+
+
+def _normalize_dependency_fields(fields: list[DependencyFieldIn]) -> list[dict[str, Any]]:
+    try:
+        return validate_field_specs([f.model_dump() for f in fields])
+    except DependencyFieldSpecError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 class PromptVersionOut(BaseModel):
@@ -98,7 +144,9 @@ def create_agent(body: AgentDefinitionIn) -> dict[str, Any]:
     if get_definition(body.agent_type) is not None:
         raise HTTPException(status_code=409, detail=f"Agente {body.agent_type!r} já existe")
     _validate_tools(body.tools)
-    return create_definition(**body.model_dump())
+    payload = body.model_dump()
+    payload["dependency_fields"] = _normalize_dependency_fields(body.dependency_fields)
+    return create_definition(**payload)
 
 
 @router.get("/{agent_type}", response_model=AgentDefinitionOut)
@@ -113,8 +161,11 @@ def get_agent_definition(agent_type: str) -> dict[str, Any]:
 def update_agent(agent_type: str, body: AgentDefinitionUpdate) -> dict[str, Any]:
     if body.tools is not None:
         _validate_tools(body.tools)
+    payload = body.model_dump(exclude_unset=True)
+    if body.dependency_fields is not None:
+        payload["dependency_fields"] = _normalize_dependency_fields(body.dependency_fields)
     try:
-        updated = update_definition(agent_type, **body.model_dump(exclude_unset=True))
+        updated = update_definition(agent_type, **payload)
     except DefinitionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado") from exc
     return updated
