@@ -73,16 +73,15 @@ function PaletteContent({ onClose }: { onClose: () => void }) {
       { id: "nav-chat", group: "Navegar", label: "Playground", icon: MessageSquare, href: "/chat" },
       { id: "nav-agents", group: "Navegar", label: "Agentes", icon: Bot, href: "/agents" },
       { id: "nav-knowledge", group: "Navegar", label: "Base de conhecimento", icon: Library, href: "/knowledge", keywords: "collections documentos rag" },
-      ...(observability.project_url
+      ...(observability.enabled
         ? [
             {
               id: "nav-observability",
               group: "Navegar",
-              label: "Observabilidade (Langfuse)",
+              label: "Observabilidade",
               icon: Activity,
-              href: `${observability.project_url}/traces`,
-              external: true,
-              keywords: "traces execuções custo latência tokens sessões feedback monitoramento",
+              href: "/observability",
+              keywords: "traces execuções custo latência tokens sessões feedback monitoramento langfuse",
             },
           ]
         : []),

@@ -11,7 +11,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from agent_service.api.observability_routes import get_run_trace, list_agent_runs
+from agent_service.api.observability_routes import get_run_trace, list_agent_runs, list_runs
 from agent_service.observability import trace_store
 from agent_service.observability.trace_store import LangfuseTraceStore, RunQuery, TraceStoreError
 from agent_service.observability.tracing import trace_id_for_run
@@ -224,6 +224,14 @@ def test_feedback_counts_are_unknown_when_scores_exceed_the_page_limit() -> None
     assert (trace.run.feedback_up, trace.run.feedback_down) == (None, None)
 
 
+def test_list_runs_without_agent_type_omits_the_trace_name_filter() -> None:
+    fake = FakeLangfuse([ROOT, GENERATION], SCORES)
+    page = make_store(fake).list_runs(RunQuery(agent_type=None))
+
+    assert [r.run_id for r in page.items] == [RUN_ID]
+    assert not any(f["column"] == "traceName" for f in fake.filters(0))
+
+
 def test_list_runs_translates_filters() -> None:
     fake = FakeLangfuse([], [])
     make_store(fake, environment=None).list_runs(
@@ -310,3 +318,9 @@ def test_routes_map_upstream_failures_and_missing_traces(installed_store) -> Non
 
     installed_store(make_store(FakeLangfuse([ROOT, GENERATION], [])))
     assert get_run_trace(RUN_ID).run.total_tokens == 368
+
+
+def test_list_runs_route_without_agent_type_returns_all_agents(installed_store) -> None:
+    installed_store(make_store(FakeLangfuse([ROOT, GENERATION], [])))
+    page = list_runs()
+    assert [r.run_id for r in page.items] == [RUN_ID]

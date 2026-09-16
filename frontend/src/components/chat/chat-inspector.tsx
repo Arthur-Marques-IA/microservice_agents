@@ -166,34 +166,30 @@ export function ChatInspector({
           </div>
         </InspectorSection>
 
-        {observability.project_url && (
+        {observability.enabled && (
           <InspectorSection
             title="Observabilidade"
-            description="Cada resposta vira um trace no Langfuse — prompt, chamadas ao modelo, tools, tokens e custo."
+            description="Cada resposta vira um trace — prompt, chamadas ao modelo, tools, tokens e custo."
           >
             <div className="flex flex-col gap-2">
               {sessionId ? (
-                <a
-                  href={`${observability.project_url}/sessions/${encodeURIComponent(sessionId)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <Link
+                  href={`/observability?session_id=${encodeURIComponent(sessionId)}`}
                   className={buttonVariants({ variant: "outline", size: "sm", className: "w-full" })}
                 >
-                  <Activity /> Esta conversa no Langfuse
-                </a>
+                  <Activity /> Execuções desta conversa
+                </Link>
               ) : (
                 <p className="text-[13px] text-muted-foreground">
-                  A conversa aparece no Langfuse depois da primeira mensagem.
+                  As execuções aparecem aqui depois da primeira mensagem.
                 </p>
               )}
-              <a
-                href={`${observability.project_url}/users/${encodeURIComponent(userId)}`}
-                target="_blank"
-                rel="noopener noreferrer"
+              <Link
+                href={`/observability?user_id=${encodeURIComponent(userId)}`}
                 className="inline-flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
               >
                 <Users className="size-3" /> Meu histórico de uso
-              </a>
+              </Link>
             </div>
           </InspectorSection>
         )}

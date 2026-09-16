@@ -115,7 +115,8 @@ class RunTrace(BaseModel):
 
 @dataclass(frozen=True)
 class RunQuery:
-    agent_type: str
+    agent_type: str | None = None
+    """`None` lista todos os agentes (para a página `/observability` do console)."""
     prompt_version: int | None = None
     status: RunStatus | None = None
     user_id: str | None = None
@@ -256,8 +257,9 @@ class LangfuseTraceStore:
     def list_runs(self, query: RunQuery) -> RunPage:
         filters = self._scope_filters(query.tenant_id) + [
             {"type": "boolean", "column": "isRootObservation", "operator": "=", "value": True},
-            {"type": "string", "column": "traceName", "operator": "=", "value": query.agent_type},
         ]
+        if query.agent_type:
+            filters.append({"type": "string", "column": "traceName", "operator": "=", "value": query.agent_type})
         if query.prompt_version is not None:
             filters.append({"type": "string", "column": "version", "operator": "=", "value": f"{_VERSION_PREFIX}{query.prompt_version}"})
         if query.status:

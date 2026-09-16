@@ -71,6 +71,65 @@ def _store() -> TraceStore:
     return store
 
 
+def _list_runs(
+    *,
+    agent_type: str | None,
+    prompt_version: int | None,
+    status: RunStatus | None,
+    user_id: str | None,
+    session_id: str | None,
+    since: datetime | None,
+    until: datetime | None,
+    limit: int,
+    cursor: str | None,
+) -> RunPage:
+    query = RunQuery(
+        agent_type=agent_type,
+        prompt_version=prompt_version,
+        status=status,
+        user_id=user_id,
+        session_id=session_id,
+        since=since,
+        until=until,
+        limit=limit,
+        cursor=cursor,
+    )
+    try:
+        return _store().list_runs(query)
+    except TraceStoreError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/runs", response_model=RunPage)
+def list_runs(
+    agent_type: str | None = None,
+    prompt_version: Annotated[int | None, Query(ge=1)] = None,
+    status: RunStatus | None = None,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: str | None = None,
+) -> RunPage:
+    """Execuções de todos os agentes (ou de um só, com `agent_type`), mais recentes
+    primeiro, com tokens, custo e feedback — a página `/observability` do console usa isto.
+
+    Runs recém-terminados levam alguns segundos para aparecer (ingestão assíncrona).
+    """
+    return _list_runs(
+        agent_type=agent_type,
+        prompt_version=prompt_version,
+        status=status,
+        user_id=user_id,
+        session_id=session_id,
+        since=since,
+        until=until,
+        limit=limit,
+        cursor=cursor,
+    )
+
+
 @router.get("/agents/{agent_type}/runs", response_model=RunPage)
 def list_agent_runs(
     agent_type: str,
@@ -87,7 +146,7 @@ def list_agent_runs(
 
     Runs recém-terminados levam alguns segundos para aparecer (ingestão assíncrona).
     """
-    query = RunQuery(
+    return _list_runs(
         agent_type=agent_type,
         prompt_version=prompt_version,
         status=status,
@@ -98,10 +157,6 @@ def list_agent_runs(
         limit=limit,
         cursor=cursor,
     )
-    try:
-        return _store().list_runs(query)
-    except TraceStoreError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}/trace", response_model=RunTrace)

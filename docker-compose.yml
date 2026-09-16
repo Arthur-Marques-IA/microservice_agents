@@ -72,8 +72,13 @@ services:
   # ---------------------------------------------------------------------------
   # Langfuse v4 self-hosted (observabilidade), a partir do docker-compose
   # oficial (github.com/langfuse/langfuse). Bancos próprios e prefixados para
-  # não colidir com o Postgres/Redis do agent-service; só a UI (3100) e o MinIO
-  # (uploads de mídia, 127.0.0.1:9090) ficam expostos no host.
+  # não colidir com o Postgres/Redis do agent-service. Só o `agent-service`
+  # fala com o `langfuse-web` (rede interna do compose) — ninguém abre a UI
+  # dele: as execuções e traces aparecem no console, em `/observability`. Só
+  # o MinIO (uploads de mídia, 127.0.0.1:9090) fica exposto no host, para o
+  # próprio Langfuse servir imagens. Para debugar algo raro direto na UI,
+  # publique a porta de novo temporariamente (`docker compose port
+  # langfuse-web 3000`, ou reative `ports: ["3100:3000"]` abaixo).
   # Os defaults marcados CHANGEME servem só para dev local — sobrescreva pelo
   # .env em qualquer outro ambiente (ENCRYPTION_KEY: `openssl rand -hex 32`).
   # ---------------------------------------------------------------------------
@@ -125,8 +130,12 @@ services:
     restart: unless-stopped
     depends_on: *langfuse-depends-on
     ports:
-      # 3000 é do console; a UI do Langfuse fica na 3100.
-      - "3100:3000"
+      # Só em 127.0.0.1: ninguém na rede alcança a UI do Langfuse, mas o
+      # `agent-service` rodando fora do Docker (`uv run uvicorn`, sem a rede
+      # interna do compose) ainda consegue, e dá pra abrir localhost:3100 na
+      # sua própria máquina pra debug pontual. O console usa `/observability`,
+      # não isso — ver o comentário do bloco Langfuse acima.
+      - "127.0.0.1:3100:3000"
     environment:
       <<: *langfuse-env
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-agent-service-dev-nextauth-secret} # CHANGEME

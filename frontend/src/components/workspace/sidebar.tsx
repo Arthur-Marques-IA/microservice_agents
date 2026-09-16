@@ -48,6 +48,7 @@ const NAV_ITEMS = [
   { href: "/agents", label: "Agentes", icon: Bot },
   { href: "/knowledge", label: "Conhecimento", icon: Library },
 ];
+const OBSERVABILITY_ITEM = { href: "/observability", label: "Observabilidade", icon: Activity };
 
 export function Sidebar({
   collapsed = false,
@@ -133,7 +134,7 @@ export function Sidebar({
         aria-label="Principal"
         className={cn("mt-3 flex shrink-0 flex-col gap-0.5", collapsed ? "items-center px-2" : "px-3")}
       >
-        {NAV_ITEMS.map((item) => {
+        {(observability.enabled ? [...NAV_ITEMS, OBSERVABILITY_ITEM] : NAV_ITEMS).map((item) => {
           const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
           return (
             <Link
@@ -162,29 +163,6 @@ export function Sidebar({
             </Link>
           );
         })}
-
-        {/* Observabilidade é o Langfuse: abre a UI dele, fora do console. */}
-        {observability.project_url && (
-          <a
-            href={`${observability.project_url}/traces`}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={onNavigate}
-            title={collapsed ? "Observabilidade (Langfuse)" : "Abrir o Langfuse em outra aba"}
-            className={cn(
-              "flex h-9 items-center gap-2.5 rounded-lg text-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground",
-              collapsed ? "w-8 justify-center" : "px-3"
-            )}
-          >
-            <Activity className="size-4 shrink-0" />
-            {!collapsed && (
-              <>
-                <span className="flex-1">Observabilidade</span>
-                <ExternalLink className="size-3.5 shrink-0 opacity-60" />
-              </>
-            )}
-          </a>
-        )}
       </nav>
 
       {collapsed ? <div className="flex-1" /> : <SessionList onNavigate={onNavigate} />}

@@ -73,16 +73,18 @@ docker-compose.yml  # postgres, redis, agent-service, frontend + stack do Langfu
 
    | Serviço | URL no host | Observação |
    |---|---|---|
-   | frontend | http://localhost:3000 | console: `/chat`, `/agents`, `/knowledge` |
+   | frontend | http://localhost:3000 | console: `/chat`, `/agents`, `/knowledge`, `/observability` |
    | agent-service | http://localhost:58000 | API própria; `/docs` pra explorar |
    | postgres | localhost:55432 | pgvector; porta não-default pra não colidir com um Postgres nativo |
    | redis | localhost:6379 | |
-   | langfuse | http://localhost:3100 | observabilidade (traces, custo, sessões, feedback); login em `LANGFUSE_INIT_USER_*` |
 
-   O primeiro boot do Langfuse demora (migrações do ClickHouse) e o stack dele
-   pede memória — o projeto recomenda ~4 CPUs / 16 GB. Ele não é pré-requisito
-   do `agent-service`: com o Langfuse fora do ar os runs continuam normais, só
-   não são rastreados.
+   O Langfuse (`langfuse-web`, `langfuse-worker` e os bancos dele) roda só na
+   rede interna do compose, sem porta publicada — ninguém loga nele. Ele é o
+   armazenamento dos traces; quem olha as execuções é o console, em
+   `/observability` (ver a seção **Observabilidade** abaixo). O primeiro boot
+   demora (migrações do ClickHouse) e o stack pede memória — o projeto
+   recomenda ~4 CPUs / 16 GB. Ele não é pré-requisito do `agent-service`: com
+   o Langfuse fora do ar os runs continuam normais, só não são rastreados.
 
 3. Teste o agente conversacional direto na API (sem passar pelo frontend):
 
@@ -118,8 +120,9 @@ uv run uvicorn agent_service.main:app --app-dir src --reload
 
 Usa o `DATABASE_URL`/`REDIS_URL` do `.env.example` (localhost, portas
 publicadas pelo compose) — então ainda precisa de `docker compose up -d
-postgres redis` rodando (mais `langfuse-web`, que puxa os bancos dele, se
-quiser os traces em http://localhost:3100).
+postgres redis` rodando (mais `docker compose up -d langfuse-web`, que puxa
+os bancos dele, se quiser tracing; `LANGFUSE_BASE_URL` do `.env.example`
+já aponta para `http://localhost:3100`, publicada só em `127.0.0.1`).
 
 ## Agentes: criação dinâmica e versionamento de prompt
 
@@ -221,8 +224,10 @@ não há troca completa, só adição da camada semântica do Mem0.
 ## Observabilidade (Langfuse)
 
 Toda execução de agente vira um trace no [Langfuse](https://langfuse.com), que
-roda self-hosted no próprio compose (UI em http://localhost:3100).
-`observability/tracing.py` cria o cliente do Langfuse e liga o
+roda self-hosted no próprio compose — como armazenamento interno, não como
+uma tela do produto: ninguém precisa abrir ou logar na UI dele, o console tem
+sua própria página (`/observability`, ver a seção **Frontend**) que lê os
+mesmos dados pela API. `observability/tracing.py` cria o cliente do Langfuse e liga o
 `AgnoInstrumentor` (OpenInference) ao TracerProvider dele — daí cada trace
 mostra:
 
@@ -242,15 +247,20 @@ em lote e em background: não atrasa nem derruba a resposta. Sem
 `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` (ou com `LANGFUSE_ENABLED=false`)
 o tracing vira no-op e o serviço segue igual.
 
-**Chaves e login**: no primeiro boot o `langfuse-web` provisiona (headless
-init) a organização/projeto `agent-service`, as chaves de API que o serviço usa
-e o usuário `LANGFUSE_INIT_USER_EMAIL`/`LANGFUSE_INIT_USER_PASSWORD` — tudo com
-defaults de dev no `docker-compose.yml`. Troque os valores marcados `CHANGEME`
+**Chaves e acesso administrativo**: no primeiro boot o `langfuse-web`
+provisiona (headless init) a organização/projeto `agent-service`, as chaves de
+API que o serviço usa e o usuário `LANGFUSE_INIT_USER_EMAIL`/
+`LANGFUSE_INIT_USER_PASSWORD` — tudo com defaults de dev no
+`docker-compose.yml`. Esse login só importa se você mesmo (infra/admin)
+precisar abrir a UI do Langfuse para algo que a nossa API ainda não cobre (um
+avaliador automático, a tabela de preços de um modelo novo): a porta
+`langfuse-web` é publicada só em `127.0.0.1:3100`, então em `http://localhost:3100`
+na própria máquina onde o compose roda. Troque os valores marcados `CHANGEME`
 (salt, `ENCRYPTION_KEY`, senhas de Postgres/ClickHouse/Redis/MinIO, chaves do
-projeto) em qualquer ambiente que não seja a sua máquina. Para usar o **Langfuse
-Cloud** no lugar do self-hosted, apague os serviços `langfuse-*` do compose e
-aponte `LANGFUSE_BASE_URL=https://cloud.langfuse.com` com as chaves do seu
-projeto.
+projeto, login) em qualquer ambiente que não seja a sua máquina. Para usar o
+**Langfuse Cloud** no lugar do self-hosted, apague os serviços `langfuse-*` do
+compose e aponte `LANGFUSE_BASE_URL=https://cloud.langfuse.com` com as chaves
+do seu projeto.
 
 **Feedback e scores**: outros módulos (e o console) avaliam uma resposta pelo
 `run_id`, que vira um score no trace:
@@ -263,29 +273,30 @@ curl -X POST http://localhost:58000/observability/scores \
 
 `feedback` é booleano (1 👍 / 0 👎; o último voto de cada usuário substitui o
 anterior); qualquer outro nome é numérico, para notas de avaliação automática.
-`GET /observability/runs/{run_id}` devolve o `trace_id` e o link direto para a
-UI, e `GET /observability/config` diz se o tracing está ligado. O `run_id` vem
-em `ChatResponse.run_id` e no primeiro evento do streaming (`event: run`).
+`GET /observability/config` diz se o tracing está ligado. O `run_id` vem em
+`ChatResponse.run_id` e no primeiro evento do streaming (`event: run`).
 
-**Leitura dos traces sem abrir o Langfuse**: ninguém precisa logar no Langfuse
-para ver o que aconteceu. `observability/trace_store.py` lê a API pública dele
-(as chaves ficam só no servidor) e devolve os dados num contrato próprio — o
-console usa essas rotas e outros módulos também podem usar:
+**Leitura dos traces sem abrir o Langfuse**: `observability/trace_store.py` lê
+a API pública dele (as chaves ficam só no servidor) e devolve os dados num
+contrato próprio — o console usa essas rotas (é o que a página
+`/observability` mostra) e outros módulos também podem usar:
 
 ```bash
-# execuções de um agente (mais recentes primeiro), com latência, tokens, custo e 👍/👎
-curl "http://localhost:58000/observability/agents/conversational/runs?limit=20&prompt_version=2&status=error"
+# execuções de todos os agentes (mais recentes primeiro), com latência, tokens, custo e 👍/👎
+curl "http://localhost:58000/observability/runs?limit=20&status=error"
+# de um agente só: &agent_type=conversational (ou GET /observability/agents/conversational/runs)
 # próxima página: &cursor=<next_cursor>
 
 # trace completo de um run: resumo, spans (árvore via parent_id) e scores
 curl http://localhost:58000/observability/runs/<run_id>/trace
 ```
 
-Os filtros aceitos são `prompt_version`, `status` (`success`/`error`/`interrupted`),
-`user_id`, `session_id`, `since`/`until` (ISO 8601), `limit` (≤ 100) e `cursor`.
-A ingestão do Langfuse é assíncrona: um run recém-terminado leva alguns
-segundos para aparecer, e até lá o `/trace` responde 404. `TraceStore` é uma
-interface — trocar o Langfuse por outro backend não muda o contrato.
+Os filtros aceitos são `agent_type`, `prompt_version`, `status`
+(`success`/`error`/`interrupted`), `user_id`, `session_id`, `since`/`until`
+(ISO 8601), `limit` (≤ 100) e `cursor`. A ingestão do Langfuse é assíncrona: um
+run recém-terminado leva alguns segundos para aparecer, e até lá o `/trace`
+responde 404. `TraceStore` é uma interface — trocar o Langfuse por outro
+backend não muda o contrato.
 
 Limitações conhecidas do Langfuse v4: a API de scores não filtra vários traces
 de uma vez, então a listagem cruza o feedback do período no próprio serviço —
@@ -301,9 +312,9 @@ Um console único, em vez de abas isoladas. Um layout compartilhado
 (agentes, tools, collections) e envolve tudo numa sidebar persistente:
 
 - **Sidebar** — nova conversa, busca/paleta de comandos (`Ctrl/⌘+K`),
-  navegação entre as áreas, **histórico de conversas** agrupado por data
-  (renomear/excluir), atalho para o Langfuse, status da API e tema
-  claro/escuro/sistema. Recolhível
+  navegação entre as áreas (inclusive **Observabilidade**, quando o Langfuse
+  está ligado), **histórico de conversas** agrupado por data
+  (renomear/excluir), status da API e tema claro/escuro/sistema. Recolhível
   (`Ctrl/⌘+B`); vira gaveta no mobile.
 - **Playground (`/chat`, `/chat/[sessionId]`)** — conversa em streaming com
   qualquer agente. Cada conversa tem URL própria e o histórico é
@@ -320,6 +331,11 @@ Um console único, em vez de abas isoladas. Um layout compartilhado
   span selecionado, entrada/saída (mensagens do prompt formatadas), modelo,
   tokens e metadados; mais as avaliações registradas. Enquanto o run ainda
   está sendo indexado, a página tenta de novo sozinha.
+- **Observabilidade (`/observability`)** — execuções de todos os agentes numa
+  lista só, filtrável por agente e status (a aba *Execuções* de cada agente é
+  a mesma tela, já filtrada). O inspector do chat linka pra cá filtrado por
+  sessão ou usuário. É a substituta da UI do Langfuse dentro do console —
+  ninguém precisa abrir nem logar nele.
 - **Agentes (`/agents`, `/agents/new`, `/agents/[slug]`)** — lista com busca;
   a página do agente reúne *Configuração* (formulário com detecção de
   alterações — só os campos alterados vão no `PUT`, então editar o nome não
@@ -378,8 +394,9 @@ uv run pytest
 - **Observabilidade via Langfuse self-hosted** (`observability/tracing.py`):
   trace por execução com modelo, tools, tokens, custo, sessão e usuário;
   feedback 👍/👎 do console e `POST /observability/scores` para outros módulos;
-  execuções e traces lidos pela própria API (`/observability/agents/{type}/runs`,
-  `/observability/runs/{run_id}/trace`) e exibidos no console, sem login no Langfuse.
+  execuções e traces lidos pela própria API (`/observability/runs`,
+  `/observability/runs/{run_id}/trace`) e exibidos no console (`/observability`,
+  aba *Execuções* de cada agente) — a porta do Langfuse nem fica exposta na rede.
 - Collections de documentos via pgvector, com pipeline de ingestão completo
   (`documents/collections.py` + rotas nativas do AgentOS em `/knowledge/*`,
   mais o atalho `/collections/{name}/documents` para texto simples).
