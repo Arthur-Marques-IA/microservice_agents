@@ -168,13 +168,13 @@ export function ChatInspector({
 
         {observability.enabled && (
           <InspectorSection
-            title="Observabilidade"
+            title="Logs"
             description="Cada resposta vira um trace — prompt, chamadas ao modelo, tools, tokens e custo."
           >
             <div className="flex flex-col gap-2">
               {sessionId ? (
                 <Link
-                  href={`/observability?session_id=${encodeURIComponent(sessionId)}`}
+                  href={`/logs/sessions/${encodeURIComponent(sessionId)}`}
                   className={buttonVariants({ variant: "outline", size: "sm", className: "w-full" })}
                 >
                   <Activity /> Execuções desta conversa
@@ -185,7 +185,7 @@ export function ChatInspector({
                 </p>
               )}
               <Link
-                href={`/observability?user_id=${encodeURIComponent(userId)}`}
+                href={`/logs?user_id=${encodeURIComponent(userId)}`}
                 className="inline-flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
               >
                 <Users className="size-3" /> Meu histórico de uso

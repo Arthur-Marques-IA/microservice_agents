@@ -1,16 +1,16 @@
 import type { Metadata } from "next";
-import { ObservabilityView } from "@/components/observability/observability-view";
+import { LogsView } from "@/components/observability/logs-view";
 
-export const metadata: Metadata = { title: "Observabilidade" };
+export const metadata: Metadata = { title: "Logs" };
 
-export default async function ObservabilityPage({
+export default async function LogsPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { user_id, session_id } = await searchParams;
   return (
-    <ObservabilityView
+    <LogsView
       userId={typeof user_id === "string" ? user_id : undefined}
       sessionId={typeof session_id === "string" ? session_id : undefined}
     />

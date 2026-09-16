@@ -50,7 +50,7 @@ const NAV_ITEMS = [
   { href: "/tools", label: "Tools", icon: Wrench },
   { href: "/knowledge", label: "Conhecimento", icon: Library },
 ];
-const OBSERVABILITY_ITEM = { href: "/observability", label: "Observabilidade", icon: Activity };
+const LOGS_ITEM = { href: "/logs", label: "Logs", icon: Activity };
 
 export function Sidebar({
   collapsed = false,
@@ -136,7 +136,7 @@ export function Sidebar({
         aria-label="Principal"
         className={cn("mt-3 flex shrink-0 flex-col gap-0.5", collapsed ? "items-center px-2" : "px-3")}
       >
-        {(observability.enabled ? [...NAV_ITEMS, OBSERVABILITY_ITEM] : NAV_ITEMS).map((item) => {
+        {(observability.enabled ? [...NAV_ITEMS, LOGS_ITEM] : NAV_ITEMS).map((item) => {
           const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
           return (
             <Link

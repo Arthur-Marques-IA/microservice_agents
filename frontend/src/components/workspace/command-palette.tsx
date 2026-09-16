@@ -78,12 +78,12 @@ function PaletteContent({ onClose }: { onClose: () => void }) {
       ...(observability.enabled
         ? [
             {
-              id: "nav-observability",
+              id: "nav-logs",
               group: "Navegar",
-              label: "Observabilidade",
+              label: "Logs",
               icon: Activity,
-              href: "/observability",
-              keywords: "traces execuções custo latência tokens sessões feedback monitoramento langfuse",
+              href: "/logs",
+              keywords: "observabilidade traces execuções custo latência tokens sessões feedback monitoramento langfuse",
             },
           ]
         : []),

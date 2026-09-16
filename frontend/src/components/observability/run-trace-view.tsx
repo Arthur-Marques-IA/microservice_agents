@@ -159,9 +159,23 @@ function TraceDetail({ trace, onReload }: { trace: RunTrace; onReload: () => voi
         actions={
           <>
             {run.session_id && (
-              <Link href={`/chat/${encodeURIComponent(run.session_id)}`} className={buttonVariants({ variant: "outline" })}>
+              <Link
+                href={`/logs/sessions/${encodeURIComponent(run.session_id)}`}
+                className={buttonVariants({ variant: "outline" })}
+                title="Todas as execuções desta sessão, com gráficos"
+              >
+                <Activity />
+                <span className="hidden sm:inline">Ver sessão</span>
+              </Link>
+            )}
+            {run.session_id && (
+              <Link
+                href={`/chat/${encodeURIComponent(run.session_id)}`}
+                className={buttonVariants({ variant: "ghost", size: "icon" })}
+                title="Abrir conversa (só existe se a sessão ainda estiver no console)"
+                aria-label="Abrir conversa"
+              >
                 <MessageSquare />
-                <span className="hidden sm:inline">Abrir conversa</span>
               </Link>
             )}
             <Button variant="outline" size="icon" onClick={onReload} aria-label="Atualizar trace" title="Atualizar">

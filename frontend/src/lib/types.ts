@@ -318,3 +318,43 @@ export interface ObservabilityConfig {
   /** Projeto na UI do Langfuse (ex.: http://localhost:3100/project/agent-service). */
   project_url: string | null;
 }
+
+/** Item de `GET /observability/sessions` — execuções de uma sessão agregadas (tokens, custo, feedback). */
+export interface LogSessionSummary {
+  session_id: string;
+  user_id?: string | null;
+  agent_types: string[];
+  run_count: number;
+  started_at: string;
+  last_activity: string;
+  total_tokens: number;
+  cost_usd?: number | null;
+  error_count: number;
+  feedback_up: number | null;
+  feedback_down: number | null;
+}
+
+export interface LogSessionPage {
+  items: LogSessionSummary[];
+  /** Quantas execuções-raiz entraram na varredura — ver docstring do backend. */
+  scanned: number;
+}
+
+export interface RunStatsBucket {
+  date: string;
+  runs: number;
+  errors: number;
+  total_tokens: number;
+  cost_usd?: number | null;
+}
+
+/** `GET /observability/stats` — série diária + contagem por status para os gráficos dos Logs. */
+export interface RunStats {
+  buckets: RunStatsBucket[];
+  status_counts: Partial<Record<RunStatus, number>>;
+  total_runs: number;
+  total_tokens: number;
+  total_cost_usd?: number | null;
+  avg_latency_ms?: number | null;
+  scanned: number;
+}

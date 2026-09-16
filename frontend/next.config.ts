@@ -9,6 +9,8 @@ const nextConfig: NextConfig = {
     return [
       { source: "/admin", destination: "/knowledge", permanent: false },
       { source: "/docs", destination: "/agents", permanent: false },
+      { source: "/observability", destination: "/logs", permanent: false },
+      { source: "/observability/:path*", destination: "/logs/:path*", permanent: false },
     ];
   },
 };
