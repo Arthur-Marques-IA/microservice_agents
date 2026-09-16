@@ -16,8 +16,10 @@ from agent_service.observability import tracing
 from agent_service.observability.trace_store import (
     RunPage,
     RunQuery,
+    RunStats,
     RunStatus,
     RunTrace,
+    SessionPage,
     TraceStore,
     TraceStoreError,
     get_trace_store,
@@ -157,6 +159,58 @@ def list_agent_runs(
         limit=limit,
         cursor=cursor,
     )
+
+
+@router.get("/sessions", response_model=SessionPage)
+def list_sessions(
+    agent_type: str | None = None,
+    status: RunStatus | None = None,
+    user_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> SessionPage:
+    """Sessões recentes (execuções agrupadas por `session_id`), com tokens, custo e feedback somados.
+
+    Não é uma listagem paginada de verdade — a API do Langfuse não agrupa por
+    sessão — então isto varre um lote das execuções mais recentes e agrupa em
+    memória; `scanned` na resposta diz quantas execuções entraram na varredura.
+    """
+    query = RunQuery(agent_type=agent_type, status=status, user_id=user_id, since=since, until=until, limit=limit)
+    try:
+        return _store().list_sessions(query)
+    except TraceStoreError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/stats", response_model=RunStats)
+def run_stats(
+    agent_type: str | None = None,
+    prompt_version: Annotated[int | None, Query(ge=1)] = None,
+    status: RunStatus | None = None,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> RunStats:
+    """Série diária (execuções, erros, tokens, custo) mais contagem por status — os gráficos do console.
+
+    Mesma limitação de `list_sessions`: agregado em memória sobre um lote das
+    execuções mais recentes, não sobre o histórico inteiro.
+    """
+    query = RunQuery(
+        agent_type=agent_type,
+        prompt_version=prompt_version,
+        status=status,
+        user_id=user_id,
+        session_id=session_id,
+        since=since,
+        until=until,
+    )
+    try:
+        return _store().get_stats(query)
+    except TraceStoreError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}/trace", response_model=RunTrace)

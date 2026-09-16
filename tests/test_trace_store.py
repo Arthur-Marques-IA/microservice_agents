@@ -11,7 +11,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from agent_service.api.observability_routes import get_run_trace, list_agent_runs, list_runs
+from agent_service.api.observability_routes import get_run_trace, list_agent_runs, list_runs, list_sessions, run_stats
 from agent_service.observability import trace_store
 from agent_service.observability.trace_store import LangfuseTraceStore, RunQuery, TraceStoreError
 from agent_service.observability.tracing import trace_id_for_run
@@ -90,6 +90,37 @@ GENERATION = observation(
 )
 TOOL = observation(
     id="tool", parentObservationId="agent", type="TOOL", name="buscar", latency=0.2, totalUsage=10, totalCost=0.00001
+)
+RUN_ID_2 = "6e1e3b0a-6b8b-4b8a-9c8a-6b2f6e9f6a10"
+TRACE_ID_2 = trace_id_for_run(RUN_ID_2)
+ROOT_2 = observation(
+    id="root2",
+    traceId=TRACE_ID_2,
+    parentObservationId="external",
+    isRootObservation=True,
+    type="SPAN",
+    name="chat",
+    startTime="2026-09-16T16:10:00.000Z",
+    endTime="2026-09-16T16:10:05.000Z",
+    latency=5.0,
+    level="ERROR",
+    statusMessage="falhou",
+    sessionId="s1",
+    input=json.dumps({"message": "de novo", "dependencies": None}),
+    metadata={"run_id": RUN_ID_2, "agent_type": "conversational", "endpoint": "chat"},
+)
+GENERATION_2 = observation(
+    id="gen2",
+    traceId=TRACE_ID_2,
+    parentObservationId="root2",
+    type="GENERATION",
+    name="Gemini.ainvoke_stream",
+    startTime="2026-09-16T16:10:02.000Z",
+    model="gemini-2.5-flash",
+    inputUsage=100,
+    outputUsage=20,
+    totalUsage=120,
+    totalCost=0.00005,
 )
 SCORES = [
     {
@@ -324,3 +355,53 @@ def test_list_runs_route_without_agent_type_returns_all_agents(installed_store) 
     installed_store(make_store(FakeLangfuse([ROOT, GENERATION], [])))
     page = list_runs()
     assert [r.run_id for r in page.items] == [RUN_ID]
+
+
+def test_list_sessions_groups_runs_of_the_same_session_and_sums_usage() -> None:
+    fake = FakeLangfuse([ROOT, GENERATION, TOOL, ROOT_2, GENERATION_2], SCORES)
+    page = make_store(fake).list_sessions(RunQuery(agent_type="conversational"))
+
+    [session] = page.items  # ROOT e ROOT_2 são a mesma sessão "s1"
+    assert session.session_id == "s1"
+    assert session.run_count == 2
+    assert session.agent_types == ["conversational"]
+    assert session.total_tokens == 378 + 120
+    assert session.cost_usd == pytest.approx(0.0001126 + 0.00001 + 0.00005)
+    assert session.error_count == 1
+    assert session.started_at.isoformat() == "2026-09-16T15:48:03.744000+00:00"
+    assert session.last_activity.isoformat() == "2026-09-16T16:10:00+00:00"
+    # Scores só existem para o trace de ROOT: contam para a sessão como um todo.
+    assert (session.feedback_up, session.feedback_down) == (1, 1)
+    assert page.scanned == 2  # só as raízes (GENERATION/TOOL não são isRootObservation)
+
+
+def test_list_sessions_keeps_different_sessions_apart_and_sorts_by_recency() -> None:
+    other_session_root = {**ROOT_2, "id": "root3", "sessionId": "s2", "traceId": trace_id_for_run("outro-run")}
+    fake = FakeLangfuse([ROOT, other_session_root], [])
+
+    page = make_store(fake).list_sessions(RunQuery(agent_type="conversational"))
+
+    assert [s.session_id for s in page.items] == ["s2", "s1"]  # s2 é mais recente
+
+
+def test_get_stats_buckets_by_day_and_sums_status() -> None:
+    fake = FakeLangfuse([ROOT, GENERATION, TOOL, ROOT_2, GENERATION_2], [])
+
+    stats = make_store(fake).get_stats(RunQuery(agent_type="conversational"))
+
+    assert stats.scanned == 2
+    assert stats.total_runs == 2
+    assert stats.total_tokens == 378 + 120
+    assert stats.status_counts == {"success": 1, "error": 1}
+    [bucket] = stats.buckets  # ROOT e ROOT_2 caem no mesmo dia UTC
+    assert bucket.date == "2026-09-16"
+    assert bucket.runs == 2
+    assert bucket.errors == 1
+    assert bucket.total_tokens == 378 + 120
+
+
+def test_sessions_and_stats_routes(installed_store) -> None:
+    installed_store(make_store(FakeLangfuse([ROOT, GENERATION], [])))
+
+    assert [s.session_id for s in list_sessions().items] == ["s1"]
+    assert run_stats().total_runs == 1

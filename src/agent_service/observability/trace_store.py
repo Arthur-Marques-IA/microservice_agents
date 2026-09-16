@@ -37,6 +37,11 @@ _OBSERVATIONS_PAGE = 1000
 _SCORES_PAGE = 100
 _MAX_SCORE_PAGES = 5
 _VERSION_PREFIX = "prompt-v"
+_AGGREGATE_SCAN_LIMIT = 1000
+"""Sessões e estatísticas não paginam de verdade — a API do Langfuse não agrupa
+por sessão nem por dia. Varre até este tanto de execuções-raiz (mais recentes
+primeiro) e agrega em memória; `scanned` na resposta avisa quando a janela
+pode estar cortando dados mais antigos."""
 
 
 class TraceStoreError(RuntimeError):
@@ -113,6 +118,48 @@ class RunTrace(BaseModel):
     scores: list[ScoreOut]
 
 
+class SessionSummary(BaseModel):
+    session_id: str
+    user_id: str | None = None
+    agent_types: list[str] = []
+    run_count: int
+    started_at: datetime
+    last_activity: datetime
+    total_tokens: int = 0
+    cost_usd: float | None = None
+    error_count: int = 0
+    feedback_up: int | None = 0
+    feedback_down: int | None = 0
+    """`None` quando havia avaliações demais para contar com segurança — ver `RunSummary.feedback_up`."""
+
+
+class SessionPage(BaseModel):
+    items: list[SessionSummary]
+    scanned: int
+    """Quantas execuções-raiz foram varridas para montar esta lista — ver `_AGGREGATE_SCAN_LIMIT`."""
+
+
+class StatsBucket(BaseModel):
+    date: str
+    """Dia UTC, `YYYY-MM-DD`."""
+    runs: int
+    errors: int
+    total_tokens: int
+    cost_usd: float | None = None
+
+
+class RunStats(BaseModel):
+    buckets: list[StatsBucket]
+    """Um por dia com pelo menos uma execução, em ordem cronológica."""
+    status_counts: dict[str, int]
+    total_runs: int
+    total_tokens: int
+    total_cost_usd: float | None = None
+    avg_latency_ms: float | None = None
+    scanned: int
+    """Quantas execuções-raiz foram varridas para montar este resumo — ver `_AGGREGATE_SCAN_LIMIT`."""
+
+
 @dataclass(frozen=True)
 class RunQuery:
     agent_type: str | None = None
@@ -133,6 +180,10 @@ class TraceStore(Protocol):
     def list_runs(self, query: RunQuery) -> RunPage: ...
 
     def get_run(self, run_id: str, *, tenant_id: str | None = None) -> RunTrace | None: ...
+
+    def list_sessions(self, query: RunQuery) -> SessionPage: ...
+
+    def get_stats(self, query: RunQuery) -> RunStats: ...
 
 
 def _iso(value: datetime) -> str:
@@ -335,6 +386,154 @@ class LangfuseTraceStore:
         else:
             run.feedback_up = run.feedback_down = None
         return RunTrace(run=run, spans=spans, scores=scores)
+
+    def _scan_roots(self, query: RunQuery, *, include_session: bool = False) -> tuple[list[dict[str, Any]], int]:
+        """Execuções-raiz que casam os filtros (até `_AGGREGATE_SCAN_LIMIT`), mais recentes primeiro."""
+        filters = self._scope_filters(query.tenant_id) + [
+            {"type": "boolean", "column": "isRootObservation", "operator": "=", "value": True},
+        ]
+        if query.agent_type:
+            filters.append({"type": "string", "column": "traceName", "operator": "=", "value": query.agent_type})
+        if query.prompt_version is not None:
+            filters.append({"type": "string", "column": "version", "operator": "=", "value": f"{_VERSION_PREFIX}{query.prompt_version}"})
+        if query.status:
+            filters.append({"type": "string", "column": "level", "operator": "=", "value": _LEVEL_BY_STATUS[query.status]})
+        if query.user_id:
+            filters.append({"type": "string", "column": "userId", "operator": "=", "value": query.user_id})
+        if query.session_id:
+            filters.append({"type": "string", "column": "sessionId", "operator": "=", "value": query.session_id})
+        if query.since:
+            filters.append({"type": "datetime", "column": "startTime", "operator": ">=", "value": _iso(query.since)})
+        if query.until:
+            filters.append({"type": "datetime", "column": "startTime", "operator": "<", "value": _iso(query.until)})
+
+        page = self._observations(filters, fields="basic,metadata,metrics", limit=_AGGREGATE_SCAN_LIMIT)
+        data = page.get("data", [])
+        roots = [r for r in data if (r.get("metadata") or {}).get("run_id") and (not include_session or r.get("sessionId"))]
+        return roots, len(data)
+
+    def _usage_by_trace(self, trace_ids: list[str]) -> dict[str, "_Usage"]:
+        usage = {trace_id: _Usage() for trace_id in trace_ids}
+        if not trace_ids:
+            return usage
+        for observation in self._all_observations(
+            [{"type": "stringOptions", "column": "traceId", "operator": "any of", "value": trace_ids}],
+            fields="usage,model",
+        ):
+            if observation["traceId"] in usage:
+                usage[observation["traceId"]].add(observation)
+        return usage
+
+    def list_sessions(self, query: RunQuery) -> SessionPage:
+        roots, scanned = self._scan_roots(query, include_session=True)
+        if not roots:
+            return SessionPage(items=[], scanned=scanned)
+
+        trace_ids = [r["traceId"] for r in roots]
+        usage = self._usage_by_trace(trace_ids)
+        trace_to_session = {r["traceId"]: r["sessionId"] for r in roots}
+
+        grouped: dict[str, dict[str, Any]] = {}
+        for root in roots:
+            session_id = root["sessionId"]
+            bucket = grouped.setdefault(
+                session_id,
+                {
+                    "session_id": session_id,
+                    "user_id": root.get("userId") or None,
+                    "agent_types": set(),
+                    "run_count": 0,
+                    "started_at": root["startTime"],
+                    "last_activity": root["startTime"],
+                    "total_tokens": 0,
+                    "cost_usd": None,
+                    "error_count": 0,
+                    "feedback_up": 0,
+                    "feedback_down": 0,
+                },
+            )
+            bucket["run_count"] += 1
+            agent_type = (root.get("metadata") or {}).get("agent_type") or root.get("traceName")
+            if agent_type:
+                bucket["agent_types"].add(agent_type)
+            bucket["started_at"] = min(bucket["started_at"], root["startTime"])
+            bucket["last_activity"] = max(bucket["last_activity"], root["startTime"])
+            trace_usage = usage[root["traceId"]]
+            bucket["total_tokens"] += trace_usage.total_tokens
+            if trace_usage.cost_usd is not None:
+                bucket["cost_usd"] = (bucket["cost_usd"] or 0) + trace_usage.cost_usd
+            if _STATUS_BY_LEVEL.get(root.get("level") or "", "success") == "error":
+                bucket["error_count"] += 1
+
+        oldest = min(r["startTime"] for r in roots)
+        scores, complete = self._scores(name=FEEDBACK, fromTimestamp=oldest, dataType="BOOLEAN")
+        if complete:
+            for score in scores:
+                subject = score.get("subject") or {}
+                trace_id = subject.get("traceId") or subject.get("id")
+                session_id = trace_to_session.get(trace_id)
+                if session_id:
+                    grouped[session_id]["feedback_up" if score.get("value") else "feedback_down"] += 1
+
+        items = [
+            SessionSummary(
+                session_id=bucket["session_id"],
+                user_id=bucket["user_id"],
+                agent_types=sorted(bucket["agent_types"]),
+                run_count=bucket["run_count"],
+                started_at=bucket["started_at"],
+                last_activity=bucket["last_activity"],
+                total_tokens=bucket["total_tokens"],
+                cost_usd=bucket["cost_usd"],
+                error_count=bucket["error_count"],
+                feedback_up=bucket["feedback_up"] if complete else None,
+                feedback_down=bucket["feedback_down"] if complete else None,
+            )
+            for bucket in grouped.values()
+        ]
+        items.sort(key=lambda s: s.last_activity, reverse=True)
+        return SessionPage(items=items[: query.limit], scanned=scanned)
+
+    def get_stats(self, query: RunQuery) -> RunStats:
+        roots, scanned = self._scan_roots(query)
+        if not roots:
+            return RunStats(buckets=[], status_counts={}, total_runs=0, total_tokens=0, scanned=scanned)
+
+        trace_ids = [r["traceId"] for r in roots]
+        usage = self._usage_by_trace(trace_ids)
+
+        buckets: dict[str, dict[str, Any]] = {}
+        status_counts: dict[str, int] = {}
+        total_tokens = 0
+        total_cost: float | None = None
+        latencies: list[float] = []
+        for root in roots:
+            day = str(root["startTime"])[:10]
+            bucket = buckets.setdefault(day, {"date": day, "runs": 0, "errors": 0, "total_tokens": 0, "cost_usd": None})
+            bucket["runs"] += 1
+            status = _STATUS_BY_LEVEL.get(root.get("level") or "", "success")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            if status == "error":
+                bucket["errors"] += 1
+            trace_usage = usage[root["traceId"]]
+            bucket["total_tokens"] += trace_usage.total_tokens
+            total_tokens += trace_usage.total_tokens
+            if trace_usage.cost_usd is not None:
+                bucket["cost_usd"] = (bucket["cost_usd"] or 0) + trace_usage.cost_usd
+                total_cost = (total_cost or 0) + trace_usage.cost_usd
+            latency = _ms(root.get("latency"))
+            if latency is not None:
+                latencies.append(latency)
+
+        return RunStats(
+            buckets=[StatsBucket(**buckets[day]) for day in sorted(buckets)],
+            status_counts=status_counts,
+            total_runs=len(roots),
+            total_tokens=total_tokens,
+            total_cost_usd=total_cost,
+            avg_latency_ms=round(sum(latencies) / len(latencies), 1) if latencies else None,
+            scanned=scanned,
+        )
 
     # -- conversão ---------------------------------------------------------
 
