@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { fetchBackendJson, publicApiUrl } from "@/lib/api";
-import type { AgentDefinition, ObservabilityConfig, ToolSummary } from "@/lib/types";
+import type { AgentDefinition, ModelProviderSummary, ObservabilityConfig, ToolSummary } from "@/lib/types";
 import { AppShell } from "@/components/workspace/app-shell";
 import { WorkspaceProvider } from "@/components/workspace/workspace-provider";
 
@@ -10,11 +10,12 @@ import { WorkspaceProvider } from "@/components/workspace/workspace-provider";
  * `router.refresh()` para re-executar este fetch sem recarregar a página.
  */
 export default async function WorkspaceLayout({ children }: { children: ReactNode }) {
-  const [agents, tools, collections, observability] = await Promise.all([
+  const [agents, tools, collections, observability, modelProviders] = await Promise.all([
     fetchBackendJson<AgentDefinition[]>("/agents"),
     fetchBackendJson<ToolSummary[]>("/tools"),
     fetchBackendJson<{ collections: string[] }>("/collections"),
     fetchBackendJson<ObservabilityConfig>("/observability/config"),
+    fetchBackendJson<ModelProviderSummary[]>("/model-providers"),
   ]);
 
   return (
@@ -25,6 +26,7 @@ export default async function WorkspaceLayout({ children }: { children: ReactNod
       publicApiUrl={publicApiUrl()}
       backendReachable={agents !== null}
       observability={observability ?? { enabled: false, project_url: null }}
+      modelProviders={modelProviders ?? []}
     >
       <AppShell>{children}</AppShell>
     </WorkspaceProvider>

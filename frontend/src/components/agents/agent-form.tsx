@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import { errorMessage } from "@/lib/http";
 import { formatNumber, slugify } from "@/lib/format";
 import { DEFAULT_MODEL, MEMORY_BACKENDS, MODEL_OPTIONS, TOOL_KIND_META, type ModelOption } from "@/lib/agent-meta";
-import type { AgentDefinition, AgentDefinitionInput, MemoryBackend, ToolSummary } from "@/lib/types";
+import type { AgentDefinition, AgentDefinitionInput, MemoryBackend, ModelProviderSummary, ToolSummary } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,6 +16,7 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Field, Spinner } from "@/components/ui/primitives";
 import { CopyButton } from "@/components/ui/copy-button";
+import { useWorkspace } from "@/components/workspace/workspace-provider";
 
 export type AgentFormPayload = Partial<AgentDefinitionInput>;
 
@@ -52,6 +53,17 @@ function toLines(text: string) {
 
 function sameList(a: string[], b: string[]) {
   return a.length === b.length && a.every((value, i) => value === b[i]);
+}
+
+/** Agrupa as opções de modelo pelo rótulo do provedor, pros `<optgroup>` do seletor. */
+function groupByProvider(models: ModelOption[], providers: ModelProviderSummary[]): Record<string, ModelOption[]> {
+  const labelByProvider = new Map(providers.map((p) => [p.provider, p.label]));
+  const groups: Record<string, ModelOption[]> = {};
+  for (const model of models) {
+    const label = labelByProvider.get(model.provider) ?? model.provider;
+    (groups[label] ??= []).push(model);
+  }
+  return groups;
 }
 
 /** Só os campos alterados — assim editar o nome não gera uma versão nova do prompt. */
@@ -100,13 +112,19 @@ export function AgentForm({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const models = useMemo<ModelOption[]>(
-    () =>
-      agent?.model_id && !MODEL_OPTIONS.some((m) => m.id === agent.model_id)
-        ? [...MODEL_OPTIONS, { provider: agent.model_provider ?? "", id: agent.model_id, label: agent.model_id }]
-        : MODEL_OPTIONS,
-    [agent]
+  const { modelProviders } = useWorkspace();
+  // `google` sempre disponível (fallback antigo via GOOGLE_API_KEY no ambiente);
+  // os demais só entram depois de configurados e habilitados em `/models`.
+  const availableProviders = useMemo(
+    () => new Set(["google", ...modelProviders.filter((p) => p.configured && p.enabled).map((p) => p.provider)]),
+    [modelProviders]
   );
+  const models = useMemo<ModelOption[]>(() => {
+    const base = MODEL_OPTIONS.filter((m) => availableProviders.has(m.provider));
+    return agent?.model_id && !base.some((m) => m.id === agent.model_id)
+      ? [...base, { provider: agent.model_provider ?? "", id: agent.model_id, label: agent.model_id }]
+      : base;
+  }, [agent, availableProviders]);
 
   const instructionLines = toLines(values.instructions);
   const changes = mode === "edit" && agent ? buildUpdate(values, agent, models) : null;
@@ -270,12 +288,26 @@ export function AgentForm({
       >
         <div className="flex flex-col gap-5">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Modelo" htmlFor={`${id}-model`}>
+            <Field
+              label="Modelo"
+              htmlFor={`${id}-model`}
+              hint={
+                availableProviders.size <= 1 ? (
+                  <Link href="/models" className="hover:underline">
+                    Configure outros provedores em Modelos
+                  </Link>
+                ) : undefined
+              }
+            >
               <Select id={`${id}-model`} value={values.modelId} onChange={(e) => update("modelId", e.target.value)}>
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
+                {Object.entries(groupByProvider(models, modelProviders)).map(([providerLabel, options]) => (
+                  <optgroup key={providerLabel} label={providerLabel}>
+                    {options.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </Select>
             </Field>

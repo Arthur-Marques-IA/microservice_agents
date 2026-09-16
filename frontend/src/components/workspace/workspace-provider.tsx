@@ -13,7 +13,14 @@ import {
 import { errorMessage, requestJson } from "@/lib/http";
 import { toDate } from "@/lib/format";
 import { useUserId } from "@/lib/use-local-storage";
-import type { AgentDefinition, ObservabilityConfig, Paginated, SessionSummary, ToolSummary } from "@/lib/types";
+import type {
+  AgentDefinition,
+  ModelProviderSummary,
+  ObservabilityConfig,
+  Paginated,
+  SessionSummary,
+  ToolSummary,
+} from "@/lib/types";
 
 interface SessionsState {
   userId: string;
@@ -31,6 +38,8 @@ interface WorkspaceContextValue {
   backendReachable: boolean;
   /** Langfuse: se o tracing está ligado e onde abrir o projeto. */
   observability: ObservabilityConfig;
+  /** Provedores de modelo cadastrados pelo layout (server) — atualizados via `router.refresh()`. */
+  modelProviders: ModelProviderSummary[];
   userId: string;
   sessions: SessionSummary[];
   sessionsLoading: boolean;
@@ -61,6 +70,7 @@ export function WorkspaceProvider({
   publicApiUrl,
   backendReachable,
   observability,
+  modelProviders,
   children,
 }: {
   agents: AgentDefinition[];
@@ -69,6 +79,7 @@ export function WorkspaceProvider({
   publicApiUrl: string;
   backendReachable: boolean;
   observability: ObservabilityConfig;
+  modelProviders: ModelProviderSummary[];
   children: ReactNode;
 }) {
   const userId = useUserId();
@@ -146,6 +157,7 @@ export function WorkspaceProvider({
       publicApiUrl,
       backendReachable,
       observability,
+      modelProviders,
       userId,
       sessions: currentSessions?.data ?? [],
       sessionsLoading: currentSessions === null,
@@ -164,6 +176,7 @@ export function WorkspaceProvider({
       publicApiUrl,
       backendReachable,
       observability,
+      modelProviders,
       userId,
       currentSessions,
       refreshSessions,

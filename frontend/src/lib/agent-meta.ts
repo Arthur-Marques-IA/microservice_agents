@@ -6,9 +6,22 @@ export interface ModelOption {
   label: string;
 }
 
-/** Modelos oferecidos no formulário — espelha o que `models/provider.py` sabe montar. */
+/**
+ * Modelos oferecidos no formulário — espelha o que `models/provider.py` sabe
+ * montar. Só aparecem no seletor os provedores cadastrados e habilitados em
+ * `/models` (ver `agent-form.tsx`); `google` sempre aparece, mesmo sem chave
+ * salva, pelo fallback antigo via `GOOGLE_API_KEY` no ambiente.
+ */
 export const MODEL_OPTIONS: ModelOption[] = [
   { provider: "google", id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+  { provider: "google", id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+  { provider: "openai", id: "gpt-4.1", label: "GPT-4.1" },
+  { provider: "openai", id: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
+  { provider: "openai", id: "gpt-4o-mini", label: "GPT-4o Mini" },
+  { provider: "anthropic", id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
+  { provider: "anthropic", id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+  { provider: "ollama", id: "llama3.1", label: "Llama 3.1 (Ollama)" },
+  { provider: "ollama", id: "qwen2.5", label: "Qwen 2.5 (Ollama)" },
 ];
 
 export const DEFAULT_MODEL = MODEL_OPTIONS[0];

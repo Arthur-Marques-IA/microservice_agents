@@ -240,6 +240,42 @@ hoje o serviço não tem autenticação (ver **Roadmap**).
 nada. O seed cria três tools de exemplo prontas pra usar (`calculator`,
 `hackernews`, `cat_fact` — uma tool de API pública, sem segredo nenhum).
 
+## Provedores de modelo
+
+`google` (Gemini) continua o único provedor fixo no `.env`
+(`GOOGLE_API_KEY`) — os demais (`openai`, `anthropic`, `ollama`) são
+cadastrados em runtime pelo console, em **Modelos** (`/models`), ou via API:
+
+```bash
+# lista o catálogo + o que já está configurado (a chave nunca volta na resposta)
+curl http://localhost:58000/model-providers
+
+# cadastra/atualiza (cifra a chave antes de gravar; omitir api_key mantém a salva)
+curl -X PUT http://localhost:58000/model-providers/openai \
+  -H 'Content-Type: application/json' \
+  -d '{"api_key": "sk-...", "enabled": true}'
+
+# valida a chave chamando um endpoint de leitura barato do SDK oficial (não gasta tokens de geração)
+curl -X POST http://localhost:58000/model-providers/openai/test
+```
+
+As chaves ficam cifradas em repouso (`models/crypto.py`, Fernet) com a chave
+de cifragem em `CREDENTIALS_ENCRYPTION_KEY` — nunca no banco, nunca numa
+resposta da API (só `configured: true` + os últimos 4 caracteres em
+`key_hint`). Sem essa variável configurada, salvar ou ler uma chave falha alto
+em vez de cair para texto plano. `openai` e `ollama` aceitam um `base_url`
+customizado (gateway compatível, self-hosted); `google`/`anthropic` não —
+mantidos nos endpoints oficiais. `ollama` não exige chave, só o endereço do
+servidor (`http://localhost:11434` por padrão).
+
+`agents/store.py` já aceitava `model_provider`/`model_id` como texto livre —
+`models/provider.get_model` é quem resolve isso pro SDK certo (branch por
+provedor) usando a chave cadastrada aqui; sem chave configurada, `openai` e
+`anthropic` levantam `ProviderNotConfiguredError` (erro claro na criação do
+agente, não uma falha silenciosa em runtime). O formulário de agente
+(`/agents/new`) só lista modelos dos provedores já habilitados — `google`
+sempre aparece, pelo fallback do `.env`.
+
 ## Collections de documentos (RAG)
 
 Cada nome em `COLLECTION_NAMES` (`documents/collections.py`) vira uma

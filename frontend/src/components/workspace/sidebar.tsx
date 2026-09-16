@@ -8,6 +8,7 @@ import {
   Bot,
   Check,
   Copy,
+  Cpu,
   Ellipsis,
   ExternalLink,
   Library,
@@ -48,6 +49,7 @@ const NAV_ITEMS = [
   { href: "/chat", label: "Playground", icon: MessageSquare },
   { href: "/agents", label: "Agentes", icon: Bot },
   { href: "/tools", label: "Tools", icon: Wrench },
+  { href: "/models", label: "Modelos", icon: Cpu },
   { href: "/knowledge", label: "Conhecimento", icon: Library },
 ];
 const LOGS_ITEM = { href: "/logs", label: "Logs", icon: Activity };

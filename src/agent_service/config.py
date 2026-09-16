@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     default_model_provider: str = "google"
     default_model_id: str = "gemini-2.5-flash"
     google_api_key: str | None = None
+    """Fallback do provedor `google` quando não há chave salva em `model_providers`
+    (ver `models/store.py`) — mantém o comportamento anterior à UI de chaves."""
+
+    # Criptografia das chaves de provedor de modelo salvas pela UI (`/model-providers`)
+    credentials_encryption_key: str | None = None
+    """Chave Fernet (`Fernet.generate_key()`) usada para cifrar em repouso as chaves de
+    API que o admin cadastra pelo console. Sem ela, `models/store.py` recusa salvar ou
+    ler chaves — nunca caem para texto plano."""
 
     # Mem0 (camada de memória semântica opcional)
     mem0_api_key: str | None = None

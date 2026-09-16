@@ -228,6 +228,44 @@ export interface ToolInvokeResult {
   error?: string | null;
 }
 
+// -- Provedores de modelo -----------------------------------------------
+
+/** `GET /model-providers` — catálogo de provedores + estado salvo (chave nunca volta, só `key_hint`). */
+export interface ModelProviderSummary {
+  provider: string;
+  label: string;
+  requires_api_key: boolean;
+  supports_custom_base_url: boolean;
+  default_model_id: string;
+  docs_url: string;
+  configured: boolean;
+  key_hint?: string | null;
+  base_url?: string | null;
+  enabled: boolean;
+  last_tested_at?: string | null;
+  last_test_ok?: boolean | null;
+  last_test_message?: string | null;
+}
+
+export interface ModelProviderUpdateInput {
+  api_key?: string;
+  clear_api_key?: boolean;
+  base_url?: string;
+  enabled?: boolean;
+}
+
+export interface ModelProviderTestInput {
+  api_key?: string;
+  base_url?: string;
+}
+
+export interface ModelProviderTestResult {
+  provider: string;
+  ok: boolean;
+  message?: string | null;
+  tested_at: string;
+}
+
 export interface UsageMetrics {
   input_tokens?: number;
   output_tokens?: number;

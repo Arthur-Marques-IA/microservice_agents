@@ -9,10 +9,14 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "agno>=3.0.9",
+    "anthropic>=0.40",
     "asyncpg>=0.31.0",
+    "cryptography>=44",
     "fastapi>=0.141.1",
     "google-genai>=2.23.0",
     "langfuse>=4.15.3",
+    "ollama>=0.4",
+    "openai>=1.0",
     "openinference-instrumentation-agno>=1.0.10",
     "pgvector>=0.5.0",
     "psycopg[binary]>=3.3.5",
