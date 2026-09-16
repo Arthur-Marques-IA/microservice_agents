@@ -41,7 +41,7 @@ src/agent_service/
   tools/          # registro de tools por tipo de agente
   documents/      # collections de documentos (pgvector) para RAG
   messaging/      # producer/consumer Redis Streams
-  observability/  # tracing.py: Langfuse + instrumentação do Agno; scores (feedback)
+  observability/  # tracing.py: Langfuse + instrumentação do Agno; trace_store.py: leitura de runs/traces
   db.py           # instância compartilhada do Postgres (agno.db.postgres.PostgresDb)
   config.py       # settings (env vars)
   main.py         # FastAPI + AgentOS
@@ -267,6 +267,33 @@ anterior); qualquer outro nome é numérico, para notas de avaliação automáti
 UI, e `GET /observability/config` diz se o tracing está ligado. O `run_id` vem
 em `ChatResponse.run_id` e no primeiro evento do streaming (`event: run`).
 
+**Leitura dos traces sem abrir o Langfuse**: ninguém precisa logar no Langfuse
+para ver o que aconteceu. `observability/trace_store.py` lê a API pública dele
+(as chaves ficam só no servidor) e devolve os dados num contrato próprio — o
+console usa essas rotas e outros módulos também podem usar:
+
+```bash
+# execuções de um agente (mais recentes primeiro), com latência, tokens, custo e 👍/👎
+curl "http://localhost:58000/observability/agents/conversational/runs?limit=20&prompt_version=2&status=error"
+# próxima página: &cursor=<next_cursor>
+
+# trace completo de um run: resumo, spans (árvore via parent_id) e scores
+curl http://localhost:58000/observability/runs/<run_id>/trace
+```
+
+Os filtros aceitos são `prompt_version`, `status` (`success`/`error`/`interrupted`),
+`user_id`, `session_id`, `since`/`until` (ISO 8601), `limit` (≤ 100) e `cursor`.
+A ingestão do Langfuse é assíncrona: um run recém-terminado leva alguns
+segundos para aparecer, e até lá o `/trace` responde 404. `TraceStore` é uma
+interface — trocar o Langfuse por outro backend não muda o contrato.
+
+Limitações conhecidas do Langfuse v4: a API de scores não filtra vários traces
+de uma vez, então a listagem cruza o feedback do período no próprio serviço —
+com avaliações demais, `feedback_up`/`feedback_down` voltam `null` (o `/trace`
+sempre traz a contagem exata). E a API de métricas não cruza scores com
+atributos do trace, então "taxa de 👍 por versão do prompt" vai exigir um
+índice próprio.
+
 ## Frontend
 
 Um console único, em vez de abas isoladas. Um layout compartilhado
@@ -287,12 +314,19 @@ Um console único, em vez de abas isoladas. Um layout compartilhado
   enviado a cada mensagem, abre o agente num painel lateral para ajustar o
   prompt sem sair da conversa e gera o **código de integração** equivalente.
   Cada resposta tem 👍/👎 (vira o score `feedback` do trace no Langfuse) e um
-  link **Trace**, que abre a execução correspondente na UI do Langfuse.
+  link **Trace**, que abre a execução no próprio console.
+- **Trace de uma execução (`/runs/[runId]`)** — latência, tokens, custo e
+  feedback; a cascata de spans (agente → chamadas ao modelo → tools) e, para o
+  span selecionado, entrada/saída (mensagens do prompt formatadas), modelo,
+  tokens e metadados; mais as avaliações registradas. Enquanto o run ainda
+  está sendo indexado, a página tenta de novo sozinha.
 - **Agentes (`/agents`, `/agents/new`, `/agents/[slug]`)** — lista com busca;
   a página do agente reúne *Configuração* (formulário com detecção de
   alterações — só os campos alterados vão no `PUT`, então editar o nome não
   cria versão de prompt), *Versões* (histórico com diff contra a atual e
-  "restaurar no editor", que salva como nova versão), *Conversas* com o
+  "restaurar no editor", que salva como nova versão), *Execuções* (todas as
+  chamadas ao agente, de qualquer origem, filtráveis por versão do prompt e
+  status, cada uma abrindo o trace), *Conversas* com o
   agente e *Integração* (cURL/JavaScript/Python + referência do contrato
   `/chat` e `/chat/stream`, no lugar da antiga página `/docs`).
 - **Base de conhecimento (`/knowledge`)** — tabela dos documentos ingeridos
@@ -343,7 +377,9 @@ uv run pytest
   (`POST /chat/stream`, com tracing e `event: usage` de tokens ao final).
 - **Observabilidade via Langfuse self-hosted** (`observability/tracing.py`):
   trace por execução com modelo, tools, tokens, custo, sessão e usuário;
-  feedback 👍/👎 do console e `POST /observability/scores` para outros módulos.
+  feedback 👍/👎 do console e `POST /observability/scores` para outros módulos;
+  execuções e traces lidos pela própria API (`/observability/agents/{type}/runs`,
+  `/observability/runs/{run_id}/trace`) e exibidos no console, sem login no Langfuse.
 - Collections de documentos via pgvector, com pipeline de ingestão completo
   (`documents/collections.py` + rotas nativas do AgentOS em `/knowledge/*`,
   mais o atalho `/collections/{name}/documents` para texto simples).

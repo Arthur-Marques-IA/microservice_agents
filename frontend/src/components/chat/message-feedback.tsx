@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { ExternalLink, ThumbsDown, ThumbsUp } from "lucide-react";
+import Link from "next/link";
+import { Activity, ThumbsDown, ThumbsUp } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { errorMessage, requestJson } from "@/lib/http";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,7 @@ type Vote = 0 | 1;
 /**
  * Avaliação da resposta: o voto vira o score `feedback` do trace no Langfuse
  * (o último voto de cada usuário prevalece) e o link abre o trace da execução
- * — prompt enviado, chamadas ao modelo, tools, tokens e custo.
+ * no próprio console — prompt enviado, chamadas ao modelo, tools, tokens e custo.
  */
 export function MessageFeedback({ runId, className }: { runId: string; className?: string }) {
   const { observability, userId } = useWorkspace();
@@ -69,16 +70,14 @@ export function MessageFeedback({ runId, className }: { runId: string; className
           </Button>
         );
       })}
-      <a
-        href={`/api/observability/runs/${encodeURIComponent(runId)}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        title="Abrir o trace desta resposta no Langfuse"
+      <Link
+        href={`/runs/${encodeURIComponent(runId)}`}
+        title="Ver o trace desta resposta: spans, tokens, custo e avaliações"
         className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >
+        <Activity className="size-3" />
         Trace
-        <ExternalLink className="size-3" />
-      </a>
+      </Link>
     </div>
   );
 }

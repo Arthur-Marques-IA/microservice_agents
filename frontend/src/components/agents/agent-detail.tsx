@@ -22,10 +22,11 @@ import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { AgentForm, type AgentFormPayload } from "@/components/agents/agent-form";
 import { VersionHistory } from "@/components/agents/version-history";
 import { IntegrationPanel } from "@/components/integration/integration-panel";
+import { AgentRuns } from "@/components/observability/agent-runs";
 import { PageBody, PageHeader } from "@/components/workspace/page-header";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
 
-const TABS = ["config", "versions", "conversations", "integration"] as const;
+const TABS = ["config", "versions", "runs", "conversations", "integration"] as const;
 type TabValue = (typeof TABS)[number];
 
 function isTab(value: string | undefined): value is TabValue {
@@ -165,6 +166,7 @@ export function AgentDetail({
             <TabsTrigger value="versions" count={versions.length}>
               Versões
             </TabsTrigger>
+            <TabsTrigger value="runs">Execuções</TabsTrigger>
             <TabsTrigger value="conversations" count={agentSessions.length}>
               Conversas
             </TabsTrigger>
@@ -192,6 +194,10 @@ export function AgentDetail({
             currentInstructions={agent.instructions}
             onRestore={handleRestore}
           />
+        </TabsContent>
+
+        <TabsContent value="runs">
+          <AgentRuns agentType={agent.agent_type} versions={versions} />
         </TabsContent>
 
         <TabsContent value="conversations">

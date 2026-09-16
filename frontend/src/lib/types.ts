@@ -140,6 +140,80 @@ export interface UsageMetrics {
   [key: string]: unknown;
 }
 
+export type RunStatus = "success" | "error" | "interrupted";
+
+/** Uma execução de agente, lida do Langfuse pelo backend (`GET /observability/agents/{type}/runs`). */
+export interface RunSummary {
+  run_id: string;
+  trace_id: string;
+  agent_type: string;
+  agent_name?: string | null;
+  prompt_version?: number | null;
+  endpoint?: string | null;
+  user_id?: string | null;
+  session_id?: string | null;
+  environment?: string | null;
+  started_at: string;
+  ended_at?: string | null;
+  latency_ms?: number | null;
+  status: RunStatus;
+  status_message?: string | null;
+  message?: string | null;
+  output?: string | null;
+  model?: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd?: number | null;
+  /** `null` quando havia avaliações demais para contar na listagem — o trace tem a contagem exata. */
+  feedback_up: number | null;
+  feedback_down: number | null;
+}
+
+export interface RunPage {
+  items: RunSummary[];
+  next_cursor?: string | null;
+}
+
+/** Um span do trace (agente, chamada ao modelo, tool...). A árvore sai de `parent_id`. */
+export interface TraceSpan {
+  id: string;
+  parent_id?: string | null;
+  type: string;
+  name: string;
+  started_at: string;
+  ended_at?: string | null;
+  latency_ms?: number | null;
+  level: string;
+  status_message?: string | null;
+  input?: unknown;
+  output?: unknown;
+  model?: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd?: number | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface TraceScore {
+  id: string;
+  name: string;
+  value: number | boolean | string | null;
+  data_type: string;
+  source: string;
+  comment?: string | null;
+  user_id?: string | null;
+  timestamp: string;
+}
+
+/** `GET /observability/runs/{run_id}/trace`. */
+export interface RunTrace {
+  run: RunSummary;
+  spans: TraceSpan[];
+  scores: TraceScore[];
+}
+
 /** `GET /observability/config` — se o Langfuse está ligado e onde fica o projeto. */
 export interface ObservabilityConfig {
   enabled: boolean;

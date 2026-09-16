@@ -51,6 +51,17 @@ export function formatDuration(seconds: number): string {
   return `${seconds.toLocaleString(LOCALE, { maximumFractionDigits: 1 })} s`;
 }
 
+export function formatMs(ms: number | null | undefined): string {
+  return ms == null ? "—" : formatDuration(ms / 1000);
+}
+
+/** Custo em dólar; valores de fração de centavo (o comum por chamada) mantêm 2 dígitos significativos. */
+export function formatCost(usd: number | null | undefined): string {
+  if (usd == null) return "—";
+  if (usd === 0) return "US$ 0";
+  const digits = usd < 0.01 ? { maximumSignificantDigits: 2 } : { maximumFractionDigits: 2 };
+  return `US$ ${usd.toLocaleString(LOCALE, digits)}`;
+}
 
 /** Agrupa itens por recência ("Hoje", "Ontem", ...), preservando a ordem de entrada. */
 export function groupByRecency<T>(
