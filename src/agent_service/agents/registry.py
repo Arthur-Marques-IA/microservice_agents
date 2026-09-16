@@ -37,7 +37,9 @@ def _build_from_definition(definition: dict[str, Any]) -> Agent:
     )
 
 
-def get_agent(agent_type: str) -> Agent:
+def get_agent_with_definition(agent_type: str) -> tuple[Agent, dict[str, Any]]:
+    """Como `get_agent`, mas devolve também a definição usada — a observabilidade
+    registra em cada trace o nome e a `prompt_version` que responderam."""
     definition = get_definition(agent_type)
     if definition is None:
         raise UnknownAgentTypeError(
@@ -46,11 +48,15 @@ def get_agent(agent_type: str) -> Agent:
 
     cached = _cache.get(agent_type)
     if cached is not None and cached[1] == definition["updated_at"]:
-        return cached[0]
+        return cached[0], definition
 
     agent = _build_from_definition(definition)
     _cache[agent_type] = (agent, definition["updated_at"])
-    return agent
+    return agent, definition
+
+
+def get_agent(agent_type: str) -> Agent:
+    return get_agent_with_definition(agent_type)[0]
 
 
 def list_agent_types() -> list[str]:

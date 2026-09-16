@@ -10,6 +10,8 @@ export interface ChatResponse {
   agent_type: string;
   session_id: string;
   content: string;
+  run_id: string;
+  trace_id?: string | null;
 }
 
 export interface ChatMessage {
@@ -17,6 +19,15 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   usage?: UsageMetrics;
+  createdAt?: number;
+  /** Resposta ainda em streaming. */
+  pending?: boolean;
+  /** Streaming interrompido pelo usuário. */
+  stopped?: boolean;
+  /** Mensagem de erro, quando a execução falhou. */
+  error?: string;
+  /** `run_id` da execução — chave do trace no Langfuse e do feedback. */
+  runId?: string;
 }
 
 export interface SearchResult {
@@ -34,6 +45,55 @@ export interface ContentStatusResponse {
 export interface UploadedContent {
   id: string;
   name: string;
+}
+
+/** Item de `GET /knowledge/content` (AgentOS). */
+export interface KnowledgeContent {
+  id: string;
+  name?: string | null;
+  description?: string | null;
+  type?: string | null;
+  size?: string | null;
+  metadata?: Record<string, unknown> | null;
+  status?: ContentStatus | null;
+  status_message?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface PaginationMeta {
+  page: number;
+  limit: number;
+  total_pages: number;
+  total_count: number;
+}
+
+export interface Paginated<T> {
+  data: T[];
+  meta: PaginationMeta;
+}
+
+/** Item de `GET /sessions` (AgentOS) — uma conversa. */
+export interface SessionSummary {
+  session_id: string;
+  session_name?: string | null;
+  agent_id?: string | null;
+  user_id?: string | null;
+  total_tokens?: number | null;
+  created_at: string;
+  updated_at?: string | null;
+}
+
+/** Item de `GET /sessions/{id}/runs` (AgentOS) — uma troca pergunta/resposta. */
+export interface SessionRun {
+  run_id: string;
+  parent_run_id?: string | null;
+  agent_id?: string | null;
+  status?: string | null;
+  run_input?: unknown;
+  content?: unknown;
+  metrics?: UsageMetrics | null;
+  created_at?: number | string | null;
 }
 
 export type MemoryBackend = "common" | "mem0";
@@ -78,4 +138,11 @@ export interface UsageMetrics {
   cost?: number;
   duration?: number;
   [key: string]: unknown;
+}
+
+/** `GET /observability/config` — se o Langfuse está ligado e onde fica o projeto. */
+export interface ObservabilityConfig {
+  enabled: boolean;
+  /** Projeto na UI do Langfuse (ex.: http://localhost:3100/project/agent-service). */
+  project_url: string | null;
 }

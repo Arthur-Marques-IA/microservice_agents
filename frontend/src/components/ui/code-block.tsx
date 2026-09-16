@@ -1,29 +1,22 @@
-"use client";
-
-import { useState } from "react";
-import { Check, Copy } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { CopyButton } from "@/components/ui/copy-button";
 
-export function CodeBlock({ code, className }: { code: string; className?: string }) {
-  const [copied, setCopied] = useState(false);
-
-  async function handleCopy() {
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
-
+export function CodeBlock({
+  code,
+  title,
+  className,
+}: {
+  code: string;
+  title?: string;
+  className?: string;
+}) {
   return (
-    <div className={cn("group relative rounded-lg border border-border bg-muted", className)}>
-      <button
-        type="button"
-        onClick={handleCopy}
-        className="absolute right-2 top-2 rounded-md border border-border bg-card p-1.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
-        aria-label="Copiar"
-      >
-        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
-      <pre className="overflow-x-auto p-4 text-xs leading-relaxed">
+    <div className={cn("overflow-hidden rounded-xl border border-border bg-surface", className)}>
+      <div className="flex h-9 items-center justify-between border-b border-border pl-3.5 pr-1.5">
+        <span className="truncate font-mono text-[11px] text-muted-foreground">{title ?? "código"}</span>
+        <CopyButton value={code} label="Copiar código" />
+      </div>
+      <pre className="scrollbar-thin overflow-x-auto p-4 font-mono text-[12.5px] leading-relaxed">
         <code>{code}</code>
       </pre>
     </div>

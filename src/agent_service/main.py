@@ -2,8 +2,9 @@
 
 Monta um FastAPI próprio com o contrato estável (`agent_service.api.routes`)
 e o passa como `base_app` para o `AgentOS` do Agno, que adiciona por cima as
-rotas nativas de execução/streaming de agentes, sessões e tracing (usadas
-pelo playground em os.agno.com). Ver README para como conectar o playground.
+rotas nativas de execução/streaming de agentes, sessões e knowledge (usadas
+pelo console e pelo playground em os.agno.com). Ver README para como conectar
+o playground. Os traces vão para o Langfuse (`observability/tracing.py`).
 """
 
 from agno.os import AgentOS
@@ -14,6 +15,7 @@ from agent_service.agents.seed import seed_default_agents
 from agent_service.agents.store import init_store
 from agent_service.api.agents_routes import router as agents_router
 from agent_service.api.agents_routes import tools_router
+from agent_service.api.observability_routes import router as observability_router
 from agent_service.api.routes import router
 from agent_service.config import get_settings
 from agent_service.db import get_db
@@ -31,6 +33,7 @@ base_app = FastAPI(title=settings.app_name)
 base_app.include_router(router)
 base_app.include_router(agents_router)
 base_app.include_router(tools_router)
+base_app.include_router(observability_router)
 
 agent_os = AgentOS(
     id=settings.app_name,
@@ -39,7 +42,9 @@ agent_os = AgentOS(
     agents=all_agents(),
     knowledge=all_collections(),
     base_app=base_app,
-    tracing=True,
+    # O tracing nativo do AgentOS gravaria os mesmos spans no Postgres; a fonte
+    # única de traces é o Langfuse, ligado em `configure_tracing()` acima.
+    tracing=False,
 )
 
 app = agent_os.get_app()

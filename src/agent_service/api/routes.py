@@ -7,17 +7,22 @@ outro framework, etc. no futuro).
 """
 
 import json
+import logging
+from contextlib import aclosing
 from typing import Any
 
+from agno.agent import Agent
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from agno.run.agent import RunEvent
 
-from agent_service.agents.registry import UnknownAgentTypeError, get_agent, list_agent_types
+from agent_service.agents.registry import UnknownAgentTypeError, get_agent_with_definition, list_agent_types
 from agent_service.documents.collections import COLLECTION_NAMES, add_text, search
-from agent_service.observability.tracing import traced_agent_run, traced_agent_stream
+from agent_service.observability.tracing import RUN_FAILED, RunContext, get_langfuse, traced_run_events
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -29,13 +34,36 @@ class ChatRequest(BaseModel):
     message: str
     dependencies: dict[str, Any] | None = None
     """Metadados opcionais (ex: cpf, nome) injetados como contexto estruturado
-    no prompt — ver `/docs` no frontend para exemplos."""
+    no prompt — ver a aba Integração dos agentes no frontend para exemplos."""
 
 
 class ChatResponse(BaseModel):
     agent_type: str
     session_id: str
     content: str
+    run_id: str
+    """Id do run — use em `POST /observability/scores` para enviar feedback."""
+    trace_id: str | None = None
+    """Trace no Langfuse (`None` com a observabilidade desligada)."""
+
+
+def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
+    try:
+        agent, definition = get_agent_with_definition(request.agent_type)
+    except UnknownAgentTypeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    run = RunContext(
+        endpoint=endpoint,
+        agent_type=request.agent_type,
+        agent_name=definition["name"],
+        prompt_version=definition["prompt_version"],
+        user_id=request.user_id,
+        session_id=request.session_id,
+        message=request.message,
+        dependencies=request.dependencies,
+    )
+    return agent, run
 
 
 @router.get("/health")
@@ -50,22 +78,25 @@ def agent_types() -> dict[str, list[str]]:
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
-    try:
-        agent = get_agent(request.agent_type)
-    except UnknownAgentTypeError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    agent, run = _resolve(request, "chat")
 
-    run_output = await traced_agent_run(
-        agent,
-        message=request.message,
-        user_id=request.user_id,
-        session_id=request.session_id,
-        dependencies=request.dependencies,
-    )
+    chunks: list[str] = []
+    final_content: str | None = None
+    async with aclosing(traced_run_events(agent, run)) as events:
+        async for event in events:
+            if event.event == RunEvent.run_content.value and isinstance(event.content, str):
+                chunks.append(event.content)
+            elif event.event == RunEvent.run_completed.value and isinstance(event.content, str):
+                final_content = event.content
+            elif event.event == RunEvent.run_error.value:
+                raise HTTPException(status_code=502, detail=event.content or RUN_FAILED)
+
     return ChatResponse(
         agent_type=request.agent_type,
         session_id=request.session_id,
-        content=run_output.content or "",
+        content=final_content if final_content is not None else "".join(chunks),
+        run_id=run.run_id,
+        trace_id=run.trace_id if get_langfuse() is not None else None,
     )
 
 
@@ -109,24 +140,27 @@ async def chat_stream(request: ChatRequest) -> EventSourceResponse:
     na query string — evita acabar em log de acesso. `EventSource` do browser
     só faz GET, então o cliente precisa consumir isso com `fetch` + leitura
     manual do stream (ver `frontend/`), não com a API `EventSource`.
+
+    Eventos: `run` ({run_id, trace_id}, antes de tudo), `message` ({content}, a
+    cada trecho), `usage` (métricas do run), `error` ({message}) e `done`.
     """
-    try:
-        agent = get_agent(request.agent_type)
-    except UnknownAgentTypeError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    agent, run = _resolve(request, "chat.stream")
+    trace_id = run.trace_id if get_langfuse() is not None else None
 
     async def event_generator():
-        async for event in traced_agent_stream(
-            agent,
-            message=request.message,
-            user_id=request.user_id,
-            session_id=request.session_id,
-            dependencies=request.dependencies,
-        ):
-            if event.event == RunEvent.run_content.value and event.content:
-                yield {"event": "message", "data": json.dumps({"content": event.content})}
-            elif event.event == RunEvent.run_completed.value and event.metrics:
-                yield {"event": "usage", "data": json.dumps(event.metrics.to_dict())}
+        yield {"event": "run", "data": json.dumps({"run_id": run.run_id, "trace_id": trace_id})}
+        async with aclosing(traced_run_events(agent, run)) as events:
+            try:
+                async for event in events:
+                    if event.event == RunEvent.run_content.value and event.content:
+                        yield {"event": "message", "data": json.dumps({"content": event.content})}
+                    elif event.event == RunEvent.run_completed.value and event.metrics:
+                        yield {"event": "usage", "data": json.dumps(event.metrics.to_dict())}
+                    elif event.event == RunEvent.run_error.value:
+                        yield {"event": "error", "data": json.dumps({"message": event.content or RUN_FAILED})}
+            except Exception:
+                logger.exception("Falha no streaming do agente %r", request.agent_type)
+                yield {"event": "error", "data": json.dumps({"message": RUN_FAILED})}
         yield {"event": "done", "data": "{}"}
 
     return EventSourceResponse(event_generator())

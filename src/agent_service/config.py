@@ -30,10 +30,20 @@ class Settings(BaseSettings):
     mem0_api_key: str | None = None
     mem0_enabled: bool = False
 
-    # Observabilidade
-    langsmith_api_key: str | None = None
-    langsmith_project: str = "agent-service"
-    langsmith_tracing_enabled: bool = False
+    # Observabilidade — Langfuse (sem as duas chaves, o tracing vira no-op)
+    langfuse_enabled: bool = True
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_base_url: str = "http://localhost:3100"
+    """Endereço pelo qual o serviço envia traces e scores."""
+    langfuse_public_url: str | None = None
+    """Endereço da UI no browser, para os links do console (padrão: `langfuse_base_url`)."""
+    langfuse_project_id: str | None = None
+    """Id do projeto; se ausente, é descoberto pela API do Langfuse."""
+    langfuse_environment: str = "development"
+    langfuse_timeout_seconds: int = 20
+    """Timeout do exportador de spans. O default do SDK (5s) descarta lotes
+    silenciosamente quando o Langfuse está ocupado (ex.: logo após subir)."""
 
 
 @lru_cache

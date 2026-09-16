@@ -1,19 +1,10 @@
 import { TextareaHTMLAttributes, forwardRef } from "react";
 import { cn } from "@/lib/cn";
+import { fieldControlClasses } from "@/components/ui/input";
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
   ({ className, ...props }, ref) => (
-    <textarea
-      ref={ref}
-      className={cn(
-        "w-full resize-none rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground",
-        "placeholder:text-muted-foreground",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        "disabled:pointer-events-none disabled:opacity-50",
-        className
-      )}
-      {...props}
-    />
+    <textarea ref={ref} className={cn(fieldControlClasses, "resize-none px-3 py-2", className)} {...props} />
   )
 );
 Textarea.displayName = "Textarea";
