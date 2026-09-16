@@ -9,6 +9,12 @@ services:
       - "55432:5432"
     volumes:
       - agent_service_postgres_data:/var/lib/postgresql/data
+      # Cria o banco `langfuse` no primeiro boot — uma instância de Postgres a
+      # menos rodando (era `postgres` + `langfuse-postgres`), cada dono com seu
+      # próprio banco. Só roda em PGDATA vazio: numa instalação já existente,
+      # crie o banco manualmente (`CREATE DATABASE langfuse;`) e migre os
+      # dados do `langfuse-postgres` antigo antes de removê-lo.
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -74,7 +80,7 @@ services:
   # oficial (github.com/langfuse/langfuse). Bancos próprios e prefixados para
   # não colidir com o Postgres/Redis do agent-service. Só o `agent-service`
   # fala com o `langfuse-web` (rede interna do compose) — ninguém abre a UI
-  # dele: as execuções e traces aparecem no console, em `/observability`. Só
+  # dele: as execuções e traces aparecem no console, em `/logs`. Só
   # o MinIO (uploads de mídia, 127.0.0.1:9090) fica exposto no host, para o
   # próprio Langfuse servir imagens. Para debugar algo raro direto na UI,
   # publique a porta de novo temporariamente (`docker compose port
@@ -86,7 +92,7 @@ services:
     image: docker.langfuse.com/langfuse/langfuse-worker:4
     restart: unless-stopped
     depends_on: &langfuse-depends-on
-      langfuse-postgres:
+      postgres:
         condition: service_healthy
       langfuse-clickhouse:
         condition: service_healthy
@@ -96,7 +102,10 @@ services:
         condition: service_healthy
     environment: &langfuse-env
       NEXTAUTH_URL: ${LANGFUSE_PUBLIC_URL:-http://localhost:3100}
-      DATABASE_URL: postgresql://postgres:${LANGFUSE_POSTGRES_PASSWORD:-postgres}@langfuse-postgres:5432/postgres # CHANGEME
+      # Mesma instância de Postgres do agent-service, banco separado (ver o
+      # init script montado no serviço `postgres` acima) — não duplica infra
+      # só pra guardar o metadata do Langfuse (traces em si ficam no ClickHouse).
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/langfuse
       SALT: ${LANGFUSE_SALT:-agent-service-dev-salt} # CHANGEME
       ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000} # CHANGEME
       TELEMETRY_ENABLED: ${LANGFUSE_TELEMETRY_ENABLED:-false}
@@ -133,7 +142,7 @@ services:
       # Só em 127.0.0.1: ninguém na rede alcança a UI do Langfuse, mas o
       # `agent-service` rodando fora do Docker (`uv run uvicorn`, sem a rede
       # interna do compose) ainda consegue, e dá pra abrir localhost:3100 na
-      # sua própria máquina pra debug pontual. O console usa `/observability`,
+      # sua própria máquina pra debug pontual. O console usa `/logs`,
       # não isso — ver o comentário do bloco Langfuse acima.
       - "127.0.0.1:3100:3000"
     environment:
@@ -152,23 +161,6 @@ services:
       LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@agent-service.local}
       LANGFUSE_INIT_USER_NAME: Admin
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-agent-service-admin} # CHANGEME
-
-  langfuse-postgres:
-    image: postgres:17
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${LANGFUSE_POSTGRES_PASSWORD:-postgres} # CHANGEME
-      POSTGRES_DB: postgres
-      TZ: UTC
-      PGTZ: UTC
-    volumes:
-      - langfuse_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 3s
-      timeout: 3s
-      retries: 10
 
   langfuse-clickhouse:
     image: clickhouse/clickhouse-server:25.12
@@ -224,7 +216,6 @@ services:
 
 volumes:
   agent_service_postgres_data:
-  langfuse_postgres_data:
   langfuse_clickhouse_data:
   langfuse_clickhouse_logs:
   langfuse_redis_data:
