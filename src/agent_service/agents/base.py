@@ -25,6 +25,7 @@ def build_agent(
     tools: list[Any] | None = None,  # Toolkit/Function/callable já resolvidos, ver tools/registry.py
     model_provider: str | None = None,
     model_id: str | None = None,
+    model_credential_id: str | None = None,
     num_history_runs: int = 10,
     memory_backend: MemoryBackendName = "common",
 ) -> Agent:
@@ -49,7 +50,7 @@ def build_agent(
     return Agent(
         id=agent_id,
         name=name,
-        model=get_model(provider=model_provider, model_id=model_id),
+        model=get_model(provider=model_provider, model_id=model_id, credential_id=model_credential_id),
         db=get_db(),
         memory_manager=memory.manager,
         instructions=instructions,

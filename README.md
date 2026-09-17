@@ -502,6 +502,23 @@ npm install
 AGENT_SERVICE_URL=http://localhost:58000 AGENT_SERVICE_PUBLIC_URL=http://localhost:58000 npm run dev
 ```
 
+## CLI (`kuro`)
+
+Com a CLI você opera o serviço pelo terminal: listar, criar e editar agentes, conversar com eles,
+invocar tools e ler execuções. Ela é só um cliente da API HTTP e não precisa de banco local.
+Por padrão aponta para `http://localhost:58000`; use `--url` ou `KURO_API_URL` para outro endereço.
+
+```bash
+uv run kuro                  # shell interativo: /agents, /tools, /chat <agente>, /runs, /help
+uv run kuro agents           # seletor: escolha o agente → testar, ver, editar, versões, remover
+uv run kuro chat suporte     # conversa direto (REPL; /nova troca de sessão)
+uv run kuro health           # diagnóstico
+```
+
+Todo comando também funciona sem interação, que é o modo pensado para IAs e scripts:
+use `--json`, os códigos de saída e `-m` no chat. As convenções e receitas estão no
+[AGENTS.md](AGENTS.md). Para ter `kuro` no PATH fora do projeto: `uv tool install -e .`.
+
 ## Testes
 
 ```bash

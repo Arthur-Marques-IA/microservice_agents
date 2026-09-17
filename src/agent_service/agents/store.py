@@ -27,13 +27,22 @@ from sqlalchemy import (
     delete,
     func,
     insert,
+    inspect,
     select,
+    text,
     update,
 )
 
 from agent_service.db import get_db
 
 metadata = MetaData()
+
+# Sentinela pra distinguir "não passou o argumento" (não mexe) de "passou
+# `None`" (limpa o campo) em `update_definition` — só necessário pra
+# `model_credential_id`, o único campo aqui que faz sentido voltar a vazio
+# (agente que estava fixado numa credencial volta a usar a padrão do
+# provedor). Os demais campos opcionais desta função não têm essa ação.
+_UNSET: Any = object()
 
 agent_definitions = Table(
     "agent_definitions",
@@ -44,6 +53,9 @@ agent_definitions = Table(
     Column("tools", JSON, nullable=False, default=list),
     Column("model_provider", String, nullable=True),
     Column("model_id", String, nullable=True),
+    # Credencial específica (`models/store.py`) que este agente usa — None
+    # cai na credencial padrão do provedor (`resolve_default_credential`).
+    Column("model_credential_id", String, nullable=True),
     # Campos de `dependencies` que este agente espera no /chat — ver
     # `agents/dependency_fields.py`. Lista de {name, type, label, description,
     # required, default}; [] (default) = sem validação, qualquer dependencies passa.
@@ -73,8 +85,23 @@ agent_prompt_versions = Table(
 )
 
 
+def _add_missing_columns() -> None:
+    """`create_all(checkfirst=True)` só cria tabelas que não existem — uma
+    coluna nova (`model_credential_id`) numa tabela já existente precisa de
+    `ALTER TABLE` manual, já que o projeto não usa Alembic."""
+    engine = get_db().db_engine
+    inspector = inspect(engine)
+    if not inspector.has_table("agent_definitions"):
+        return
+    existing = {c["name"] for c in inspector.get_columns("agent_definitions")}
+    if "model_credential_id" not in existing:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE agent_definitions ADD COLUMN model_credential_id VARCHAR"))
+
+
 def init_store() -> None:
     metadata.create_all(get_db().db_engine, checkfirst=True)
+    _add_missing_columns()
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -103,6 +130,7 @@ def create_definition(
     tools: list[str] | None = None,
     model_provider: str | None = None,
     model_id: str | None = None,
+    model_credential_id: str | None = None,
     dependency_fields: list[dict[str, Any]] | None = None,
     memory_backend: str = "common",
     num_history_runs: int = 10,
@@ -118,6 +146,7 @@ def create_definition(
                 tools=tools or [],
                 model_provider=model_provider,
                 model_id=model_id,
+                model_credential_id=model_credential_id,
                 dependency_fields=dependency_fields or [],
                 memory_backend=memory_backend,
                 num_history_runs=num_history_runs,
@@ -155,6 +184,7 @@ def update_definition(
     tools: list[str] | None = None,
     model_provider: str | None = None,
     model_id: str | None = None,
+    model_credential_id: str | None = _UNSET,
     dependency_fields: list[dict[str, Any]] | None = None,
     memory_backend: str | None = None,
     num_history_runs: int | None = None,
@@ -172,6 +202,8 @@ def update_definition(
         values["model_provider"] = model_provider
     if model_id is not None:
         values["model_id"] = model_id
+    if model_credential_id is not _UNSET:
+        values["model_credential_id"] = model_credential_id
     if dependency_fields is not None:
         values["dependency_fields"] = dependency_fields
     if memory_backend is not None:

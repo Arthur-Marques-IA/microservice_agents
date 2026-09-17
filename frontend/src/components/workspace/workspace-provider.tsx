@@ -15,6 +15,7 @@ import { toDate } from "@/lib/format";
 import { useUserId } from "@/lib/use-local-storage";
 import type {
   AgentDefinition,
+  ModelCredential,
   ModelProviderSummary,
   ObservabilityConfig,
   Paginated,
@@ -38,8 +39,10 @@ interface WorkspaceContextValue {
   backendReachable: boolean;
   /** Langfuse: se o tracing está ligado e onde abrir o projeto. */
   observability: ObservabilityConfig;
-  /** Provedores de modelo cadastrados pelo layout (server) — atualizados via `router.refresh()`. */
+  /** Catálogo de provedores de modelo — atualizado via `router.refresh()`. */
   modelProviders: ModelProviderSummary[];
+  /** Credenciais de modelo cadastradas pelo layout (server) — atualizadas via `router.refresh()`. */
+  modelCredentials: ModelCredential[];
   userId: string;
   sessions: SessionSummary[];
   sessionsLoading: boolean;
@@ -71,6 +74,7 @@ export function WorkspaceProvider({
   backendReachable,
   observability,
   modelProviders,
+  modelCredentials,
   children,
 }: {
   agents: AgentDefinition[];
@@ -80,6 +84,7 @@ export function WorkspaceProvider({
   backendReachable: boolean;
   observability: ObservabilityConfig;
   modelProviders: ModelProviderSummary[];
+  modelCredentials: ModelCredential[];
   children: ReactNode;
 }) {
   const userId = useUserId();
@@ -158,6 +163,7 @@ export function WorkspaceProvider({
       backendReachable,
       observability,
       modelProviders,
+      modelCredentials,
       userId,
       sessions: currentSessions?.data ?? [],
       sessionsLoading: currentSessions === null,
@@ -177,6 +183,7 @@ export function WorkspaceProvider({
       backendReachable,
       observability,
       modelProviders,
+      modelCredentials,
       userId,
       currentSessions,
       refreshSessions,

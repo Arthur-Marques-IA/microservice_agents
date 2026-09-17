@@ -37,6 +37,8 @@ interface FormValues {
   instructions: string;
   tools: string[];
   modelId: string;
+  /** "" = usa a credencial padrão do provedor (a mais antiga habilitada). */
+  credentialId: string;
   dependencyFields: DependencyField[];
   memoryBackend: MemoryBackend;
   numHistoryRuns: number;
@@ -49,6 +51,7 @@ function valuesFrom(agent?: AgentDefinition, instructions?: string[]): FormValue
     instructions: (instructions ?? agent?.instructions ?? []).join("\n"),
     tools: agent?.tools ?? [],
     modelId: agent?.model_id ?? DEFAULT_MODEL.id,
+    credentialId: agent?.model_credential_id ?? "",
     dependencyFields: agent?.dependency_fields ?? [],
     memoryBackend: agent?.memory_backend ?? "common",
     numHistoryRuns: agent?.num_history_runs ?? 10,
@@ -96,6 +99,9 @@ function buildUpdate(values: FormValues, agent: AgentDefinition, models: ModelOp
     payload.model_provider = model.provider;
     payload.model_id = model.id;
   }
+  if (values.credentialId !== (agent.model_credential_id ?? "")) {
+    payload.model_credential_id = values.credentialId || null;
+  }
   if (!sameDependencyFields(values.dependencyFields, agent.dependency_fields)) {
     payload.dependency_fields = values.dependencyFields;
   }
@@ -133,12 +139,13 @@ export function AgentForm({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const { modelProviders } = useWorkspace();
+  const { modelProviders, modelCredentials } = useWorkspace();
   // `google` sempre disponível (fallback antigo via GOOGLE_API_KEY no ambiente);
-  // os demais só entram depois de configurados e habilitados em `/models`.
+  // os demais só entram depois de terem ao menos uma credencial configurada e
+  // habilitada em /models.
   const availableProviders = useMemo(
-    () => new Set(["google", ...modelProviders.filter((p) => p.configured && p.enabled).map((p) => p.provider)]),
-    [modelProviders]
+    () => new Set(["google", ...modelCredentials.filter((c) => c.configured && c.enabled).map((c) => c.provider)]),
+    [modelCredentials]
   );
   const models = useMemo<ModelOption[]>(() => {
     const base = MODEL_OPTIONS.filter((m) => availableProviders.has(m.provider));
@@ -146,6 +153,20 @@ export function AgentForm({
       ? [...base, { provider: agent.model_provider ?? "", id: agent.model_id, label: agent.model_id }]
       : base;
   }, [agent, availableProviders]);
+
+  const currentProvider = models.find((m) => m.id === values.modelId)?.provider;
+  const credentialsForProvider = useMemo(
+    () => modelCredentials.filter((c) => c.provider === currentProvider && c.enabled),
+    [modelCredentials, currentProvider]
+  );
+
+  function handleModelChange(modelId: string) {
+    const nextProvider = models.find((m) => m.id === modelId)?.provider;
+    const keepsCredential = modelCredentials.some(
+      (c) => c.id === values.credentialId && c.provider === nextProvider
+    );
+    setValues((prev) => ({ ...prev, modelId, credentialId: keepsCredential ? prev.credentialId : "" }));
+  }
 
   const instructionLines = toLines(values.instructions);
   const changes = mode === "edit" && agent ? buildUpdate(values, agent, models) : null;
@@ -210,6 +231,7 @@ export function AgentForm({
           tools: values.tools,
           model_provider: model.provider,
           model_id: model.id,
+          model_credential_id: values.credentialId || null,
           dependency_fields: values.dependencyFields,
           memory_backend: values.memoryBackend,
           num_history_runs: values.numHistoryRuns,
@@ -316,12 +338,12 @@ export function AgentForm({
               hint={
                 availableProviders.size <= 1 ? (
                   <Link href="/models" className="hover:underline">
-                    Configure outros provedores em Modelos
+                    Configure outros provedores em Chaves de API
                   </Link>
                 ) : undefined
               }
             >
-              <Select id={`${id}-model`} value={values.modelId} onChange={(e) => update("modelId", e.target.value)}>
+              <Select id={`${id}-model`} value={values.modelId} onChange={(e) => handleModelChange(e.target.value)}>
                 {Object.entries(groupByProvider(models, modelProviders)).map(([providerLabel, options]) => (
                   <optgroup key={providerLabel} label={providerLabel}>
                     {options.map((m) => (
@@ -333,6 +355,27 @@ export function AgentForm({
                 ))}
               </Select>
             </Field>
+            {credentialsForProvider.length > 1 && (
+              <Field
+                label="Chave de API"
+                htmlFor={`${id}-credential`}
+                hint="Mesmo provedor, chaves diferentes — útil pra separar clientes/times."
+              >
+                <Select
+                  id={`${id}-credential`}
+                  value={values.credentialId}
+                  onChange={(e) => update("credentialId", e.target.value)}
+                >
+                  <option value="">Padrão do provedor</option>
+                  {credentialsForProvider.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                      {c.key_hint ? ` (${c.key_hint})` : ""}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
             <Field
               label="Execuções no histórico"
               htmlFor={`${id}-history`}

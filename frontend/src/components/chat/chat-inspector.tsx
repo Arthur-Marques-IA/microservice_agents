@@ -47,7 +47,10 @@ export function ChatInspector({
 }) {
   const id = useId();
   const slug = encodeURIComponent(agentType);
-  const { observability } = useWorkspace();
+  const { observability, modelCredentials } = useWorkspace();
+  const pinnedCredential = agent?.model_credential_id
+    ? modelCredentials.find((c) => c.id === agent.model_credential_id)
+    : undefined;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -82,6 +85,13 @@ export function ChatInspector({
               </div>
               <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[13px]">
                 <Detail label="Modelo">{modelLabel(agent.model_id)}</Detail>
+                {pinnedCredential && (
+                  <Detail label="Chave">
+                    <Link href={`/models`} className="hover:underline">
+                      {pinnedCredential.label}
+                    </Link>
+                  </Detail>
+                )}
                 <Detail label="Memória">{MEMORY_BACKENDS[agent.memory_backend]?.label ?? agent.memory_backend}</Detail>
                 <Detail label="Prompt">
                   <Link href={`/agents/${slug}?tab=versions`} className="hover:underline">

@@ -126,6 +126,8 @@ export interface AgentDefinition {
   tools: string[];
   model_provider: string | null;
   model_id: string | null;
+  /** Credencial específica (`ModelCredential.id`) que este agente usa; `null` = a padrão do provedor. */
+  model_credential_id: string | null;
   dependency_fields: DependencyField[];
   memory_backend: MemoryBackend;
   num_history_runs: number;
@@ -142,6 +144,7 @@ export interface AgentDefinitionInput {
   tools?: string[];
   model_provider?: string | null;
   model_id?: string | null;
+  model_credential_id?: string | null;
   dependency_fields?: DependencyFieldInput[];
   memory_backend?: MemoryBackend;
   num_history_runs?: number;
@@ -251,9 +254,9 @@ export interface ToolInvokeResult {
   error?: string | null;
 }
 
-// -- Provedores de modelo -----------------------------------------------
+// -- Provedores e credenciais de modelo ----------------------------------
 
-/** `GET /model-providers` — catálogo de provedores + estado salvo (chave nunca volta, só `key_hint`). */
+/** `GET /model-providers` — catálogo de provedores suportados + quantas credenciais cada um já tem. */
 export interface ModelProviderSummary {
   provider: string;
   label: string;
@@ -261,6 +264,20 @@ export interface ModelProviderSummary {
   supports_custom_base_url: boolean;
   default_model_id: string;
   docs_url: string;
+  credential_count: number;
+  configured_count: number;
+}
+
+/**
+ * `GET /model-credentials` — uma chave cadastrada. Vários agentes podem
+ * apontar pra mesma credencial; a mesma provider pode ter várias credenciais
+ * (times/clientes diferentes). A chave nunca volta, só `key_hint`.
+ */
+export interface ModelCredential {
+  id: string;
+  provider: string;
+  provider_label: string;
+  label: string;
   configured: boolean;
   key_hint?: string | null;
   base_url?: string | null;
@@ -268,22 +285,34 @@ export interface ModelProviderSummary {
   last_tested_at?: string | null;
   last_test_ok?: boolean | null;
   last_test_message?: string | null;
+  /** Nomes dos agentes que usam esta credencial hoje — pra avisar antes de excluir/desabilitar. */
+  agents_using: string[];
+  created_at: string;
+  updated_at: string;
 }
 
-export interface ModelProviderUpdateInput {
+export interface ModelCredentialCreateInput {
+  provider: string;
+  label: string;
+  api_key?: string;
+  base_url?: string;
+  enabled?: boolean;
+}
+
+export interface ModelCredentialUpdateInput {
+  label?: string;
   api_key?: string;
   clear_api_key?: boolean;
   base_url?: string;
   enabled?: boolean;
 }
 
-export interface ModelProviderTestInput {
+export interface ModelCredentialTestInput {
   api_key?: string;
   base_url?: string;
 }
 
-export interface ModelProviderTestResult {
-  provider: string;
+export interface ModelCredentialTestResult {
   ok: boolean;
   message?: string | null;
   tested_at: string;

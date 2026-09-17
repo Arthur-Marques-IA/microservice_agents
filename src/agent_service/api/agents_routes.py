@@ -60,6 +60,7 @@ class AgentDefinitionIn(BaseModel):
     tools: list[str] = []
     model_provider: str | None = None
     model_id: str | None = None
+    model_credential_id: str | None = None
     dependency_fields: list[DependencyFieldIn] = []
     memory_backend: Literal["common", "mem0"] = "common"
     num_history_runs: int = 10
@@ -84,6 +85,7 @@ class AgentDefinitionUpdate(BaseModel):
     tools: list[str] | None = None
     model_provider: str | None = None
     model_id: str | None = None
+    model_credential_id: str | None = None
     dependency_fields: list[DependencyFieldIn] | None = None
     memory_backend: Literal["common", "mem0"] | None = None
     num_history_runs: int | None = None
@@ -103,6 +105,7 @@ class AgentDefinitionOut(BaseModel):
     tools: list[str]
     model_provider: str | None
     model_id: str | None
+    model_credential_id: str | None = None
     dependency_fields: list[DependencyFieldOut]
     memory_backend: str
     num_history_runs: int

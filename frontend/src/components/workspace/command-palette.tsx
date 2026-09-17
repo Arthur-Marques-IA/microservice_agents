@@ -75,7 +75,7 @@ function PaletteContent({ onClose }: { onClose: () => void }) {
       { id: "nav-chat", group: "Navegar", label: "Playground", icon: MessageSquare, href: "/chat" },
       { id: "nav-agents", group: "Navegar", label: "Agentes", icon: Bot, href: "/agents" },
       { id: "nav-tools", group: "Navegar", label: "Tools", icon: Wrench, href: "/tools", keywords: "api python builtin função" },
-      { id: "nav-models", group: "Navegar", label: "Modelos", icon: Cpu, href: "/models", keywords: "provedores openai anthropic google gemini ollama chave api key llm" },
+      { id: "nav-models", group: "Navegar", label: "Chaves de API", icon: Cpu, href: "/models", keywords: "provedores openai anthropic google gemini ollama chave api key llm credencial" },
       { id: "nav-knowledge", group: "Navegar", label: "Base de conhecimento", icon: Library, href: "/knowledge", keywords: "collections documentos rag" },
       ...(observability.enabled
         ? [
