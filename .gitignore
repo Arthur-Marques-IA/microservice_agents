@@ -13,3 +13,7 @@ wheels/
 .env
 .pytest_cache/
 
+# Skills instaladas por CLIs de terceiros (ex.: ui-ux-pro-max) — locais,
+# não versionadas.
+.claude/skills/
+
