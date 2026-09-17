@@ -7,26 +7,35 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState, SectionHeading } from "@/components/ui/primitives";
 import { Select } from "@/components/ui/select";
+import { PERIODS, usePeriodSince, type Period } from "@/components/observability/period-filter";
 import { RUN_STATUS_OPTIONS } from "@/components/observability/run-status";
 import { RunsTable, useRunsPager } from "@/components/observability/runs-table";
+import { StatsPanel } from "@/components/observability/stats-panel";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
 
 interface Filters {
   version: string;
   status: RunStatus | "";
+  period: Period;
 }
 
-/** Aba "Execuções" da página do agente — todas as chamadas a ele, de qualquer origem. */
+/**
+ * Aba "Execuções" da página do agente — todas as chamadas a ele, de qualquer
+ * origem, com tendência ao longo do tempo (útil pra ver se uma versão nova
+ * do prompt mudou a taxa de erro ou a latência).
+ */
 export function AgentRuns({ agentType, versions }: { agentType: string; versions: PromptVersion[] }) {
   const { observability } = useWorkspace();
-  const [filters, setFilters] = useState<Filters>({ version: "", status: "" });
+  const [filters, setFilters] = useState<Filters>({ version: "", status: "", period: "7d" });
+  const since = usePeriodSince(filters.period);
 
   const params = useMemo(() => {
     const p: Record<string, string> = { agent_type: agentType };
     if (filters.version) p.prompt_version = filters.version;
     if (filters.status) p.status = filters.status;
+    if (since) p.since = since;
     return p;
-  }, [agentType, filters]);
+  }, [agentType, filters.version, filters.status, since]);
 
   const pager = useRunsPager(params);
 
@@ -45,7 +54,7 @@ export function AgentRuns({ agentType, versions }: { agentType: string; versions
   const filtered = Boolean(filters.version || filters.status);
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       <SectionHeading
         title="Execuções"
         description="Cada chamada ao agente — pelo console, pela API ou por outros módulos — com latência, tokens, custo e feedback."
@@ -84,12 +93,26 @@ export function AgentRuns({ agentType, versions }: { agentType: string; versions
             </option>
           ))}
         </Select>
+        <Select
+          aria-label="Filtrar por período"
+          value={filters.period}
+          onChange={(e) => setFilters((f) => ({ ...f, period: e.target.value as Period }))}
+          wrapperClassName="w-40"
+        >
+          {PERIODS.map((period) => (
+            <option key={period.value} value={period.value}>
+              {period.label}
+            </option>
+          ))}
+        </Select>
         {filtered && (
-          <Button variant="ghost" size="sm" onClick={() => setFilters({ version: "", status: "" })}>
+          <Button variant="ghost" size="sm" onClick={() => setFilters((f) => ({ ...f, version: "", status: "" }))}>
             Limpar filtros
           </Button>
         )}
       </div>
+
+      <StatsPanel params={params} />
 
       <RunsTable
         items={pager.items}

@@ -55,8 +55,12 @@ export function useStats(params: Record<string, string>) {
   return { stats, state, error };
 }
 
-/** KPIs + gráfico de execuções por dia — o resumo visual que faltava na tela antiga de observabilidade. */
-export function StatsPanel({ params }: { params: Record<string, string> }) {
+/**
+ * KPIs + gráfico de execuções por dia. `showTrend=false` esconde o gráfico —
+ * uma sessão isolada normalmente cabe num único dia, então a série temporal
+ * não mostra tendência nenhuma; só os KPIs agregados fazem sentido ali.
+ */
+export function StatsPanel({ params, showTrend = true }: { params: Record<string, string>; showTrend?: boolean }) {
   const { stats, state, error } = useStats(params);
 
   if (state === "loading") {
@@ -97,7 +101,7 @@ export function StatsPanel({ params }: { params: Record<string, string> }) {
         <Kpi icon={Clock} label="Latência média" value={formatMs(stats.avg_latency_ms)} />
       </div>
 
-      {stats.buckets.length > 0 && <RunsChart buckets={stats.buckets} />}
+      {showTrend && stats.buckets.length > 0 && <RunsChart buckets={stats.buckets} />}
 
       <div className="flex flex-wrap items-center gap-4 border-t border-border pt-4 text-xs text-muted-foreground">
         {Object.entries(stats.status_counts).map(([status, count]) => (

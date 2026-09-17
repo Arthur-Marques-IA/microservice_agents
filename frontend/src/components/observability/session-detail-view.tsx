@@ -39,7 +39,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
         }
       />
       <PageBody className="flex flex-col gap-4">
-        {observability.enabled && <StatsPanel params={params} />}
+        {observability.enabled && <StatsPanel params={params} showTrend={false} />}
         <RunsTable
           items={runsPager.items}
           state={runsPager.state}

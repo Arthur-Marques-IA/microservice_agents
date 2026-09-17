@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Activity, RefreshCw, X } from "lucide-react";
 import type { RunStatus } from "@/lib/types";
@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/primitives";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PERIODS, usePeriodSince, type Period } from "@/components/observability/period-filter";
 import { RUN_STATUS_OPTIONS } from "@/components/observability/run-status";
 import { RunsTable, useRunsPager } from "@/components/observability/runs-table";
 import { SessionsTable } from "@/components/observability/sessions-table";
@@ -16,17 +17,10 @@ import { StatsPanel } from "@/components/observability/stats-panel";
 import { PageBody, PageHeader } from "@/components/workspace/page-header";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
 
-const PERIODS = [
-  { value: "1d", label: "Últimas 24h", days: 1 },
-  { value: "7d", label: "Últimos 7 dias", days: 7 },
-  { value: "30d", label: "Últimos 30 dias", days: 30 },
-  { value: "all", label: "Todo o período", days: null },
-] as const;
-
 interface Filters {
   agentType: string;
   status: RunStatus | "";
-  period: (typeof PERIODS)[number]["value"];
+  period: Period;
 }
 
 /**
@@ -39,13 +33,7 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
   const { agents, observability } = useWorkspace();
   const [filters, setFilters] = useState<Filters>({ agentType: "", status: "", period: "7d" });
   const [tab, setTab] = useState<"sessions" | "runs">(sessionId ? "runs" : "sessions");
-  // `Date.now()` é impuro: calculado num efeito (não durante a renderização) e guardado em estado.
-  const [since, setSince] = useState<string | null>(null);
-  useEffect(() => {
-    const days = PERIODS.find((candidate) => candidate.value === filters.period)?.days;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSince(days ? new Date(Date.now() - days * 86_400_000).toISOString() : null);
-  }, [filters.period]);
+  const since = usePeriodSince(filters.period);
 
   const params = useMemo(() => {
     const p: Record<string, string> = {};
