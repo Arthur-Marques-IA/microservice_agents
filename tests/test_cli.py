@@ -182,3 +182,24 @@ def test_credential_test_failure_exits_nonzero(api):
         200, json={"ok": False, "message": "chave inválida", "tested_at": "2026-01-01T00:00:00Z"}
     )
     assert _run("credentials", "test", "c1").exit_code == 1
+
+
+def test_edit_opens_editor_and_sends_only_changes(api, monkeypatch):
+    from agent_service.cli import agents as agents_cli
+    from agent_service.cli.common import State
+
+    routes, calls = api
+    routes[("GET", "/agents/suporte")] = httpx.Response(200, json=AGENT)
+    routes[("PUT", "/agents/suporte")] = httpx.Response(200, json={**AGENT, "prompt_version": 2})
+    monkeypatch.setattr(State, "interactive", property(lambda self: True))
+
+    def fake_editor(text, extension):
+        assert extension == ".json"
+        data = json.loads(text)
+        data["instructions"] = ["Seja muito breve."]
+        return json.dumps(data)
+
+    monkeypatch.setattr(agents_cli.click, "edit", fake_editor)
+    result = _run("agents", "edit", "suporte")
+    assert result.exit_code == 0, result.output
+    assert json.loads(calls[-1].content) == {"instructions": ["Seja muito breve."]}

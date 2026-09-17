@@ -7,6 +7,7 @@ Sem subcomando e com TTY, abre o seletor: escolhe o agente e depois a ação
 import json
 from typing import Any
 
+import click
 import questionary
 import typer
 from rich.panel import Panel
@@ -223,19 +224,36 @@ def test_agent(
 
 
 def _edit(st: State, definition: dict[str, Any]) -> None:
+    """Abre os campos editáveis no editor ($VISUAL/$EDITOR; no Windows, o Bloco de
+    Notas) e envia só o que mudou. JSON inválido reabre o editor sem perder o texto."""
     current = editable(definition)
-    edited_text = typer.edit(json.dumps(current, ensure_ascii=False, indent=2), extension=".json")
-    if edited_text is None:
-        console.print("[dim]nada alterado[/]")
-        return
-    try:
-        edited = json.loads(edited_text)
-    except ValueError as exc:
-        console.print(f"[red]JSON inválido, nada salvo:[/] {exc}")
-        return
-    if edited.get("agent_type") != current["agent_type"]:
-        console.print("[red]agent_type não pode mudar, nada salvo[/]")
-        return
+    text = json.dumps(current, ensure_ascii=False, indent=2)
+    while True:
+        try:
+            edited_text = click.edit(text, extension=".json")
+        except click.ClickException as exc:
+            console.print(f"[red]não consegui abrir o editor:[/] {exc.format_message()} (defina EDITOR, ex.: EDITOR=\"code --wait\")")
+            return
+        if edited_text is None:  # fechou sem salvar
+            console.print("[dim]nada alterado[/]")
+            return
+        problem = None
+        try:
+            edited = json.loads(edited_text)
+            if not isinstance(edited, dict):
+                problem = "o conteúdo precisa ser um objeto JSON"
+            elif edited.get("agent_type") != current["agent_type"]:
+                problem = "agent_type não pode mudar"
+        except ValueError as exc:
+            problem = f"JSON inválido: {exc}"
+        if problem is None:
+            break
+        console.print(f"[red]{problem}[/]")
+        if not questionary.confirm("Reabrir o editor para corrigir?", default=True).ask():
+            console.print("[dim]nada salvo[/]")
+            return
+        text = edited_text
+
     changes = {k: v for k, v in edited.items() if k in EDITABLE_FIELDS and v != current.get(k)}
     if not changes:
         console.print("[dim]nada alterado[/]")
