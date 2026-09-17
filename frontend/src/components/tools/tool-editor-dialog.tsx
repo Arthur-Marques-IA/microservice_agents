@@ -9,6 +9,7 @@ import { TOOL_KIND_META } from "@/lib/agent-meta";
 import type {
   ApiAuth,
   ApiParamLocation,
+  ApiParamSource,
   ApiParamType,
   ApiToolConfig,
   ApiToolParam,
@@ -474,7 +475,7 @@ function ApiFields({ draft, onChange }: { draft: ApiDraft; onChange: (draft: Api
 
       <Field
         label="Parâmetros"
-        hint="O que o modelo pode preencher. 'path' precisa aparecer na URL como {nome}; 'body' vira um campo do JSON enviado."
+        hint="'path' precisa aparecer na URL como {nome}; 'body' vira um campo do JSON enviado. A origem diz quem preenche o valor."
         aside={
           <Button
             variant="ghost"
@@ -490,7 +491,8 @@ function ApiFields({ draft, onChange }: { draft: ApiDraft; onChange: (draft: Api
         ) : (
           <div className="flex flex-col gap-2">
             {draft.parameters.map((p, i) => (
-              <div key={i} className="grid grid-cols-[1fr_100px_110px_auto_auto] items-center gap-1.5">
+              <div key={i} className="flex flex-col gap-1.5 rounded-md border border-border/60 p-2">
+                <div className="grid grid-cols-[1fr_100px_110px_auto_auto] items-center gap-1.5">
                 <Input
                   placeholder="nome"
                   value={p.name}
@@ -528,6 +530,45 @@ function ApiFields({ draft, onChange }: { draft: ApiDraft; onChange: (draft: Api
                 >
                   <Trash />
                 </Button>
+                </div>
+
+                <div className="grid grid-cols-[110px_1fr] items-center gap-1.5">
+                  <Select
+                    aria-label="Origem do valor"
+                    value={p.source ?? "model"}
+                    onChange={(e) => {
+                      const source = e.target.value as ApiParamSource;
+                      updateParam(i, {
+                        source,
+                        dependency: source === "dependency" ? (p.dependency ?? p.name) : undefined,
+                        value: source === "const" ? (p.value ?? "") : undefined,
+                      });
+                    }}
+                  >
+                    <option value="model">modelo</option>
+                    <option value="dependency">dependência</option>
+                    <option value="const">fixo</option>
+                  </Select>
+                  {(p.source ?? "model") === "model" && (
+                    <p className="text-[12px] text-muted-foreground">O modelo preenche ao chamar a tool.</p>
+                  )}
+                  {p.source === "dependency" && (
+                    <Input
+                      placeholder="campo de dependencies (ex.: cpf)"
+                      value={p.dependency ?? ""}
+                      onChange={(e) => updateParam(i, { dependency: e.target.value })}
+                      className="font-mono text-xs"
+                    />
+                  )}
+                  {p.source === "const" && (
+                    <Input
+                      placeholder="valor fixo"
+                      value={String(p.value ?? "")}
+                      onChange={(e) => updateParam(i, { value: e.target.value })}
+                      className="font-mono text-xs"
+                    />
+                  )}
+                </div>
               </div>
             ))}
           </div>

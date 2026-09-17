@@ -230,12 +230,20 @@ export interface BuiltinCatalogEntry {
 export type ApiParamLocation = "query" | "path" | "header" | "body";
 export type ApiParamType = "string" | "integer" | "number" | "boolean" | "object" | "array";
 
+/** De onde vem o valor do parâmetro (o backend assume "model" quando ausente). */
+export type ApiParamSource = "model" | "dependency" | "const";
+
 export interface ApiToolParam {
   name: string;
   type: ApiParamType;
   location: ApiParamLocation;
   description?: string;
   required?: boolean;
+  source?: ApiParamSource;
+  /** Campo de `dependencies` que preenche este parâmetro (`source: "dependency"`). */
+  dependency?: string;
+  /** Valor fixo (`source: "const"`). */
+  value?: unknown;
 }
 
 export type ApiAuth =
