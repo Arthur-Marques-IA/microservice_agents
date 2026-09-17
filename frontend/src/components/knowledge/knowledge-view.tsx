@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   ChevronDown,
   ChevronLeft,
@@ -15,11 +16,12 @@ import {
   Plus,
   RotateCcw,
   Trash,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { errorMessage, requestJson } from "@/lib/http";
 import { formatBytes, pluralize, toDate } from "@/lib/format";
-import type { ContentStatus, KnowledgeContent, Paginated } from "@/lib/types";
+import type { ContentStatus, KnowledgeContent, Paginated, Collection } from "@/lib/types";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -31,6 +33,7 @@ import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader } from "@/components/workspace/page-header";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
 import { AddContentDialog } from "@/components/knowledge/add-content-dialog";
+import { NewCollectionDialog } from "@/components/knowledge/new-collection-dialog";
 import { SearchPanel } from "@/components/knowledge/search-panel";
 
 const PAGE_SIZE = 20;
@@ -62,9 +65,12 @@ function contentKind(type?: string | null) {
 
 export function KnowledgeView({ openAddInitially }: { openAddInitially: boolean }) {
   const toast = useToast();
+  const router = useRouter();
   const confirm = useConfirm();
   const { collections, backendReachable } = useWorkspace();
-  const [collection, setCollection] = useState(collections[0] ?? "general");
+  const [collection, setCollection] = useState(collections[0]?.name ?? "general");
+  const [newOpen, setNewOpen] = useState(false);
+  const current = collections.find((c) => c.name === collection);
   const [addOpen, setAddOpen] = useState(openAddInitially);
   const [page, setPage] = useState(1);
   const [reloadKey, setReloadKey] = useState(0);
@@ -113,6 +119,28 @@ export function KnowledgeView({ openAddInitially }: { openAddInitially: boolean 
 
   const reload = () => setReloadKey((k) => k + 1);
 
+  async function handleDeleteCollection(target: Collection) {
+    const confirmed = await confirm({
+      title: `Excluir a coleção "${target.label}"?`,
+      description:
+        "O cadastro sai da lista; os documentos já indexados continuam na tabela de vetores e voltam a aparecer se a coleção for recriada com o mesmo nome.",
+      confirmLabel: "Excluir coleção",
+      destructive: true,
+    });
+    if (!confirmed) return;
+    try {
+      await requestJson(`/api/collections/${encodeURIComponent(target.name)}`, {
+        method: "DELETE",
+        fallbackError: "Falha ao excluir coleção",
+      });
+      toast({ title: "Coleção excluída", variant: "success" });
+      setCollection(collections.find((c) => c.name !== target.name)?.name ?? "general");
+      router.refresh();
+    } catch (err) {
+      toast({ title: "Não foi possível excluir", description: errorMessage(err), variant: "error" });
+    }
+  }
+
   function handleAddOpenChange(open: boolean) {
     setAddOpen(open);
     if (!open && window.location.search.includes("add=")) {
@@ -157,31 +185,52 @@ export function KnowledgeView({ openAddInitially }: { openAddInitially: boolean 
         title="Base de conhecimento"
         description="Documentos indexados com embeddings (pgvector) para RAG. A ingestão roda em segundo plano — acompanhe o status de cada item."
         actions={
-          <Button onClick={() => setAddOpen(true)} disabled={!backendReachable}>
-            <Plus /> Adicionar conteúdo
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setNewOpen(true)} disabled={!backendReachable}>
+              <Plus /> Nova coleção
+            </Button>
+            <Button onClick={() => setAddOpen(true)} disabled={!backendReachable}>
+              <Plus /> Adicionar conteúdo
+            </Button>
+          </div>
         }
       />
 
       <PageBody className="flex flex-col gap-6">
-        {collections.length > 1 && (
-          <Tabs
-            value={collection}
-            onValueChange={(value) => {
-              setCollection(value);
-              setPage(1);
-            }}
-            variant="pill"
-          >
-            <TabsList>
-              {collections.map((name) => (
-                <TabsTrigger key={name} value={name}>
-                  {name}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-        )}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {collections.length > 1 && (
+            <Tabs
+              value={collection}
+              onValueChange={(value) => {
+                setCollection(value);
+                setPage(1);
+              }}
+              variant="pill"
+            >
+              <TabsList>
+                {collections.map((c) => (
+                  <TabsTrigger key={c.name} value={c.name}>
+                    {c.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          )}
+          {current && (
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <span>
+                {current.agents_using.length > 0
+                  ? `Consultada por: ${current.agents_using.join(", ")}`
+                  : "Nenhum agente consulta esta coleção — ligue uma na aba Modelo do agente."}
+              </span>
+              {!current.is_seed && (
+                <Button variant="ghost" size="sm" onClick={() => handleDeleteCollection(current)}>
+                  <Trash2 /> Excluir coleção
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
 
         <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
           <section className="flex min-w-0 flex-col gap-3">
@@ -350,6 +399,16 @@ export function KnowledgeView({ openAddInitially }: { openAddInitially: boolean 
           <SearchPanel collection={collection} />
         </div>
       </PageBody>
+
+      <NewCollectionDialog
+        open={newOpen}
+        onOpenChange={setNewOpen}
+        onCreated={(name) => {
+          setCollection(name);
+          setPage(1);
+          router.refresh();
+        }}
+      />
 
       <AddContentDialog
         open={addOpen}

@@ -22,6 +22,8 @@ import { useToast } from "@/components/ui/toast";
 
 type Mode = "text" | "file" | "url";
 
+const DEFAULT_COLLECTION = "general";
+
 export function AddContentDialog({
   open,
   onOpenChange,
@@ -61,6 +63,8 @@ function AddContentForm({
   const id = useId();
   const toast = useToast();
   const [mode, setMode] = useState<Mode>("text");
+  // Ver o comentário em handleSubmit: o upload do AgentOS não escolhe coleção.
+  const uploadsAllowed = collection === DEFAULT_COLLECTION;
   const [name, setName] = useState("");
   const [text, setText] = useState("");
   const [url, setUrl] = useState("");
@@ -84,6 +88,9 @@ function AddContentForm({
           fallbackError: "Falha ao enviar o texto",
         });
       } else {
+        // Arquivo/URL passam pelo pipeline do AgentOS (`/knowledge/content`), que
+        // escreve na coleção padrão — ele não aceita escolher a coleção. Por isso
+        // essas abas só aparecem quando a coleção selecionada é a padrão.
         const form = new FormData();
         if (mode === "file" && file) form.set("file", file);
         if (mode === "url") form.set("url", url.trim());
@@ -115,19 +122,20 @@ function AddContentForm({
         <DialogDescription>
           Vai para a coleção <span className="font-mono text-foreground">{collection}</span> e é indexado com
           embeddings para busca semântica.
+          {!uploadsAllowed && " Arquivo e URL ainda só funcionam na coleção padrão — aqui, cole o texto."}
         </DialogDescription>
       </DialogHeader>
 
       <DialogBody className="flex flex-col gap-5">
         <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)} variant="pill">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className={cn("grid w-full", uploadsAllowed ? "grid-cols-3" : "grid-cols-1")}>
             <TabsTrigger value="text">
               <FileText /> Texto
             </TabsTrigger>
-            <TabsTrigger value="file">
+            <TabsTrigger value="file" disabled={!uploadsAllowed}>
               <FileUp /> Arquivo
             </TabsTrigger>
-            <TabsTrigger value="url">
+            <TabsTrigger value="url" disabled={!uploadsAllowed}>
               <Globe /> URL
             </TabsTrigger>
           </TabsList>

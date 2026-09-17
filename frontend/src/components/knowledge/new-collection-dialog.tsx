@@ -1,0 +1,145 @@
+"use client";
+
+import { FormEvent, useId, useState } from "react";
+import { errorMessage, requestJson } from "@/lib/http";
+import type { Collection } from "@/lib/types";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogBody,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Field, Spinner } from "@/components/ui/primitives";
+import { useToast } from "@/components/ui/toast";
+
+const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+
+/** Sugere `manuais-do-produto` a partir de "Manuais do produto". */
+function slugify(label: string) {
+  return label
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+export function NewCollectionDialog({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: (name: string) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} size="sm">
+      {open && <NewCollectionForm onClose={() => onOpenChange(false)} onCreated={onCreated} />}
+    </Dialog>
+  );
+}
+
+function NewCollectionForm({ onClose, onCreated }: { onClose: () => void; onCreated: (name: string) => void }) {
+  const id = useId();
+  const toast = useToast();
+  const [label, setLabel] = useState("");
+  const [name, setName] = useState("");
+  const [nameTouched, setNameTouched] = useState(false);
+  const [description, setDescription] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const slug = nameTouched ? name : slugify(label);
+  const slugError = slug && !SLUG_PATTERN.test(slug) ? "Use minúsculas, números, '-' ou '_'." : null;
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!label.trim() || !slug || slugError) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const created = await requestJson<Collection>("/api/collections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: slug, label: label.trim(), description: description.trim() || null }),
+        fallbackError: "Falha ao criar coleção",
+      });
+      toast({ title: "Coleção criada", description: "Agora adicione documentos e ligue-a a um agente.", variant: "success" });
+      onCreated(created.name);
+      onClose();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <DialogHeader>
+        <DialogTitle>Nova coleção</DialogTitle>
+        <DialogDescription>
+          Uma base de conhecimento separada. Um agente consulta uma coleção quando você a escolhe na aba Modelo dele.
+        </DialogDescription>
+      </DialogHeader>
+
+      <DialogBody className="flex flex-col gap-4">
+        <Field label="Nome" htmlFor={`${id}-label`}>
+          <Input
+            id={`${id}-label`}
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="Manuais do produto"
+            autoFocus
+          />
+        </Field>
+
+        <Field
+          label="Identificador"
+          htmlFor={`${id}-name`}
+          hint="Usado na tabela de vetores e na API. Não muda depois de criado."
+          error={slugError}
+        >
+          <Input
+            id={`${id}-name`}
+            value={slug}
+            onChange={(e) => {
+              setNameTouched(true);
+              setName(e.target.value);
+            }}
+            placeholder="manuais"
+            className="font-mono"
+          />
+        </Field>
+
+        <Field label="Descrição" htmlFor={`${id}-description`} hint="Opcional.">
+          <Textarea
+            id={`${id}-description`}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={2}
+            placeholder="O que vive nesta coleção."
+          />
+        </Field>
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
+      </DialogBody>
+
+      <DialogFooter>
+        <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>
+          Cancelar
+        </Button>
+        <Button type="submit" disabled={submitting || !label.trim() || !slug || Boolean(slugError)}>
+          {submitting && <Spinner />} Criar coleção
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}

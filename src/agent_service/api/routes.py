@@ -4,6 +4,8 @@ Fica deliberadamente separado das rotas que o AgentOS expõe automaticamente
 (`/agents/{id}/runs`, etc.) — este router é o ponto único e estável que outros
 serviços chamam, independente de como o agente é montado por baixo (Agno,
 outro framework, etc. no futuro).
+
+Collections de documentos ficam em `api/collections_routes.py`.
 """
 
 import json
@@ -20,7 +22,6 @@ from agno.run.agent import RunEvent
 
 from agent_service.agents.dependency_fields import DependencyValidationError, validate_dependencies
 from agent_service.agents.registry import UnknownAgentTypeError, get_agent_with_definition, list_agent_types
-from agent_service.documents.collections import COLLECTION_NAMES, add_text, search
 from agent_service.observability.tracing import RUN_FAILED, RunContext, get_langfuse, traced_run_events
 from agent_service.tools.registry import ToolBuildError, UnknownToolError
 
@@ -109,40 +110,6 @@ async def chat(request: ChatRequest) -> ChatResponse:
         run_id=run.run_id,
         trace_id=run.trace_id if get_langfuse() is not None else None,
     )
-
-
-class AddTextRequest(BaseModel):
-    text: str
-    name: str | None = None
-    metadata: dict[str, Any] | None = None
-
-
-class SearchResult(BaseModel):
-    content: str
-    metadata: dict[str, Any] | None = None
-
-
-@router.get("/collections")
-def collections() -> dict[str, list[str]]:
-    return {"collections": COLLECTION_NAMES}
-
-
-@router.post("/collections/{collection_name}/documents", status_code=201)
-async def ingest_text(collection_name: str, request: AddTextRequest) -> dict[str, str]:
-    if collection_name not in COLLECTION_NAMES:
-        raise HTTPException(status_code=404, detail=f"Coleção desconhecida: {collection_name!r}")
-    content_id = await add_text(
-        collection_name, text=request.text, name=request.name, metadata=request.metadata
-    )
-    return {"content_id": content_id}
-
-
-@router.get("/collections/{collection_name}/search", response_model=list[SearchResult])
-async def search_collection(collection_name: str, query: str, limit: int = 5) -> list[SearchResult]:
-    if collection_name not in COLLECTION_NAMES:
-        raise HTTPException(status_code=404, detail=f"Coleção desconhecida: {collection_name!r}")
-    documents = await search(collection_name, query=query, limit=limit)
-    return [SearchResult(content=doc.content, metadata=doc.meta_data) for doc in documents]
 
 
 @router.post("/chat/stream")

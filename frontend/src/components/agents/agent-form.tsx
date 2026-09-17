@@ -39,6 +39,8 @@ interface FormValues {
   modelId: string;
   /** "" = usa a credencial padrão do provedor (a mais antiga habilitada). */
   credentialId: string;
+  /** "" = agente sem base de conhecimento. */
+  knowledgeCollection: string;
   dependencyFields: DependencyField[];
   memoryBackend: MemoryBackend;
   numHistoryRuns: number;
@@ -52,6 +54,7 @@ function valuesFrom(agent?: AgentDefinition, instructions?: string[]): FormValue
     tools: agent?.tools ?? [],
     modelId: agent?.model_id ?? DEFAULT_MODEL.id,
     credentialId: agent?.model_credential_id ?? "",
+    knowledgeCollection: agent?.knowledge_collection ?? "",
     dependencyFields: agent?.dependency_fields ?? [],
     memoryBackend: agent?.memory_backend ?? "common",
     numHistoryRuns: agent?.num_history_runs ?? 10,
@@ -102,6 +105,9 @@ function buildUpdate(values: FormValues, agent: AgentDefinition, models: ModelOp
   if (values.credentialId !== (agent.model_credential_id ?? "")) {
     payload.model_credential_id = values.credentialId || null;
   }
+  if (values.knowledgeCollection !== (agent.knowledge_collection ?? "")) {
+    payload.knowledge_collection = values.knowledgeCollection || null;
+  }
   if (!sameDependencyFields(values.dependencyFields, agent.dependency_fields)) {
     payload.dependency_fields = values.dependencyFields;
   }
@@ -139,7 +145,7 @@ export function AgentForm({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const { modelProviders, modelCredentials } = useWorkspace();
+  const { modelProviders, modelCredentials, collections } = useWorkspace();
   // `google` sempre disponível (fallback antigo via GOOGLE_API_KEY no ambiente);
   // os demais só entram depois de terem ao menos uma credencial configurada e
   // habilitada em /models.
@@ -232,6 +238,7 @@ export function AgentForm({
           model_provider: model.provider,
           model_id: model.id,
           model_credential_id: values.credentialId || null,
+          knowledge_collection: values.knowledgeCollection || null,
           dependency_fields: values.dependencyFields,
           memory_backend: values.memoryBackend,
           num_history_runs: values.numHistoryRuns,
@@ -376,6 +383,33 @@ export function AgentForm({
                 </Select>
               </Field>
             )}
+            <Field
+              label="Base de conhecimento"
+              htmlFor={`${id}-knowledge`}
+              hint={
+                collections.length === 0 ? (
+                  <Link href="/knowledge" className="hover:underline">
+                    Crie uma coleção em Base de conhecimento
+                  </Link>
+                ) : (
+                  "O agente ganha uma busca na coleção e decide sozinho quando consultá-la."
+                )
+              }
+            >
+              <Select
+                id={`${id}-knowledge`}
+                value={values.knowledgeCollection}
+                onChange={(e) => update("knowledgeCollection", e.target.value)}
+                disabled={collections.length === 0}
+              >
+                <option value="">Sem base de conhecimento</option>
+                {collections.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
             <Field
               label="Execuções no histórico"
               htmlFor={`${id}-history`}

@@ -11,6 +11,7 @@ from typing import Any, Literal
 from agno.agent import Agent
 
 from agent_service.db import get_db
+from agent_service.documents.collections import get_collection
 from agent_service.memory.common import CommonMemoryBackend
 from agent_service.models.provider import get_model
 
@@ -26,10 +27,14 @@ def build_agent(
     model_provider: str | None = None,
     model_id: str | None = None,
     model_credential_id: str | None = None,
+    knowledge_collection: str | None = None,
     num_history_runs: int = 10,
     memory_backend: MemoryBackendName = "common",
 ) -> Agent:
     memory = CommonMemoryBackend()
+    # `search_knowledge=True` dá ao agente uma tool de busca na collection (RAG
+    # agêntico): ele decide quando consultar, em vez de injetarmos tudo no prompt.
+    knowledge = get_collection(knowledge_collection) if knowledge_collection else None
 
     pre_hooks = []
     post_hooks = []
@@ -53,6 +58,8 @@ def build_agent(
         model=get_model(provider=model_provider, model_id=model_id, credential_id=model_credential_id),
         db=get_db(),
         memory_manager=memory.manager,
+        knowledge=knowledge,
+        search_knowledge=knowledge is not None,
         instructions=instructions,
         tools=tools or [],
         add_history_to_context=True,

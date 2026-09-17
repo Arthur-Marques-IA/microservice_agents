@@ -1,7 +1,9 @@
 """Collections de documentos (RAG) sobre Postgres+pgvector.
 
-Cada nome em `COLLECTION_NAMES` vira uma `Knowledge` (base de conhecimento do
-Agno) própria, com sua tabela pgvector. As collections são registradas no
+Cada collection cadastrada (`documents/store.py`) vira uma `Knowledge` (base de
+conhecimento do Agno) própria, com sua tabela pgvector. Um agente aponta para
+uma delas em `knowledge_collection` e ganha uma tool de busca (`agents/base.py`).
+As collections são registradas no
 AgentOS (`main.py`, `knowledge=all_collections()`), que já expõe o pipeline de
 ingestão completo (upload de arquivo, texto ou URL, com chunking configurável
 e processamento assíncrono) em `/knowledge/content`, além de busca em
@@ -22,8 +24,11 @@ from agno.vectordb.pgvector import PgVector
 
 from agent_service.config import get_settings
 from agent_service.db import get_db
+from agent_service.documents.store import list_collection_names
 
-COLLECTION_NAMES: list[str] = ["general"]
+
+def collection_exists(name: str) -> bool:
+    return name in list_collection_names()
 
 
 @lru_cache
@@ -43,8 +48,12 @@ def get_collection(name: str) -> Knowledge:
 
 
 def all_collections() -> list[Knowledge]:
-    """Todas as collections configuradas, para registrar no AgentOS."""
-    return [get_collection(name) for name in COLLECTION_NAMES]
+    """Todas as collections cadastradas, para registrar no AgentOS no startup.
+
+    Uma collection criada depois do boot funciona normalmente no `/chat` (o
+    agente a resolve por nome), só não aparece nas rotas de knowledge do
+    AgentOS até o próximo restart — mesma ressalva dos agentes."""
+    return [get_collection(name) for name in list_collection_names()]
 
 
 async def add_text(

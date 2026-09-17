@@ -28,6 +28,7 @@ from agent_service.agents.store import (
     list_prompt_versions,
     update_definition,
 )
+from agent_service.documents.collections import collection_exists
 from agent_service.tools.api_tool import required_dependencies
 from agent_service.tools.registry import tool_exists
 from agent_service.tools.store import get_tool
@@ -63,6 +64,9 @@ class AgentDefinitionIn(BaseModel):
     model_provider: str | None = None
     model_id: str | None = None
     model_credential_id: str | None = None
+    knowledge_collection: str | None = Field(
+        default=None, description="Collection de documentos que o agente pode consultar (GET /collections)"
+    )
     dependency_fields: list[DependencyFieldIn] = []
     memory_backend: Literal["common", "mem0"] = "common"
     num_history_runs: int = 10
@@ -88,6 +92,7 @@ class AgentDefinitionUpdate(BaseModel):
     model_provider: str | None = None
     model_id: str | None = None
     model_credential_id: str | None = None
+    knowledge_collection: str | None = None
     dependency_fields: list[DependencyFieldIn] | None = None
     memory_backend: Literal["common", "mem0"] | None = None
     num_history_runs: int | None = None
@@ -108,6 +113,7 @@ class AgentDefinitionOut(BaseModel):
     model_provider: str | None
     model_id: str | None
     model_credential_id: str | None = None
+    knowledge_collection: str | None = None
     dependency_fields: list[DependencyFieldOut]
     memory_backend: str
     num_history_runs: int
@@ -128,6 +134,11 @@ class PromptVersionOut(BaseModel):
     version: int
     instructions: list[str]
     created_at: datetime
+
+
+def _validate_collection(name: str | None) -> None:
+    if name is not None and not collection_exists(name):
+        raise HTTPException(status_code=422, detail=f"Collection desconhecida: {name!r} (veja GET /collections)")
 
 
 def _validate_tools(names: list[str], declared_dependencies: set[str]) -> None:
@@ -167,6 +178,7 @@ def create_agent(body: AgentDefinitionIn) -> dict[str, Any]:
     payload = body.model_dump()
     payload["dependency_fields"] = _normalize_dependency_fields(body.dependency_fields)
     _validate_tools(body.tools, {f["name"] for f in payload["dependency_fields"]})
+    _validate_collection(body.knowledge_collection)
     return create_definition(**payload)
 
 
@@ -185,6 +197,8 @@ def update_agent(agent_type: str, body: AgentDefinitionUpdate) -> dict[str, Any]
         raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
 
     payload = body.model_dump(exclude_unset=True)
+    if "knowledge_collection" in payload:
+        _validate_collection(payload["knowledge_collection"])
     if body.dependency_fields is not None:
         payload["dependency_fields"] = _normalize_dependency_fields(body.dependency_fields)
     # Valida contra o estado final: tools e dependency_fields podem vir juntos ou só um deles.

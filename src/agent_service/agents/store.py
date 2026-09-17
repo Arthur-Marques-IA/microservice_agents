@@ -56,6 +56,9 @@ agent_definitions = Table(
     # Credencial específica (`models/store.py`) que este agente usa — None
     # cai na credencial padrão do provedor (`resolve_default_credential`).
     Column("model_credential_id", String, nullable=True),
+    # Collection de documentos que este agente pode consultar (`documents/store.py`);
+    # None = agente sem base de conhecimento.
+    Column("knowledge_collection", String, nullable=True),
     # Campos de `dependencies` que este agente espera no /chat — ver
     # `agents/dependency_fields.py`. Lista de {name, type, label, description,
     # required, default}; [] (default) = sem validação, qualquer dependencies passa.
@@ -86,17 +89,18 @@ agent_prompt_versions = Table(
 
 
 def _add_missing_columns() -> None:
-    """`create_all(checkfirst=True)` só cria tabelas que não existem — uma
-    coluna nova (`model_credential_id`) numa tabela já existente precisa de
-    `ALTER TABLE` manual, já que o projeto não usa Alembic."""
+    """`create_all(checkfirst=True)` só cria tabelas que não existem — uma coluna
+    nova numa tabela já existente precisa de `ALTER TABLE` manual, já que o
+    projeto não usa Alembic."""
     engine = get_db().db_engine
     inspector = inspect(engine)
     if not inspector.has_table("agent_definitions"):
         return
     existing = {c["name"] for c in inspector.get_columns("agent_definitions")}
-    if "model_credential_id" not in existing:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE agent_definitions ADD COLUMN model_credential_id VARCHAR"))
+    for column in ("model_credential_id", "knowledge_collection"):
+        if column not in existing:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE agent_definitions ADD COLUMN {column} VARCHAR"))
 
 
 def init_store() -> None:
@@ -131,6 +135,7 @@ def create_definition(
     model_provider: str | None = None,
     model_id: str | None = None,
     model_credential_id: str | None = None,
+    knowledge_collection: str | None = None,
     dependency_fields: list[dict[str, Any]] | None = None,
     memory_backend: str = "common",
     num_history_runs: int = 10,
@@ -147,6 +152,7 @@ def create_definition(
                 model_provider=model_provider,
                 model_id=model_id,
                 model_credential_id=model_credential_id,
+                knowledge_collection=knowledge_collection,
                 dependency_fields=dependency_fields or [],
                 memory_backend=memory_backend,
                 num_history_runs=num_history_runs,
@@ -185,6 +191,7 @@ def update_definition(
     model_provider: str | None = None,
     model_id: str | None = None,
     model_credential_id: str | None = _UNSET,
+    knowledge_collection: str | None = _UNSET,
     dependency_fields: list[dict[str, Any]] | None = None,
     memory_backend: str | None = None,
     num_history_runs: int | None = None,
@@ -204,6 +211,8 @@ def update_definition(
         values["model_id"] = model_id
     if model_credential_id is not _UNSET:
         values["model_credential_id"] = model_credential_id
+    if knowledge_collection is not _UNSET:
+        values["knowledge_collection"] = knowledge_collection
     if dependency_fields is not None:
         values["dependency_fields"] = dependency_fields
     if memory_backend is not None:

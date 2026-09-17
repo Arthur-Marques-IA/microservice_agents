@@ -119,6 +119,23 @@ class Client:
         """Testa a chave salva (sem gastar tokens) e grava o resultado."""
         return self._request("POST", f"/model-credentials/{credential_id}/test", json={})
 
+    # -- collections (bases de conhecimento) ---------------------------------
+
+    def list_collections(self) -> list[dict[str, Any]]:
+        return self._request("GET", "/collections")
+
+    def create_collection(self, body: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/collections", json=body)
+
+    def delete_collection(self, name: str) -> None:
+        self._request("DELETE", f"/collections/{name}")
+
+    def add_document(self, name: str, body: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", f"/collections/{name}/documents", json=body)
+
+    def search_collection(self, name: str, query: str, limit: int) -> list[dict[str, Any]]:
+        return self._request("GET", f"/collections/{name}/search", params={"query": query, "limit": limit})
+
     # -- observabilidade -----------------------------------------------------
 
     def list_runs(self, **params: Any) -> dict[str, Any]:

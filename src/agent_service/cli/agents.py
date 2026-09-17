@@ -37,6 +37,7 @@ EDITABLE_FIELDS = (
     "model_provider",
     "model_id",
     "model_credential_id",
+    "knowledge_collection",
     "dependency_fields",
     "memory_backend",
     "num_history_runs",
@@ -53,7 +54,7 @@ def editable(definition: dict[str, Any]) -> dict[str, Any]:
 
 def _render_list(agents: list[dict[str, Any]]) -> None:
     table = Table(show_edge=False, header_style="bold")
-    for column in ("agent_type", "nome", "modelo", "tools", "prompt", "memória"):
+    for column in ("agent_type", "nome", "modelo", "tools", "conhecimento", "prompt"):
         table.add_column(column)
     for a in agents:
         model = f"{a['model_provider'] or 'padrão'}/{a['model_id'] or 'padrão'}"
@@ -63,8 +64,8 @@ def _render_list(agents: list[dict[str, Any]]) -> None:
             a["name"],
             model,
             ", ".join(a["tools"]) or "—",
+            a.get("knowledge_collection") or "—",
             f"v{a['prompt_version']}",
-            a["memory_backend"],
         )
     console.print(table)
 
@@ -76,6 +77,7 @@ def _render_agent(a: dict[str, Any]) -> None:
         f" · credencial: {a.get('model_credential_id') or 'padrão do provedor'}",
         f"memória: {a['memory_backend']} · histórico: {a['num_history_runs']} runs · prompt v{a['prompt_version']}",
         f"tools: {', '.join(a['tools']) or '—'}",
+        f"base de conhecimento: {a.get('knowledge_collection') or '—'}",
     ]
     if a["dependency_fields"]:
         deps = ", ".join(f"{f['name']}:{f['type']}{'*' if f['required'] else ''}" for f in a["dependency_fields"])

@@ -13,7 +13,7 @@ import click
 import typer
 from rich.table import Table
 
-from agent_service.cli import agents, runs, tools
+from agent_service.cli import agents, collections, runs, tools
 from agent_service.cli.chat import chat
 from agent_service.cli.client import ApiError, Client, ServiceUnavailable
 from agent_service.cli.common import (
@@ -43,6 +43,7 @@ app = typer.Typer(
 app.add_typer(agents.app, name="agents")
 app.add_typer(tools.app, name="tools")
 app.add_typer(runs.app, name="runs")
+app.add_typer(collections.app, name="collections")
 app.command("chat")(chat)
 
 providers_app = typer.Typer(help="Provedores de modelo (LLM) suportados.")
@@ -192,6 +193,7 @@ _SHELL_HELP = """[bold]Comandos[/] (a `/` é opcional; qualquer comando da CLI f
   /agents              escolher um agente → testar, ver, editar, versões
   /chat <agente>       conversar direto com um agente
   /tools               escolher uma tool → ver e invocar
+  /collections         bases de conhecimento (RAG) dos agentes
   /runs                execuções recentes   ·  /runs show <run_id>
   /providers           provedores de modelo ·  /credentials  chaves cadastradas
   /health              diagnóstico
@@ -253,9 +255,13 @@ def hoist_global_flags(argv: list[str]) -> list[str]:
 
 
 def main() -> None:
-    for stream in (sys.stdout, sys.stderr):  # Windows: acento não pode quebrar num pipe cp1252
+    # Windows: sem isto, texto com acento quebra num pipe (stdout/stderr em cp1252)
+    # e chega corrompido quando vem por stdin (`type doc.txt | kuro collections add`).
+    for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
     app(args=hoist_global_flags(sys.argv[1:]), prog_name="kuro")
 
 

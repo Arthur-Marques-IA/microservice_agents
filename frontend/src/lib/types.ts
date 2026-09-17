@@ -128,6 +128,8 @@ export interface AgentDefinition {
   model_id: string | null;
   /** Credencial específica (`ModelCredential.id`) que este agente usa; `null` = a padrão do provedor. */
   model_credential_id: string | null;
+  /** Collection de documentos que o agente pode consultar; `null` = sem base de conhecimento. */
+  knowledge_collection: string | null;
   dependency_fields: DependencyField[];
   memory_backend: MemoryBackend;
   num_history_runs: number;
@@ -145,6 +147,7 @@ export interface AgentDefinitionInput {
   model_provider?: string | null;
   model_id?: string | null;
   model_credential_id?: string | null;
+  knowledge_collection?: string | null;
   dependency_fields?: DependencyFieldInput[];
   memory_backend?: MemoryBackend;
   num_history_runs?: number;
@@ -154,6 +157,19 @@ export interface PromptVersion {
   version: number;
   instructions: string[];
   created_at: string;
+}
+
+// -- Collections (bases de conhecimento) --------------------------------
+
+export interface Collection {
+  name: string;
+  label: string;
+  description: string | null;
+  is_seed: boolean;
+  /** Agentes com `knowledge_collection` apontando para cá. */
+  agents_using: string[];
+  created_at: string;
+  updated_at: string;
 }
 
 // -- Tools ------------------------------------------------------------

@@ -14,6 +14,7 @@ import { errorMessage, requestJson } from "@/lib/http";
 import { toDate } from "@/lib/format";
 import { useUserId } from "@/lib/use-local-storage";
 import type {
+  Collection,
   AgentDefinition,
   ModelCredential,
   ModelProviderSummary,
@@ -33,7 +34,7 @@ interface WorkspaceContextValue {
   /** Definições de agente carregadas pelo layout (server) — atualizadas via `router.refresh()`. */
   agents: AgentDefinition[];
   availableTools: ToolSummary[];
-  collections: string[];
+  collections: Collection[];
   /** URL do agent-service para exemplos de integração. */
   publicApiUrl: string;
   backendReachable: boolean;
@@ -79,7 +80,7 @@ export function WorkspaceProvider({
 }: {
   agents: AgentDefinition[];
   availableTools: ToolSummary[];
-  collections: string[];
+  collections: Collection[];
   publicApiUrl: string;
   backendReachable: boolean;
   observability: ObservabilityConfig;
