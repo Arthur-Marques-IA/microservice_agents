@@ -7,49 +7,49 @@
 :root {
   --background: #ffffff;
   --foreground: #0a0a0c;
-  --surface: #f8f8fa;
+  --surface: #f6f9fa;
   --card: #ffffff;
   --card-foreground: #0a0a0c;
   --popover: #ffffff;
   --popover-foreground: #0a0a0c;
-  --border: #e6e6ea;
-  --input: #dcdce2;
-  --muted: #f3f3f6;
-  --muted-foreground: #6b6b76;
-  --accent: #efeff3;
+  --border: #dfe7ea;
+  --input: #cfdde2;
+  --muted: #eef4f5;
+  --muted-foreground: #5b6b70;
+  --accent: #e6f1f3;
   --accent-foreground: #0a0a0c;
-  --primary: #4f46e5;
+  --primary: #0e7490;
   --primary-foreground: #ffffff;
-  --primary-soft: #eef0ff;
+  --primary-soft: #e0f3f6;
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
   --success: #047857;
   --warning: #b45309;
-  --ring: #6366f1;
+  --ring: #0891b2;
 }
 
 .dark {
   --background: #0c0c0f;
   --foreground: #ececf1;
-  --surface: #111115;
-  --card: #141419;
+  --surface: #101316;
+  --card: #12181b;
   --card-foreground: #ececf1;
-  --popover: #17171c;
+  --popover: #141c1f;
   --popover-foreground: #ececf1;
-  --border: #25252c;
-  --input: #2f2f37;
-  --muted: #1b1b21;
-  --muted-foreground: #9d9da8;
-  --accent: #222229;
+  --border: #223035;
+  --input: #293c42;
+  --muted: #172225;
+  --muted-foreground: #8fa3a8;
+  --accent: #1c2b30;
   --accent-foreground: #ececf1;
-  --primary: #6f6bf7;
-  --primary-foreground: #ffffff;
-  --primary-soft: #1d1b45;
+  --primary: #22d3ee;
+  --primary-foreground: #062a33;
+  --primary-soft: #113640;
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
   --success: #34d399;
   --warning: #fbbf24;
-  --ring: #818cf8;
+  --ring: #67e8f9;
 }
 
 @theme inline {
@@ -74,8 +74,8 @@
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-ring: var(--ring);
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: var(--font-app-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-app-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 @theme {
@@ -149,7 +149,7 @@
   body {
     background: var(--background);
     color: var(--foreground);
-    font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+    font-family: var(--font-app-sans), ui-sans-serif, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
 

@@ -148,14 +148,14 @@ export function Sidebar({
               title={collapsed ? item.label : undefined}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "flex h-9 items-center gap-2.5 rounded-lg text-sm transition-colors",
-                collapsed ? "w-8 justify-center" : "px-3",
+                "flex h-9 items-center gap-2.5 rounded-lg border-l-2 text-sm transition-colors",
+                collapsed ? "w-8 justify-center border-l-0" : "pl-2.5 pr-3",
                 active
-                  ? "bg-accent font-medium text-foreground"
-                  : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                  ? "border-primary bg-accent font-medium text-foreground"
+                  : "border-transparent text-muted-foreground hover:bg-accent/60 hover:text-foreground"
               )}
             >
-              <item.icon className="size-4 shrink-0" />
+              <item.icon className={cn("size-4 shrink-0", active && "text-primary")} />
               {!collapsed && (
                 <>
                   <span className="flex-1">{item.label}</span>

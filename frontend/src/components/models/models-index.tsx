@@ -61,6 +61,14 @@ export function ModelsIndex() {
               description="Não foi possível carregar os provedores. Verifique se o backend está rodando e recarregue a página."
             />
           </Card>
+        ) : modelProviders.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon={Cpu}
+              title="Nenhum provedor disponível"
+              description="O agent-service não retornou provedores de LLM. Verifique a configuração do backend."
+            />
+          </Card>
         ) : (
           <Card className="divide-y divide-border overflow-hidden">
             {modelProviders.map((provider) => (

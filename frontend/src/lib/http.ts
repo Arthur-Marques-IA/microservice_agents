@@ -17,7 +17,11 @@ export class ApiError extends Error {
 export async function readErrorMessage(response: Response, fallback: string): Promise<string> {
   const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
   const detail = body?.detail;
-  if (typeof detail === "string" && detail) return detail;
+  // FastAPI/Starlette ecoam o status HTTP como `detail` (ex. 404 -> "Not Found")
+  // quando não há handler de erro custom — isso não é uma mensagem para o usuário.
+  if (typeof detail === "string" && detail && detail.toLowerCase() !== response.statusText.toLowerCase()) {
+    return detail;
+  }
   if (Array.isArray(detail) && detail.length > 0) {
     return detail
       .map((item: { msg?: string; loc?: unknown[] }) => {
