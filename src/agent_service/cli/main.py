@@ -234,6 +234,11 @@ def shell(ctx: typer.Context) -> None:
             console.print()
         except KeyboardInterrupt:
             console.print()
+        except SystemExit as exc:  # um comando que chamou sys.exit não derruba o shell
+            err_console.print(f"[dim](comando encerrou com código {exc.code})[/]")
+        except Exception:  # noqa: BLE001 - erro inesperado não pode matar o shell em silêncio
+            err_console.print_exception(max_frames=5)
+            err_console.print("[red]erro inesperado no comando acima[/] — o shell continua; /sair para sair")
 
 
 GLOBAL_FLAGS = ("--json", "--no-input")

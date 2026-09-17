@@ -173,6 +173,11 @@ def chat(
     )
 
 
+def stdin_is_tty() -> bool:
+    """Indireção para o teste conseguir simular um terminal (o CliRunner troca sys.stdin)."""
+    return sys.stdin.isatty()
+
+
 def run_chat(
     st: State,
     agent_type: str,
@@ -184,7 +189,7 @@ def run_chat(
     user_id: str = "cli",
 ) -> None:
     definition = call(st, st.client.get_agent, agent_type)
-    if message is None and not sys.stdin.isatty():
+    if message is None and not stdin_is_tty():
         message = sys.stdin.read().strip()
         if not message:
             fail(st, "mensagem vazia: use -m ou envie texto por stdin", EXIT_USAGE)
@@ -231,6 +236,12 @@ def run_chat(
         if text == "/nova":
             session = session_for(agent_type, new=True)
             console.print(f"[dim]nova sessão: {session}[/]")
+            continue
+        if text.startswith("/"):  # não manda um comando errado como mensagem pro agente
+            err_console.print(
+                f"[yellow]aqui dentro do chat só valem /nova e /sair[/] — {text} é comando do shell `kuro`.\n"
+                "[dim]Saia com /sair e rode-o lá. Para enviar isso ao agente, escreva sem a barra.[/]"
+            )
             continue
         console.print("[bold magenta]agente>[/] ", end="")
         try:

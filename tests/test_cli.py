@@ -203,3 +203,20 @@ def test_edit_opens_editor_and_sends_only_changes(api, monkeypatch):
     result = _run("agents", "edit", "suporte")
     assert result.exit_code == 0, result.output
     assert json.loads(calls[-1].content) == {"instructions": ["Seja muito breve."]}
+
+
+def test_chat_repl_rejects_unknown_slash_command(api, monkeypatch):
+    """No REPL do chat, /providers não pode virar mensagem para o agente."""
+    from agent_service.cli import chat as chat_cli
+    from agent_service.cli.common import State
+
+    routes, calls = api
+    routes[("GET", "/agents/suporte")] = httpx.Response(200, json={**AGENT, "dependency_fields": []})
+    monkeypatch.setattr(State, "interactive", property(lambda self: True))
+    monkeypatch.setattr(chat_cli, "stdin_is_tty", lambda: True)
+    lines = iter(["/providers", "/sair"])
+    monkeypatch.setattr("rich.console.Console.input", lambda self, *a, **k: next(lines))
+
+    result = _run("chat", "suporte")
+    assert result.exit_code == 0, result.output + repr(result.exception)
+    assert [c.url.path for c in calls] == ["/agents/suporte"]  # nada foi enviado ao agente
