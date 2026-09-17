@@ -30,6 +30,7 @@ from openinference.instrumentation.agno import AgnoInstrumentor
 from opentelemetry import trace as otel_trace
 
 from agent_service.config import get_settings
+from agent_service.tools.context import set_dependencies
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,9 @@ def project_url() -> str | None:
 
 
 def _agent_events(agent: Agent, run: RunContext) -> AsyncIterator[RunOutputEvent]:
+    # Além de irem para o contexto do prompt, as dependências ficam disponíveis para
+    # as tools com parâmetros `source="dependency"` (ver tools/context.py).
+    set_dependencies(run.dependencies)
     return agent.arun(
         run.message,
         user_id=run.user_id,

@@ -1,6 +1,17 @@
 """Tools `kind="api"`: chamam uma API HTTP existente, descrita em JSON — sem
 escrever código. `config` diz o método, a URL (com placeholders `{nome}` para
-parâmetros de path), os parâmetros que o modelo preenche e a autenticação.
+parâmetros de path), os parâmetros e a autenticação.
+
+Cada parâmetro declara de onde vem o valor (`source`):
+
+- `"model"` (padrão): o modelo preenche — é o único que aparece no schema.
+- `"dependency"`: o servidor injeta `dependencies[<campo>]` da requisição
+  (`dependency: "cpf"`). O modelo não vê o parâmetro e portanto não pode
+  inventá-lo — é assim que um CPF chega na API sem passar pelo LLM.
+- `"const"`: valor fixo em `value`.
+
+`required` é cobrado aqui, antes da chamada HTTP: faltando um obrigatório, a
+tool devolve um erro explicando o que faltou em vez de chamar a API pela metade.
 
 `build_api_function` monta um `agno.tools.function.Function` com `parameters`
 (o JSON Schema que o modelo vê) e `entrypoint` explícitos — o Agno chama
@@ -14,10 +25,14 @@ from typing import Any, Literal
 import httpx
 from agno.tools.function import Function
 
+from agent_service.tools.context import get_dependencies
+
 Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 ParamLocation = Literal["query", "path", "header", "body"]
 ParamType = Literal["string", "integer", "number", "boolean", "object", "array"]
 AuthType = Literal["none", "bearer", "api_key", "basic"]
+ParamSource = Literal["model", "dependency", "const"]
+_SOURCES: set[str] = {"model", "dependency", "const"}
 
 _JSON_SCHEMA_TYPE: dict[ParamType, str] = {
     "string": "string",
@@ -68,6 +83,18 @@ def validate_api_config(config: dict[str, Any]) -> dict[str, Any]:
         if location == "path":
             path_names.add(name)
 
+        source = p.get("source", "model")
+        if source not in _SOURCES:
+            raise ApiToolConfigError(f"source inválido em {name!r}: {source!r} (use {sorted(_SOURCES)})")
+        if source == "dependency":
+            dependency = p.get("dependency")
+            if not isinstance(dependency, str) or not dependency.isidentifier():
+                raise ApiToolConfigError(f"{name!r}: source='dependency' exige `dependency` com o nome do campo")
+        elif source == "const" and "value" not in p:
+            raise ApiToolConfigError(f"{name!r}: source='const' exige `value`")
+        if location == "header" and name.lower() == "authorization":
+            raise ApiToolConfigError(f"{name!r}: um parâmetro não pode ser o header Authorization (use auth)")
+
     for placeholder in _format_placeholders(url):
         if placeholder not in path_names:
             raise ApiToolConfigError(
@@ -78,6 +105,10 @@ def validate_api_config(config: dict[str, Any]) -> dict[str, Any]:
     auth_type = auth.get("type", "none")
     if auth_type not in ("none", "bearer", "api_key", "basic"):
         raise ApiToolConfigError(f"auth.type inválido: {auth_type!r}")
+    if auth_type == "api_key" and isinstance(auth.get("header"), str):
+        header_params = {str(p["name"]).lower() for p in parameters if p.get("location") == "header"}
+        if auth["header"].lower() in header_params:
+            raise ApiToolConfigError(f"um parâmetro não pode usar o header de autenticação {auth['header']!r}")
     if auth_type == "bearer" and not auth.get("token"):
         raise ApiToolConfigError("auth.token é obrigatório para auth.type='bearer'")
     if auth_type == "api_key" and not (auth.get("header") and auth.get("value")):
@@ -110,9 +141,13 @@ def _format_placeholders(url: str) -> set[str]:
 
 
 def _parameters_schema(parameters: list[dict[str, Any]]) -> dict[str, Any]:
+    """Só os parâmetros `source="model"`: o que vem de dependency/const não é
+    assunto do modelo e fica fora do schema, para ele não tentar preencher."""
     properties = {}
     required = []
     for p in parameters:
+        if p.get("source", "model") != "model":
+            continue
         properties[p["name"]] = {
             "type": _JSON_SCHEMA_TYPE[p["type"]],
             "description": p.get("description") or "",
@@ -120,6 +155,56 @@ def _parameters_schema(parameters: list[dict[str, Any]]) -> dict[str, Any]:
         if p.get("required"):
             required.append(p["name"])
     return {"type": "object", "properties": properties, "required": required}
+
+
+def required_dependencies(config: dict[str, Any]) -> list[str]:
+    """Campos de `dependencies` que esta tool exige — o agente que a usa precisa
+    declará-los em `dependency_fields` (validado em `api/agents_routes.py`)."""
+    return sorted(
+        {
+            p["dependency"]
+            for p in config.get("parameters") or []
+            if p.get("source") == "dependency" and p.get("required") and isinstance(p.get("dependency"), str)
+        }
+    )
+
+
+def _resolve_arguments(
+    parameters: list[dict[str, Any]], model_arguments: dict[str, Any], dependencies: dict[str, Any]
+) -> tuple[dict[str, Any], str | None]:
+    """Junta o que o modelo preencheu com o que vem de dependency/const e cobra os
+    obrigatórios. Devolve (argumentos, erro); `erro` preenchido vira a resposta da tool."""
+    resolved: dict[str, Any] = {}
+    missing_model: list[str] = []
+    missing_deps: list[str] = []
+    for p in parameters:
+        name = p["name"]
+        source = p.get("source", "model")
+        if source == "const":
+            value = p.get("value")
+        elif source == "dependency":
+            value = dependencies.get(p["dependency"])
+            if value is None and p.get("required"):
+                missing_deps.append(p["dependency"])
+        else:
+            value = model_arguments.get(name)
+            if value is None and p.get("required"):
+                missing_model.append(name)
+        if value is not None:
+            resolved[name] = value
+
+    if missing_deps:
+        campos = ", ".join(f"dependencies.{d}" for d in missing_deps)
+        return resolved, (
+            f"Erro de configuração: esta tool precisa de {campos}, que não veio na requisição do "
+            "/chat. Avise que o dado não está disponível em vez de inventá-lo."
+        )
+    if missing_model:
+        return resolved, (
+            f"Erro: faltam parâmetros obrigatórios: {', '.join(missing_model)}. "
+            "Chame a tool de novo preenchendo-os, ou peça os valores ao usuário."
+        )
+    return resolved, None
 
 
 def _apply_auth(headers: dict[str, str], params: dict[str, Any], auth: dict[str, Any]) -> None:
@@ -132,7 +217,11 @@ def _apply_auth(headers: dict[str, str], params: dict[str, Any], auth: dict[str,
         pass  # aplicado via httpx.BasicAuth na chamada, não num header manual
 
 
-def _call_api(config: dict[str, Any], arguments: dict[str, Any]) -> str:
+def _call_api(config: dict[str, Any], model_arguments: dict[str, Any]) -> str:
+    arguments, error = _resolve_arguments(config["parameters"], model_arguments, get_dependencies())
+    if error is not None:
+        return error
+
     method = config["method"]
     url = config["url"]
     headers = dict(config.get("headers") or {})

@@ -29,6 +29,7 @@ from agent_service.config import get_settings
 from agent_service.tools import registry, store
 from agent_service.tools.api_tool import ApiToolConfigError, validate_api_config
 from agent_service.tools.catalog import BuiltinConfigError, list_builtin_catalog, validate_builtin_config
+from agent_service.tools.context import dependencies_scope
 from agent_service.tools.python_tool import PythonToolConfigError, validate_python_config
 from agent_service.tools.registry import ToolBuildError
 
@@ -166,6 +167,10 @@ class BuiltinCatalogEntryOut(BaseModel):
 
 class ToolInvokeIn(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
+    dependencies: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Simula o `dependencies` do /chat para parâmetros com source='dependency'.",
+    )
     function_name: str | None = Field(
         default=None, description="Obrigatório para kind='builtin' — qual função da toolkit chamar."
     )
@@ -314,21 +319,24 @@ def invoke_tool(tool_name: str, body: ToolInvokeIn) -> dict[str, Any]:
         return ToolInvokeOut(ok=False, error=str(exc)).model_dump()
 
     try:
-        if row["kind"] == "api":
-            result = built.entrypoint(**body.arguments)
-        elif row["kind"] == "python":
-            result = built(**body.arguments)
-        else:  # builtin
-            functions = getattr(built, "functions", {})
-            if not body.function_name:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Informe function_name — uma de {sorted(functions.keys())}",
-                )
-            fn = functions.get(body.function_name)
-            if fn is None:
-                raise HTTPException(status_code=404, detail=f"Função {body.function_name!r} não existe em {tool_name!r}")
-            result = fn.entrypoint(**body.arguments)
+        with dependencies_scope(body.dependencies):
+            if row["kind"] == "api":
+                result = built.entrypoint(**body.arguments)
+            elif row["kind"] == "python":
+                result = built(**body.arguments)
+            else:  # builtin
+                functions = getattr(built, "functions", {})
+                if not body.function_name:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Informe function_name — uma de {sorted(functions.keys())}",
+                    )
+                fn = functions.get(body.function_name)
+                if fn is None:
+                    raise HTTPException(
+                        status_code=404, detail=f"Função {body.function_name!r} não existe em {tool_name!r}"
+                    )
+                result = fn.entrypoint(**body.arguments)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001 - erro de execução da tool, não do endpoint

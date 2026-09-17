@@ -28,7 +28,9 @@ from agent_service.agents.store import (
     list_prompt_versions,
     update_definition,
 )
+from agent_service.tools.api_tool import required_dependencies
 from agent_service.tools.registry import tool_exists
+from agent_service.tools.store import get_tool
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -128,13 +130,29 @@ class PromptVersionOut(BaseModel):
     created_at: datetime
 
 
-def _validate_tools(names: list[str]) -> None:
-    """Só confere que os nomes existem em `tool_definitions` — construir de
-    fato (instanciar toolkit, compilar código Python...) fica pra hora do
-    `/chat` (`agents/registry.py`), não pra cada salvamento do agente."""
+def _validate_tools(names: list[str], declared_dependencies: set[str]) -> None:
+    """Confere que os nomes existem em `tool_definitions` e que o agente declara
+    as dependências que as tools exigem (parâmetros `source="dependency"`
+    obrigatórios). Construir a tool de fato fica pra hora do `/chat`
+    (`agents/registry.py`), não pra cada salvamento do agente."""
     unknown = [n for n in names if not tool_exists(n)]
     if unknown:
         raise HTTPException(status_code=422, detail=f"Tools desconhecidas: {unknown}")
+
+    faltando: dict[str, list[str]] = {}
+    for name in names:
+        row = get_tool(name)
+        if row is None or row["kind"] != "api":
+            continue
+        ausentes = [d for d in required_dependencies(row["config"] or {}) if d not in declared_dependencies]
+        if ausentes:
+            faltando[name] = ausentes
+    if faltando:
+        detalhe = "; ".join(f"{tool} precisa de {', '.join(deps)}" for tool, deps in faltando.items())
+        raise HTTPException(
+            status_code=422,
+            detail=f"Declare estes campos em dependency_fields — {detalhe}",
+        )
 
 
 @router.get("", response_model=list[AgentDefinitionOut])
@@ -146,9 +164,9 @@ def list_agents() -> list[dict[str, Any]]:
 def create_agent(body: AgentDefinitionIn) -> dict[str, Any]:
     if get_definition(body.agent_type) is not None:
         raise HTTPException(status_code=409, detail=f"Agente {body.agent_type!r} já existe")
-    _validate_tools(body.tools)
     payload = body.model_dump()
     payload["dependency_fields"] = _normalize_dependency_fields(body.dependency_fields)
+    _validate_tools(body.tools, {f["name"] for f in payload["dependency_fields"]})
     return create_definition(**payload)
 
 
@@ -162,11 +180,20 @@ def get_agent_definition(agent_type: str) -> dict[str, Any]:
 
 @router.put("/{agent_type}", response_model=AgentDefinitionOut)
 def update_agent(agent_type: str, body: AgentDefinitionUpdate) -> dict[str, Any]:
-    if body.tools is not None:
-        _validate_tools(body.tools)
+    current = get_definition(agent_type)
+    if current is None:
+        raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
+
     payload = body.model_dump(exclude_unset=True)
     if body.dependency_fields is not None:
         payload["dependency_fields"] = _normalize_dependency_fields(body.dependency_fields)
+    # Valida contra o estado final: tools e dependency_fields podem vir juntos ou só um deles.
+    if body.tools is not None or body.dependency_fields is not None:
+        campos = payload.get("dependency_fields", current["dependency_fields"] or [])
+        _validate_tools(
+            body.tools if body.tools is not None else (current["tools"] or []),
+            {f["name"] for f in campos},
+        )
     try:
         updated = update_definition(agent_type, **payload)
     except DefinitionNotFoundError as exc:
