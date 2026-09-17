@@ -59,7 +59,7 @@ def _build(row: dict[str, Any]) -> Any:
     raise ToolBuildError(f"Tool {row['tool_name']!r}: kind desconhecido {kind!r}")
 
 
-def _resolve_one(name: str) -> Any:
+def _resolve_one(name: str) -> tuple[Any, datetime]:
     row = store.get_tool(name)
     if row is None:
         raise UnknownToolError(f"Tool desconhecida: {name!r}")
@@ -68,15 +68,23 @@ def _resolve_one(name: str) -> Any:
 
     cached = _cache.get(name)
     if cached is not None and cached[1] == row["updated_at"]:
-        return cached[0]
+        return cached[0], row["updated_at"]
 
     built = _build(row)
     _cache[name] = (built, row["updated_at"])
-    return built
+    return built, row["updated_at"]
 
 
 def resolve_tools(names: list[str]) -> list[Any]:
-    return [_resolve_one(name) for name in names]
+    return [built for built, _ in (_resolve_one(name) for name in names)]
+
+
+def resolve_tools_with_stamp(names: list[str]) -> tuple[list[Any], tuple[datetime, ...]]:
+    """Como `resolve_tools`, mas devolve também o `updated_at` de cada tool: é o
+    que permite ao cache de agentes perceber que uma tool mudou (o schema que o
+    modelo vê vive dentro do `Function`, que ficou preso no `Agent` construído)."""
+    resolved = [_resolve_one(name) for name in names]
+    return [built for built, _ in resolved], tuple(stamp for _, stamp in resolved)
 
 
 def tool_exists(name: str) -> bool:

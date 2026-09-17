@@ -3,6 +3,7 @@ ela cria com o agente: o que o modelo vê, o que o servidor injeta a partir de
 `dependencies`, e a recusa de salvar um agente que não declara o que a tool exige.
 """
 
+import time
 from unittest.mock import patch
 
 import pytest
@@ -154,5 +155,44 @@ def test_agent_with_the_declared_dependency_is_accepted_and_kept_consistent(fich
 
         # Tirar a tool, por outro lado, libera o campo.
         update_agent("agente_ficha", AgentDefinitionUpdate(tools=[], dependency_fields=[]))
+    finally:
+        delete_agent("agente_ficha")
+
+
+def test_editing_a_tool_reaches_agents_already_built(ficha_tool):
+    """O schema que o modelo vê mora dentro do Function preso no Agent construído."""
+    from agent_service.agents.registry import get_agent
+    from agent_service.api.tools_routes import ToolUpdateIn, update_tool
+
+    create_agent(_agent_body(dependency_fields=[{"name": "cpf", "type": "string", "required": True}]))
+    try:
+        antes = get_agent("agente_ficha").tools[0].parameters["properties"]
+        assert antes.keys() == {"assunto"}
+
+        novo = {**CONFIG, "parameters": [*CONFIG["parameters"],
+                                         {"name": "canal", "type": "string", "location": "query"}]}
+        # A invalidação compara `updated_at`, e no SQLite dos testes ele tem
+        # resolução de 1 segundo (no Postgres, microssegundos).
+        time.sleep(1.1)
+        update_tool("ficha_cliente", ToolUpdateIn(config=novo))
+
+        depois = get_agent("agente_ficha").tools[0].parameters["properties"]
+        assert depois.keys() == {"assunto", "canal"}
+    finally:
+        delete_agent("agente_ficha")
+
+
+def test_tool_cannot_start_requiring_a_dependency_its_agents_do_not_declare(ficha_tool):
+    from agent_service.api.tools_routes import ToolUpdateIn, update_tool
+
+    create_agent(_agent_body(dependency_fields=[{"name": "cpf", "type": "string", "required": True}]))
+    try:
+        novo = {**CONFIG, "parameters": [*CONFIG["parameters"],
+                                         {"name": "conta", "type": "string", "location": "query", "required": True,
+                                          "source": "dependency", "dependency": "conta_id"}]}
+        with pytest.raises(HTTPException) as exc:
+            update_tool("ficha_cliente", ToolUpdateIn(config=novo))
+        assert exc.value.status_code == 409
+        assert "agente_ficha" in exc.value.detail and "conta_id" in exc.value.detail
     finally:
         delete_agent("agente_ficha")

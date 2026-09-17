@@ -15,27 +15,29 @@ from agno.agent import Agent
 
 from agent_service.agents.base import build_agent
 from agent_service.agents.store import get_definition, list_definitions
-from agent_service.tools.registry import resolve_tools
+from agent_service.tools.store import get_tool as get_tool_row
+from agent_service.tools.registry import resolve_tools_with_stamp
 
-_cache: dict[str, tuple[Agent, datetime]] = {}
+_cache: dict[str, tuple[Agent, datetime, tuple[datetime, ...]]] = {}
 
 
 class UnknownAgentTypeError(ValueError):
     pass
 
 
-def _build_from_definition(definition: dict[str, Any]) -> Agent:
+def _build_from_definition(definition: dict[str, Any]) -> tuple[Agent, tuple[datetime, ...]]:
+    tools, tools_stamp = resolve_tools_with_stamp(definition["tools"] or [])
     return build_agent(
         agent_id=definition["agent_type"],
         name=definition["name"],
         instructions=definition["instructions"],
-        tools=resolve_tools(definition["tools"] or []),
+        tools=tools,
         model_provider=definition["model_provider"],
         model_id=definition["model_id"],
         model_credential_id=definition.get("model_credential_id"),
         num_history_runs=definition["num_history_runs"],
         memory_backend=definition["memory_backend"],
-    )
+    ), tools_stamp
 
 
 def get_agent_with_definition(agent_type: str) -> tuple[Agent, dict[str, Any]]:
@@ -49,11 +51,19 @@ def get_agent_with_definition(agent_type: str) -> tuple[Agent, dict[str, Any]]:
 
     cached = _cache.get(agent_type)
     if cached is not None and cached[1] == definition["updated_at"]:
-        return cached[0], definition
+        # A definição não mudou, mas uma tool dela pode ter mudado: o `Function`
+        # com o schema antigo está dentro do `Agent` já construído.
+        if cached[2] == _tools_stamp(definition):
+            return cached[0], definition
 
-    agent = _build_from_definition(definition)
-    _cache[agent_type] = (agent, definition["updated_at"])
+    agent, tools_stamp = _build_from_definition(definition)
+    _cache[agent_type] = (agent, definition["updated_at"], tools_stamp)
     return agent, definition
+
+
+def _tools_stamp(definition: dict[str, Any]) -> tuple[datetime, ...]:
+    rows = (get_tool_row(name) for name in definition["tools"] or [])
+    return tuple(row["updated_at"] for row in rows if row is not None)
 
 
 def get_agent(agent_type: str) -> Agent:
@@ -70,4 +80,4 @@ def all_agents() -> list[Agent]:
     boot funcionam normalmente via `get_agent` (usado por `/chat`), só não
     aparecem no playground do AgentOS até o próximo restart.
     """
-    return [_build_from_definition(d) for d in list_definitions()]
+    return [_build_from_definition(d)[0] for d in list_definitions()]

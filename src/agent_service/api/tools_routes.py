@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field, model_validator
 from agent_service.agents.store import list_definitions as list_agent_definitions
 from agent_service.config import get_settings
 from agent_service.tools import registry, store
-from agent_service.tools.api_tool import ApiToolConfigError, validate_api_config
+from agent_service.tools.api_tool import ApiToolConfigError, required_dependencies, validate_api_config
 from agent_service.tools.catalog import BuiltinConfigError, list_builtin_catalog, validate_builtin_config
 from agent_service.tools.context import dependencies_scope
 from agent_service.tools.python_tool import PythonToolConfigError, validate_python_config
@@ -272,6 +272,8 @@ def update_tool(tool_name: str, body: ToolUpdateIn) -> dict[str, Any]:
     if body.config is not None:
         merged = _unmask_config(current["kind"], body.config, current["config"])
         config = _validate_config(current["kind"], merged)
+        if current["kind"] == "api":
+            _check_agents_declare_dependencies(tool_name, config)
 
     updated = store.update_tool(
         tool_name,
@@ -281,6 +283,26 @@ def update_tool(tool_name: str, body: ToolUpdateIn) -> dict[str, Any]:
         enabled=body.enabled,
     )
     return _row_out(updated)
+
+
+def _check_agents_declare_dependencies(tool_name: str, config: dict[str, Any]) -> None:
+    """Uma dependência nova e obrigatória quebraria, em silêncio, todo agente que
+    já usa esta tool sem declarar o campo — mesma ideia da trava do delete."""
+    exigidas = set(required_dependencies(config))
+    if not exigidas:
+        return
+    faltando = {
+        d["agent_type"]: sorted(exigidas - {f["name"] for f in d["dependency_fields"] or []})
+        for d in list_agent_definitions()
+        if tool_name in (d["tools"] or [])
+    }
+    faltando = {agente: campos for agente, campos in faltando.items() if campos}
+    if faltando:
+        detalhe = "; ".join(f"{agente} não declara {', '.join(campos)}" for agente, campos in faltando.items())
+        raise HTTPException(
+            status_code=409,
+            detail=f"Esta mudança exige dependencies que agentes em uso não declaram — {detalhe}",
+        )
 
 
 @router.delete("/{tool_name}", status_code=204)
