@@ -192,6 +192,7 @@ def test_credential(ctx: typer.Context, credential_id: str) -> None:
 _SHELL_HELP = """[bold]Comandos[/] (a `/` é opcional; qualquer comando da CLI funciona aqui)
   /agents              escolher um agente → testar, ver, editar, versões
   /chat <agente>       conversar direto com um agente
+  /agents integrate <agente>   como chamar o agente de outro módulo
   /tools               escolher uma tool → ver e invocar
   /collections         bases de conhecimento (RAG) dos agentes
   /runs                execuções recentes   ·  /runs show <run_id>

@@ -77,6 +77,12 @@ class Client:
     def agent_versions(self, agent_type: str) -> list[dict[str, Any]]:
         return self._request("GET", f"/agents/{agent_type}/versions")
 
+    def integration(self, agent_type: str) -> dict[str, Any]:
+        """Contrato pronto pra quem vai chamar o agente de outro módulo."""
+        return self._request(
+            "GET", f"/agents/{agent_type}/integration", params={"base_url": self.base_url}
+        )
+
     # -- chat ----------------------------------------------------------------
 
     def chat_stream(self, body: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:

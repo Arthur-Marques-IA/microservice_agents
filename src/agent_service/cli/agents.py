@@ -313,3 +313,34 @@ def _agent_menu(st: State, agent_type: str) -> None:
                 return
         except typer.Exit:
             continue  # erro já impresso; segue no menu
+
+
+@app.command("integrate")
+def integrate(ctx: typer.Context, agent_type: str) -> None:
+    """Como chamar este agente de outro módulo: endpoint, cURL e dependências."""
+    st = state(ctx)
+    emit(st, call(st, st.client.integration, agent_type), _render_integration)
+
+
+def _render_integration(c: dict[str, Any]) -> None:
+    console.print(f"[bold]{c['name']}[/] [dim]({c['agent_type']} · prompt v{c['prompt_version']})[/]")
+    console.print(f"POST {c['chat_url']}   [dim]streaming (SSE): POST {c['stream_url']}[/]")
+
+    if c["dependencies"]:
+        table = Table(show_edge=False, header_style="bold", title="dependencies", title_justify="left")
+        for column in ("campo", "tipo", "obrigatório", "exigido por", "descrição"):
+            table.add_column(column)
+        for d in c["dependencies"]:
+            table.add_row(
+                f"[cyan]{d['name']}[/]",
+                d["type"],
+                "sim" if d["required"] else "não",
+                ", ".join(d["required_by_tools"]) or "—",
+                d["description"] or d["label"],
+            )
+        console.print(table)
+
+    console.print("\n[bold]exemplo[/]")
+    console.print(c["curl"], highlight=False)
+    for aviso in c["warnings"]:
+        console.print(f"[yellow]atenção:[/] {aviso}")

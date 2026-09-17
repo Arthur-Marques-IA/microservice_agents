@@ -15,6 +15,7 @@ from agent_service.agents.seed import seed_default_agents
 from agent_service.agents.store import init_store
 from agent_service.api.agents_routes import router as agents_router
 from agent_service.api.collections_routes import router as collections_router
+from agent_service.api.integration_routes import router as integration_router
 from agent_service.api.model_credentials_routes import router as model_credentials_router
 from agent_service.api.model_providers_routes import router as model_providers_router
 from agent_service.api.observability_routes import router as observability_router
@@ -46,6 +47,7 @@ base_app = FastAPI(title=settings.app_name)
 base_app.include_router(router)
 base_app.include_router(agents_router)
 base_app.include_router(collections_router)
+base_app.include_router(integration_router)
 base_app.include_router(tools_router)
 base_app.include_router(observability_router)
 base_app.include_router(model_providers_router)
