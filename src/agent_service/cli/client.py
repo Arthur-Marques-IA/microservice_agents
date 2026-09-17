@@ -121,6 +121,15 @@ class Client:
     def list_credentials(self) -> list[dict[str, Any]]:
         return self._request("GET", "/model-credentials")
 
+    def create_credential(self, body: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/model-credentials", json=body)
+
+    def update_credential(self, credential_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        return self._request("PUT", f"/model-credentials/{credential_id}", json=body)
+
+    def delete_credential(self, credential_id: str) -> None:
+        self._request("DELETE", f"/model-credentials/{credential_id}")
+
     def test_credential(self, credential_id: str) -> dict[str, Any]:
         """Testa a chave salva (sem gastar tokens) e grava o resultado."""
         return self._request("POST", f"/model-credentials/{credential_id}/test", json={})

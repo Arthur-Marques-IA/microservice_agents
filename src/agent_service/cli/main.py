@@ -5,6 +5,7 @@
 é opcional), então tudo que funciona no shell funciona em um script.
 """
 
+import os
 import shlex
 import sys
 from typing import Any
@@ -18,6 +19,7 @@ from agent_service.cli.chat import chat
 from agent_service.cli.client import ApiError, Client, ServiceUnavailable
 from agent_service.cli.common import (
     EXIT_FAILED,
+    EXIT_USAGE,
     EXIT_UNAVAILABLE,
     State,
     call,
@@ -185,6 +187,103 @@ def test_credential(ctx: typer.Context, credential_id: str) -> None:
         fail(st, result.get("message") or "teste da credencial falhou", EXIT_FAILED)
     if not st.json_mode:
         console.print(f"[green]✓[/] credencial {credential_id} ok")
+
+
+def _read_api_key(st: State, *, from_env: str | None, from_stdin: bool, prompt: str) -> str:
+    """A chave nunca entra como argumento de comando: ela ficaria no histórico do
+    shell e na lista de processos. Só por variável de ambiente, stdin ou prompt oculto."""
+    if from_env:
+        value = os.environ.get(from_env)
+        if not value:
+            fail(st, f"a variável de ambiente {from_env} está vazia", EXIT_USAGE)
+        return value.strip()
+    if from_stdin or not st.interactive:
+        value = "" if sys.stdin.isatty() else sys.stdin.read()
+        if not value.strip():
+            fail(
+                st,
+                "sem chave: use --api-key-env NOME_DA_VARIAVEL ou envie por stdin "
+                "(a chave não pode ir como argumento)",
+                EXIT_USAGE,
+            )
+        return value.strip()
+    return typer.prompt(prompt, hide_input=True).strip()
+
+
+@credentials_app.command("add")
+def add_credential(
+    ctx: typer.Context,
+    provider: str = typer.Option(..., "--provider", "-p", help="google, openai, anthropic, ollama..."),
+    label: str = typer.Option(..., "--label", "-l", help="Apelido — ex.: 'Produção', 'Cliente X'."),
+    base_url: str | None = typer.Option(None, "--base-url", help="Só para provedores que aceitam endpoint próprio."),
+    api_key_env: str | None = typer.Option(
+        None, "--api-key-env", help="Nome da variável de ambiente com a chave (não o valor dela)."
+    ),
+    api_key_stdin: bool = typer.Option(False, "--api-key-stdin", help="Lê a chave do stdin."),
+    disabled: bool = typer.Option(False, "--disabled", help="Cadastra sem habilitar."),
+) -> None:
+    """Cadastra uma chave de modelo. A chave é lida por prompt oculto, stdin ou variável de ambiente."""
+    st = state(ctx)
+    api_key = _read_api_key(
+        st, from_env=api_key_env, from_stdin=api_key_stdin, prompt=f"Chave de API de {provider}"
+    )
+    created = call(
+        st,
+        st.client.create_credential,
+        {"provider": provider, "label": label, "api_key": api_key, "base_url": base_url, "enabled": not disabled},
+    )
+    emit(st, created, lambda c: console.print(f"[green]✓[/] credencial {c['id']} criada ({c['key_hint']})"))
+
+
+@credentials_app.command("edit")
+def edit_credential(
+    ctx: typer.Context,
+    credential_id: str,
+    label: str | None = typer.Option(None, "--label", "-l"),
+    base_url: str | None = typer.Option(None, "--base-url"),
+    enable: bool = typer.Option(False, "--enable", help="Habilita a credencial."),
+    disable: bool = typer.Option(False, "--disable", help="Desabilita (agentes fixados nela param de responder)."),
+    rotate_key: bool = typer.Option(False, "--rotate-key", help="Substitui a chave (prompt oculto ou stdin)."),
+    api_key_env: str | None = typer.Option(None, "--api-key-env", help="Variável de ambiente com a chave nova."),
+) -> None:
+    """Muda apelido, endpoint, estado ou a chave de uma credencial."""
+    st = state(ctx)
+    if enable and disable:
+        fail(st, "--enable e --disable são mutuamente exclusivos", EXIT_USAGE)
+
+    body: dict[str, Any] = {}
+    if label is not None:
+        body["label"] = label
+    if base_url is not None:
+        body["base_url"] = base_url
+    if enable or disable:
+        body["enabled"] = enable
+    if rotate_key or api_key_env:
+        body["api_key"] = _read_api_key(
+            st, from_env=api_key_env, from_stdin=False, prompt="Chave de API nova"
+        )
+    if not body:
+        fail(st, "nada a alterar: use --label, --base-url, --enable/--disable ou --rotate-key", EXIT_USAGE)
+
+    updated = call(st, st.client.update_credential, credential_id, body)
+    emit(st, updated, lambda c: console.print(f"[green]✓[/] credencial {c['id']} atualizada"))
+
+
+@credentials_app.command("delete")
+def delete_credential(
+    ctx: typer.Context,
+    credential_id: str,
+    yes: bool = typer.Option(False, "--yes", "-y", help="Não pede confirmação (obrigatório sem TTY)."),
+) -> None:
+    """Remove uma credencial (agentes fixados nela voltam para a padrão do provedor)."""
+    st = state(ctx)
+    if not yes:
+        if not st.interactive:
+            fail(st, "confirme com --yes para remover sem TTY", EXIT_USAGE)
+        if not typer.confirm(f"Remover a credencial {credential_id}?"):
+            raise typer.Exit()
+    call(st, st.client.delete_credential, credential_id)
+    emit(st, {"deleted": credential_id}, lambda _: console.print(f"[green]✓[/] credencial removida"))
 
 
 # -- shell -----------------------------------------------------------------------

@@ -220,3 +220,40 @@ def test_chat_repl_rejects_unknown_slash_command(api, monkeypatch):
     result = _run("chat", "suporte")
     assert result.exit_code == 0, result.output + repr(result.exception)
     assert [c.url.path for c in calls] == ["/agents/suporte"]  # nada foi enviado ao agente
+
+
+CREDENTIAL = {
+    "id": "c1", "provider": "google", "provider_label": "Google", "label": "Prod",
+    "configured": True, "key_hint": "…7890", "base_url": None, "enabled": True,
+    "last_tested_at": None, "last_test_ok": None, "last_test_message": None,
+    "agents_using": [], "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+}
+
+
+def test_credential_add_reads_key_from_env_never_from_argv(api, monkeypatch):
+    routes, calls = api
+    routes[("POST", "/model-credentials")] = httpx.Response(201, json=CREDENTIAL)
+    monkeypatch.setenv("MINHA_CHAVE", "sk-secreta")
+
+    result = _run("credentials", "add", "-p", "google", "-l", "Prod", "--api-key-env", "MINHA_CHAVE")
+    assert result.exit_code == 0, result.output
+    assert json.loads(calls[-1].content)["api_key"] == "sk-secreta"
+    # A CLI não expõe uma opção que colocaria a chave no histórico do shell.
+    assert "--api-key " not in _run("credentials", "add", "--help").output
+
+
+def test_credential_add_without_key_source_fails_when_not_interactive(api):
+    result = _run("credentials", "add", "-p", "google", "-l", "Prod")
+    assert result.exit_code == 2
+    assert "--api-key-env" in result.output + (result.stderr or "")
+
+
+def test_credential_edit_sends_only_what_changed(api):
+    routes, calls = api
+    routes[("PUT", "/model-credentials/c1")] = httpx.Response(200, json=CREDENTIAL)
+    assert _run("credentials", "edit", "c1", "--disable").exit_code == 0
+    assert json.loads(calls[-1].content) == {"enabled": False}
+
+
+def test_credential_edit_without_changes_is_usage_error(api):
+    assert _run("credentials", "edit", "c1").exit_code == 2
