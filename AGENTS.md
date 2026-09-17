@@ -47,12 +47,37 @@ kuro --json runs list --agent suporte -n 5
 kuro --json runs show <run_id>                  # mensagem, resposta, spans (LLM/tools), scores
 kuro --json runs score <run_id> 1 --comment "resposta correta"
 
-# Modelos: provedores suportados e credenciais (chaves são criadas pelo console web)
+# Integração: como outro módulo chama este agente (endpoint, cURL, dependências obrigatórias)
+kuro --json agents integrate suporte
+
+# Bases de conhecimento (RAG) — o agente consulta a que estiver em knowledge_collection
+kuro --json collections list
+kuro --json collections create manuais --label "Manuais do produto"
+cat manual.txt | kuro --json collections add manuais --title "Manual v2"
+kuro --json collections search manuais "prazo de garantia"   # o mesmo que o agente enxerga
+kuro --json agents set suporte knowledge_collection=manuais
+
+# Modelos: provedores suportados e credenciais
 kuro --json providers list
 kuro --json credentials list --provider google
 kuro --json credentials test <credential_id>    # valida a chave sem gastar tokens; sai com 1 se falhar
+KEY=... kuro --json credentials add -p google -l "Produção" --api-key-env KEY
 ```
 
+## Tools: de onde vem cada parâmetro
+
+Cada parâmetro de uma tool `kind="api"` declara um `source`:
+
+- `"model"` (padrão): o modelo preenche — é o único que aparece no schema dele.
+- `"dependency"`: o servidor injeta `dependencies[<campo>]` da requisição do `/chat`.
+  Use isto para dado que **não pode passar pelo modelo** (CPF, id de conta): ele nem
+  vê o parâmetro. O agente é obrigado a declarar o campo em `dependency_fields`.
+- `"const"`: valor fixo em `value`.
+
+`required` é cobrado antes da chamada HTTP; faltando um, a tool devolve o que faltou.
+Para testar sem montar agente: `kuro tools invoke <tool> --args-json '{"x": 1}'`
+(a rota aceita também `dependencies`, via `POST /tools/{nome}/invoke`).
+
 O formato do `apply` é o mesmo do `POST /agents`: `agent_type`, `name`, `instructions`, `tools`,
-`model_provider`, `model_id`, `model_credential_id`, `dependency_fields`, `memory_backend` e `num_history_runs`.
-Editar `instructions` gera uma nova versão do prompt.
+`model_provider`, `model_id`, `model_credential_id`, `knowledge_collection`, `dependency_fields`,
+`memory_backend` e `num_history_runs`. Editar `instructions` gera uma nova versão do prompt.

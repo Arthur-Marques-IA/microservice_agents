@@ -185,8 +185,17 @@ tabela só (`tool_definitions`), três formatos (`kind`):
 | `kind` | O que é | Onde mora a config |
 |---|---|---|
 | `builtin` | Uma toolkit padrão do Agno, do catálogo curado em `tools/catalog.py` (busca na web, calculadora, Hacker News, e-mail, arquivos...) | `{"builtin_id": "...", "params": {...}}` |
-| `api` | Chama uma API HTTP existente, descrita em JSON — sem escrever código | método, URL (com `{param}` de path), parâmetros que o modelo preenche, autenticação |
+| `api` | Chama uma API HTTP existente, descrita em JSON — sem escrever código | método, URL (com `{param}` de path), parâmetros (com a origem de cada valor), autenticação |
 | `python` | Uma função Python enviada por você, `exec`ada num namespace restrito | `{"code": "def handler(...): ...", "entrypoint": "handler"}` |
+
+**De onde vem cada parâmetro (`source`)**: `"model"` (padrão) é o que o modelo
+preenche; `"dependency"` faz o servidor injetar `dependencies[<campo>]` da
+requisição — o parâmetro some do schema do modelo, que portanto não pode
+inventá-lo (é assim que um CPF chega na API sem passar pelo LLM); `"const"` fixa
+um valor. `required` é cobrado antes da chamada HTTP. Um agente só pode usar uma
+tool se declarar, em `dependency_fields`, os campos que ela exige — e a recíproca
+também vale: a API recusa uma edição de tool que passe a exigir um campo que
+algum agente em uso não declara.
 
 ```bash
 # catálogo de builtins disponíveis (id, params aceitos)
@@ -279,34 +288,38 @@ sempre aparece, pelo fallback do `.env`.
 
 ## Collections de documentos (RAG)
 
-Cada nome em `COLLECTION_NAMES` (`documents/collections.py`) vira uma
-`Knowledge` própria (tabela pgvector dedicada) e é registrada no AgentOS, que
-já expõe o pipeline de ingestão completo:
-
-- `POST /knowledge/content` (multipart) — upload de arquivo, texto (`text_content`)
-  ou URL (`url`), com `reader_id`/`chunker`/`chunk_size`/`chunk_overlap`
-  opcionais. Processado de forma assíncrona; acompanhe o status em
-  `GET /knowledge/content/{content_id}/status`.
-- `POST /knowledge/search` — busca semântica na base.
-- `GET /knowledge/content` — lista o conteúdo já ingerido.
-
-Para ingestão simples de texto sem lidar com multipart, o contrato estável do
-serviço também expõe:
+Uma collection é uma base de conhecimento: uma linha em `document_collections`
+(`documents/store.py`) com uma tabela pgvector própria. **Um agente consulta a
+collection que estiver em `knowledge_collection`** — com isso o Agno dá a ele
+uma tool de busca e o agente decide quando usá-la (RAG agêntico). Sem esse
+campo, o agente não tem base de conhecimento.
 
 ```bash
-curl -X POST http://localhost:58000/collections/general/documents \
-  -H "Content-Type: application/json" \
-  -d '{"text": "conteúdo a indexar", "name": "meu-documento"}'
+# cadastrar uma coleção e alimentá-la
+kuro collections create manuais --label "Manuais do produto"
+cat manual.txt | kuro collections add manuais --title "Manual v2"
 
-curl "http://localhost:58000/collections/general/search?query=algo&limit=5"
+# ver o que o agente enxergaria
+kuro collections search manuais "prazo de garantia"
+
+# ligar ao agente (ou pelo seletor na aba Modelo, no console)
+kuro agents set suporte knowledge_collection=manuais
 ```
 
-Isso cobre a ingestão; o **agente analista** que vai consumir essas coleções
-via tool de busca continua no roadmap (fase 2). A tela `/knowledge` do console
-usa esses mesmos endpoints (+ upload de arquivo/URL e listagem via
-`/knowledge/content`) e atualiza a lista sozinha enquanto houver item
-processando — a resposta do `POST` só confirma que o backend aceitou o
-conteúdo, não que o embedding já rodou.
+Pela API: `GET/POST /collections`, `DELETE /collections/{nome}`,
+`POST /collections/{nome}/documents` (texto) e
+`GET /collections/{nome}/search`. Excluir uma coleção em uso por algum agente
+é recusado, e a coleção semeada (`general`) não sai.
+
+O AgentOS expõe por cima disso o pipeline de ingestão completo — upload de
+arquivo/URL em `POST /knowledge/content`, com `reader_id`/`chunker`/
+`chunk_size` opcionais e processamento assíncrono (status em
+`GET /knowledge/content/{id}/status`). **Ressalva:** esse pipeline escreve na
+coleção padrão e não aceita escolher outra, então no console as abas Arquivo e
+URL só ficam ativas na coleção padrão; nas demais, use texto (ou
+`kuro collections add`). Uma coleção criada depois do boot também só aparece
+nas rotas de knowledge do AgentOS após o próximo restart — no `/chat` ela
+funciona na hora.
 
 ## Memória com Mem0
 
@@ -510,10 +523,11 @@ invocar tools e ler execuções. Ela é só um cliente da API HTTP e não precis
 Por padrão aponta para `http://127.0.0.1:58000`; use `--url` ou `KURO_API_URL` para outro endereço.
 
 ```bash
-uv run kuro                  # shell interativo: /agents, /tools, /chat <agente>, /runs, /help
+uv run kuro                  # shell interativo: /agents, /tools, /collections, /chat <agente>, /help
 uv run kuro agents           # seletor: escolha o agente → testar, ver, editar, versões, remover
 uv run kuro chat suporte     # conversa direto (REPL; /nova troca de sessão)
 uv run kuro health           # diagnóstico
+uv run kuro agents integrate suporte   # endpoint, cURL e dependências obrigatórias do agente
 ```
 
 Todo comando também funciona sem interação, que é o modo pensado para IAs e scripts:
