@@ -42,6 +42,7 @@ src/agent_service/
   documents/      # collections de documentos (pgvector) para RAG
   messaging/      # producer/consumer Redis Streams
   observability/  # tracing.py: Langfuse + instrumentação do Agno; trace_store.py: leitura de runs/traces
+  cli/            # CLI `kuro` (cliente HTTP da API; ver seção CLI e AGENTS.md)
   db.py           # instância compartilhada do Postgres (agno.db.postgres.PostgresDb)
   config.py       # settings (env vars)
   main.py         # FastAPI + AgentOS
@@ -506,7 +507,7 @@ AGENT_SERVICE_URL=http://localhost:58000 AGENT_SERVICE_PUBLIC_URL=http://localho
 
 Com a CLI você opera o serviço pelo terminal: listar, criar e editar agentes, conversar com eles,
 invocar tools e ler execuções. Ela é só um cliente da API HTTP e não precisa de banco local.
-Por padrão aponta para `http://localhost:58000`; use `--url` ou `KURO_API_URL` para outro endereço.
+Por padrão aponta para `http://127.0.0.1:58000`; use `--url` ou `KURO_API_URL` para outro endereço.
 
 ```bash
 uv run kuro                  # shell interativo: /agents, /tools, /chat <agente>, /runs, /help

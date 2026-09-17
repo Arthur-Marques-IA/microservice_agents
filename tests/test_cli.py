@@ -158,3 +158,27 @@ def test_tool_invoke_ok_false_exits_nonzero(api):
     routes, _ = api
     routes[("POST", "/tools/calc/invoke")] = httpx.Response(200, json={"ok": False, "result": None, "error": "boom"})
     assert _run("tools", "invoke", "calc", "-a", "x=1").exit_code == 1
+
+
+def test_global_flags_accepted_after_subcommand(api):
+    routes, _ = api
+    routes[("GET", "/agents")] = httpx.Response(200, json=[AGENT])
+    assert cli_main.hoist_global_flags(["agents", "list", "--json"]) == ["--json", "agents", "list"]
+    assert cli_main.hoist_global_flags(["chat", "x", "--", "--json"]) == ["chat", "x", "--", "--json"]
+    result = _run(*cli_main.hoist_global_flags(["agents", "list", "--json"]))
+    assert json.loads(result.stdout)[0]["agent_type"] == "suporte"
+
+
+def test_editable_includes_model_credential(api):
+    routes, _ = api
+    routes[("GET", "/agents/suporte")] = httpx.Response(200, json={**AGENT, "model_credential_id": "cred-1"})
+    result = _run("--json", "agents", "get", "suporte", "--editable")
+    assert json.loads(result.stdout)["model_credential_id"] == "cred-1"
+
+
+def test_credential_test_failure_exits_nonzero(api):
+    routes, _ = api
+    routes[("POST", "/model-credentials/c1/test")] = httpx.Response(
+        200, json={"ok": False, "message": "chave inválida", "tested_at": "2026-01-01T00:00:00Z"}
+    )
+    assert _run("credentials", "test", "c1").exit_code == 1

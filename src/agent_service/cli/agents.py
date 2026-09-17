@@ -35,6 +35,7 @@ EDITABLE_FIELDS = (
     "tools",
     "model_provider",
     "model_id",
+    "model_credential_id",
     "dependency_fields",
     "memory_backend",
     "num_history_runs",
@@ -43,7 +44,7 @@ EDITABLE_FIELDS = (
 
 def editable(definition: dict[str, Any]) -> dict[str, Any]:
     """Só os campos aceitos por `apply`/`PUT` — a saída de `get --editable`."""
-    return {"agent_type": definition["agent_type"], **{k: definition[k] for k in EDITABLE_FIELDS}}
+    return {"agent_type": definition["agent_type"], **{k: definition.get(k) for k in EDITABLE_FIELDS}}
 
 
 # -- renderização ------------------------------------------------------------------
@@ -70,7 +71,8 @@ def _render_list(agents: list[dict[str, Any]]) -> None:
 def _render_agent(a: dict[str, Any]) -> None:
     lines = [
         f"[bold]{a['name']}[/] [dim]({a['agent_type']}{' · seed' if a['is_seed'] else ''})[/]",
-        f"modelo: {a['model_provider'] or 'padrão'} / {a['model_id'] or 'padrão'}",
+        f"modelo: {a['model_provider'] or 'padrão'} / {a['model_id'] or 'padrão'}"
+        f" · credencial: {a.get('model_credential_id') or 'padrão do provedor'}",
         f"memória: {a['memory_backend']} · histórico: {a['num_history_runs']} runs · prompt v{a['prompt_version']}",
         f"tools: {', '.join(a['tools']) or '—'}",
     ]

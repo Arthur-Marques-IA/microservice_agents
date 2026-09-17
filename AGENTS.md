@@ -2,7 +2,7 @@
 
 Use a CLI `kuro` em vez de `curl` para criar, editar e testar agentes, tools e
 execuções. Ela fala com a API HTTP do serviço, que roda via Docker em
-`http://localhost:58000` (você pode trocar a URL com `--url` ou `KURO_API_URL`).
+`http://127.0.0.1:58000` (você pode trocar a URL com `--url` ou `KURO_API_URL`).
 
 ```bash
 uv run kuro health --json          # rode primeiro: serviço, Langfuse, provedores
@@ -11,7 +11,7 @@ uv run kuro <comando> --help       # ajuda de qualquer comando
 
 ## Convenções
 
-- **Sempre use `--json`** (é uma opção global; vem antes do comando: `kuro --json agents list`).
+- **Sempre use `--json`** (aceito em qualquer posição: `kuro agents list --json`).
   A saída de dados vai para o stdout; os erros saem em JSON no stderr (`{"error", "status", "detail"}`).
 - **Códigos de saída:** `0` indica sucesso. `1` indica que a operação falhou: erro da API, tool com `ok: false` ou erro durante o chat.
   `2` indica uso incorreto (argumento ou dependency faltando). `3` indica que o serviço está inacessível.
@@ -47,10 +47,12 @@ kuro --json runs list --agent suporte -n 5
 kuro --json runs show <run_id>                  # mensagem, resposta, spans (LLM/tools), scores
 kuro --json runs score <run_id> 1 --comment "resposta correta"
 
-# Provedores de modelo
+# Modelos: provedores suportados e credenciais (chaves são criadas pelo console web)
 kuro --json providers list
+kuro --json credentials list --provider google
+kuro --json credentials test <credential_id>    # valida a chave sem gastar tokens; sai com 1 se falhar
 ```
 
 O formato do `apply` é o mesmo do `POST /agents`: `agent_type`, `name`, `instructions`, `tools`,
-`model_provider`, `model_id`, `dependency_fields`, `memory_backend` e `num_history_runs`.
+`model_provider`, `model_id`, `model_credential_id`, `dependency_fields`, `memory_backend` e `num_history_runs`.
 Editar `instructions` gera uma nova versão do prompt.

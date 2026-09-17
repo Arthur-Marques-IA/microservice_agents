@@ -29,8 +29,8 @@ class Client:
         self._http = httpx.Client(base_url=self.base_url, timeout=timeout, transport=transport)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        # Uma nova tentativa: o port-forward do Docker Desktop às vezes derruba a
-        # primeira conexão (ReadError). POST só repete se nem chegou a conectar.
+        # Uma nova tentativa para falhas de transporte transitórias (port-forward do
+        # Docker). POST só repete se nem chegou a conectar, para não duplicar criação.
         for attempt in (1, 2):
             try:
                 response = self._http.request(method, path, **kwargs)
@@ -107,13 +107,17 @@ class Client:
             "POST", f"/tools/{tool_name}/invoke", json={"arguments": arguments, "function_name": function_name}
         )
 
-    # -- provedores de modelo ------------------------------------------------
+    # -- provedores e credenciais de modelo ----------------------------------
 
     def list_providers(self) -> list[dict[str, Any]]:
         return self._request("GET", "/model-providers")
 
-    def test_provider(self, provider: str) -> dict[str, Any]:
-        return self._request("POST", f"/model-providers/{provider}/test", json={})
+    def list_credentials(self) -> list[dict[str, Any]]:
+        return self._request("GET", "/model-credentials")
+
+    def test_credential(self, credential_id: str) -> dict[str, Any]:
+        """Testa a chave salva (sem gastar tokens) e grava o resultado."""
+        return self._request("POST", f"/model-credentials/{credential_id}/test", json={})
 
     # -- observabilidade -----------------------------------------------------
 
