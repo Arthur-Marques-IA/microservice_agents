@@ -163,6 +163,8 @@ export interface PromptVersion {
 
 export interface Collection {
   name: string;
+  /** Coleção que o pipeline de upload do AgentOS (arquivo/URL) alimenta. */
+  is_default: boolean;
   label: string;
   description: string | null;
   is_seed: boolean;

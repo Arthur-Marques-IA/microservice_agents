@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from agent_service.agents.store import list_definitions
 from agent_service.documents import store
-from agent_service.documents.collections import add_text, search
+from agent_service.documents.collections import add_text, default_collection_name, search
 
 router = APIRouter(prefix="/collections", tags=["collections"])
 
@@ -38,6 +38,8 @@ class CollectionUpdateIn(BaseModel):
 
 class CollectionOut(BaseModel):
     name: str
+    is_default: bool = False
+    """Coleção que o pipeline de upload do AgentOS alimenta (arquivo/URL)."""
     label: str
     description: str | None
     is_seed: bool
@@ -63,7 +65,11 @@ def _agents_using(name: str) -> list[str]:
 
 
 def _out(row: dict[str, Any]) -> dict[str, Any]:
-    return {**row, "agents_using": _agents_using(row["name"])}
+    return {
+        **row,
+        "agents_using": _agents_using(row["name"]),
+        "is_default": row["name"] == default_collection_name(),
+    }
 
 
 def _row_or_404(name: str) -> dict[str, Any]:

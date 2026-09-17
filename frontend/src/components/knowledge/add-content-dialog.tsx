@@ -19,10 +19,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Field, Spinner } from "@/components/ui/primitives";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/toast";
+import { useWorkspace } from "@/components/workspace/workspace-provider";
 
 type Mode = "text" | "file" | "url";
-
-const DEFAULT_COLLECTION = "general";
 
 export function AddContentDialog({
   open,
@@ -62,9 +61,11 @@ function AddContentForm({
 }) {
   const id = useId();
   const toast = useToast();
+  const { collections } = useWorkspace();
   const [mode, setMode] = useState<Mode>("text");
-  // Ver o comentário em handleSubmit: o upload do AgentOS não escolhe coleção.
-  const uploadsAllowed = collection === DEFAULT_COLLECTION;
+  // Ver o comentário em handleSubmit: o upload do AgentOS não escolhe coleção,
+  // então arquivo/URL só valem na que ele alimenta (o backend diz qual é).
+  const uploadsAllowed = Boolean(collections.find((c) => c.name === collection)?.is_default);
   const [name, setName] = useState("");
   const [text, setText] = useState("");
   const [url, setUrl] = useState("");

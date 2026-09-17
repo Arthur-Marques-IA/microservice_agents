@@ -115,3 +115,37 @@ def test_collection_in_use_cannot_be_deleted(manuais):
         assert get_collection_detail("manuais")["agents_using"] == ["agente_rag"]
     finally:
         delete_agent("agente_rag")
+
+
+def test_default_collection_comes_first_and_is_flagged(manuais):
+    """O upload do AgentOS alimenta a primeira coleção registrada — a semeada
+    precisa vir na frente mesmo com nomes que ordenariam antes dela."""
+    from agent_service.documents import collections as collections_module
+
+    create_collection(CollectionIn(name="atendimento", label="Atendimento"))
+    try:
+        assert collections_module.default_collection_name() == "general"
+        # `all_collections` monta objetos do Agno (pgvector); aqui só a ordem importa.
+        with patch.object(collections_module, "get_collection", side_effect=lambda nome: nome):
+            assert collections_module.all_collections()[0] == "general"
+        flags = {c["name"]: c["is_default"] for c in list_collections()}
+        assert flags["general"] is True and flags["atendimento"] is False
+    finally:
+        delete_collection("atendimento")
+
+
+def test_same_text_in_two_collections_gets_distinct_content_ids(manuais):
+    """A tabela de conteúdo é compartilhada; o id precisa distinguir a coleção,
+    senão o mesmo texto vira uma linha só e uma indexação pode ser pulada."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch as mock_patch
+
+    from agent_service.documents.collections import add_text
+
+    knowledge = MagicMock()
+    knowledge._build_content_hash.return_value = "hash-igual"
+    knowledge._aload_content = AsyncMock()
+    with mock_patch("agent_service.documents.collections.get_collection", return_value=knowledge):
+        id_general = asyncio.run(add_text("general", text="mesmo texto"))
+        id_manuais = asyncio.run(add_text("manuais", text="mesmo texto"))
+    assert id_general != id_manuais

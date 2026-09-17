@@ -62,7 +62,10 @@ def delete_collection(
     name: str,
     yes: bool = typer.Option(False, "--yes", "-y", help="Não pede confirmação (obrigatório sem TTY)."),
 ) -> None:
-    """Remove o cadastro da collection (os documentos já indexados permanecem)."""
+    """Remove o cadastro da collection.
+
+    Os vetores já indexados continuam na tabela `knowledge_<nome>`: recriar uma
+    collection com o mesmo nome traz os documentos antigos de volta."""
     st = state(ctx)
     if not yes:
         if not st.interactive:
