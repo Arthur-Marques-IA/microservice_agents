@@ -10,9 +10,9 @@ Code consegue criar, testar e depurar um agente inteiro pelo terminal, em
 poucas linhas.
 
 ```bash
-kuro --json agents apply -f suporte.json          # cria o agente
-kuro --json chat suporte -m "meu wifi caiu"       # conversa com ele
-kuro --json runs list --agent suporte -n 1        # vê o que aconteceu, com tokens e custo
+uv run kuro agents apply -f suporte.json      # cria o agente
+uv run kuro chat suporte                      # conversa com ele
+uv run kuro runs list --agent suporte         # vê o que aconteceu, com tokens e custo
 ```
 
 ---
@@ -40,7 +40,7 @@ flowchart LR
     end
 
     M -- "HTTP · /chat · /analyze" --> API
-    A -- "kuro (CLI) --json" --> API
+    A -- "CLI kuro" --> API
     H -- "navegador" --> UI["Console web<br/>Next.js (BFF)"]
     UI -- "proxy server-side" --> API
 
@@ -86,7 +86,7 @@ uv run kuro health          # serviço, Langfuse e provedores de modelo
 **Crie e teste o primeiro agente:**
 
 ```bash
-uv run kuro --json agents apply -f - <<'EOF'
+uv run kuro agents apply -f - <<'EOF'
 {
   "agent_type": "suporte",
   "name": "Agente de Suporte",
@@ -116,26 +116,24 @@ curl -X POST http://127.0.0.1:58000/chat -H "Content-Type: application/json" \
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant C as Seu módulo
-    participant K as Kuro (/chat)
+    participant K as Kuro
     participant DB as Postgres
     participant L as LLM
-    participant T as Sua API (tool)
+    participant T as Sua API
 
-    C->>K: message + user_id + session_id + dependencies {cpf}
-    K->>K: valida dependencies contra o agente
-    K->>DB: definição atual do agente (cache por versão)
-    K->>DB: histórico da sessão + memórias do usuário
-    K->>L: prompt (instruções + nota de feedback + contexto)
-    L-->>K: "chamar consulta_contrato"
-    K->>T: GET /contratos/{cpf}  ← CPF injetado pelo servidor
+    C->>K: POST /chat com message, user_id, session_id e cpf
+    K->>K: valida as dependencies do agente
+    K->>DB: carrega o agente, o histórico e as memórias
+    K->>L: envia instruções, nota de feedback e contexto
+    L-->>K: pede a tool consulta_contrato
+    K->>T: GET /contratos com o CPF da requisição
     T-->>K: dados do contrato
-    K->>L: resultado da tool
+    K->>L: devolve o resultado da tool
     L-->>K: resposta final
-    K-->>C: content + run_id + trace_id
-    Note over K: o trace (modelo, tools, tokens,<br/>custo, versão do prompt) é gravado em background
-    C->>K: POST /observability/scores {run_id, 👍}
+    K-->>C: content, run_id e trace_id
+    Note over K: o trace é gravado em background
+    C->>K: POST /observability/scores com o run_id
 ```
 
 ---
@@ -154,14 +152,14 @@ pelo console, e ele responde **na próxima requisição**.
 
 ```bash
 # agente analista: devolve um objeto, não texto
-kuro --json agents apply -f - <<'EOF'
+uv run kuro agents apply -f - <<'EOF'
 {"agent_type": "extrator-contrato", "name": "Extrator de contrato",
  "instructions": ["Extraia os campos do contrato."], "kind": "analysis",
  "response_schema": [{"name": "valor", "type": "number", "required": true},
                      {"name": "prazo_dias", "type": "integer"}]}
 EOF
 
-kuro --json analyze extrator-contrato -a contrato.pdf    # → {"result": {"valor": 1200.0, "prazo_dias": 30}}
+uv run kuro analyze extrator-contrato -a contrato.pdf    # → valor: 1200.0, prazo_dias: 30
 ```
 
 Campos de um agente: `agent_type` (slug), `name`, `instructions`, `tools`,
@@ -173,23 +171,22 @@ primeiro boot.
 #### Versões e melhoria contínua
 
 ```mermaid
-flowchart LR
-    E["Edita instructions"] --> V["prompt-v{N+1}<br/>(histórico + diff)"]
-    V --> R["Execuções gravam<br/>a versão que respondeu"]
-    R --> S["👍/👎 e notas<br/>por run"]
-    S --> F["Admin comenta uma conversa:<br/>'devia confirmar o CPF antes'"]
-    F --> N["Nota de comportamento<br/>(markdown mesclado por IA)"]
-    N --> P["Entra no prompt<br/>nas próximas respostas"]
-    P --> R
-    S -. "compare versões<br/>em /logs" .-> E
+flowchart TB
+    E["Você edita as instruções"] --> V["Nova versão do prompt<br/>com histórico e diff"]
+    V --> R["Cada execução grava<br/>a versão que respondeu"]
+    R --> S["Feedback por execução<br/>no console ou pela API"]
+    S --> F["Admin comenta<br/>uma conversa"]
+    F --> N["IA mescla o comentário<br/>na nota do agente"]
+    N --> R
+    S --> E
 ```
 
 - **Versões:** cada mudança em `instructions` grava uma versão nova. O console
   mostra o diff contra a atual e permite "restaurar no editor", que publica o
   texto antigo como versão nova. Mudar nome, tools ou modelo não gera versão.
-- **Nota de feedback:** `kuro agents feedback suporte -m "..."` junta o
+- **Nota de feedback:** `uv run kuro agents feedback suporte -m "..."` junta o
   comentário com as regras anteriores numa nota em markdown, que passa a
-  valer nas respostas seguintes (`kuro agents feedback suporte --show`).
+  valer nas respostas seguintes (`uv run kuro agents feedback suporte --show`).
 
 ### Tools
 
@@ -204,19 +201,15 @@ Uma tabela, três formatos:
 **De onde vem cada parâmetro** é o que torna as tools de API seguras:
 
 ```mermaid
-flowchart LR
-    subgraph Requisição
-        MSG["message<br/>'qual meu saldo?'"]
-        DEP["dependencies<br/>{cpf: '123...'}"]
-    end
-    MSG --> LLM["Modelo"]
-    LLM -- "source: model<br/>(ex.: mês)" --> CALL
-    DEP -- "source: dependency<br/>injetado pelo servidor" --> CALL
-    CONST["source: const<br/>(ex.: versão da API)"] --> CALL
-    CALL["Chamada HTTP<br/>GET /saldo?cpf=...&mes=..."] --> API["Sua API"]
+flowchart TB
+    MSG["message<br/>qual meu saldo em março?"] --> LLM["Modelo"]
+    LLM -- "source: model<br/>mes = 03" --> CALL
+    DEP["dependencies da requisição<br/>cpf = 123..."] -- "source: dependency<br/>o servidor injeta" --> CALL
+    CONST["valor fixo"] -- "source: const<br/>versao = v2" --> CALL
+    CALL["Chamada HTTP<br/>GET /saldo com cpf, mes e versao"] --> API["Sua API"]
 
-    style DEP fill:#e8f5e9,stroke:#2e7d32
-    style LLM fill:#fff3e0,stroke:#ef6c00
+    style DEP fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
+    style LLM fill:#fff3e0,stroke:#ef6c00,color:#7a3000
 ```
 
 - `model` (padrão): o modelo preenche. Só esses parâmetros aparecem no schema dele.
@@ -244,8 +237,8 @@ curl -X POST http://127.0.0.1:58000/tools -H "Content-Type: application/json" -d
              "parameters": [{"name": "cep", "type": "string", "location": "path", "required": true}]}
 }'
 
-kuro --json tools invoke cep -a cep=01310-100          # testa sem montar agente
-kuro --json agents set suporte tools='["cep"]'          # liga ao agente
+uv run kuro tools invoke cep -a cep=01310-100          # testa sem montar agente
+uv run kuro agents set suporte tools='["cep"]'          # liga ao agente
 ```
 
 Segredos (token, senha) voltam mascarados nas leituras, e editar sem mexer no
@@ -260,10 +253,10 @@ agente que aponta para ela em `knowledge_collection` ganha uma tool de busca e
 decide sozinho quando consultar.
 
 ```bash
-kuro collections create manuais --label "Manuais do produto"
-cat manual.txt | kuro collections add manuais --title "Manual v2"
-kuro collections search manuais "prazo de garantia"      # o mesmo que o agente enxerga
-kuro agents set suporte knowledge_collection=manuais
+uv run kuro collections create manuais --label "Manuais do produto"
+cat manual.txt | uv run kuro collections add manuais --title "Manual v2"
+uv run kuro collections search manuais "prazo de garantia"      # o mesmo que o agente enxerga
+uv run kuro agents set suporte knowledge_collection=manuais
 ```
 
 O console também aceita upload de arquivo e URL, com chunking e processamento
@@ -292,10 +285,10 @@ Gemini funciona com a `GOOGLE_API_KEY` do `.env`. OpenAI, Anthropic e Ollama
 **Modelos** ou pela CLI:
 
 ```bash
-kuro --json providers list
-KEY=sk-... kuro --json credentials add -p openai -l "Produção" --api-key-env KEY
-kuro --json credentials test <credential_id>     # valida sem gastar tokens de geração
-kuro --json agents set suporte model_provider=openai model_id=gpt-4.1-mini
+uv run kuro providers list
+KEY=sk-... uv run kuro credentials add -p openai -l "Produção" --api-key-env KEY
+uv run kuro credentials test <credential_id>     # valida sem gastar tokens de geração
+uv run kuro agents set suporte model_provider=openai model_id=gpt-4.1-mini
 ```
 
 As chaves ficam **cifradas em repouso** (Fernet, `CREDENTIALS_ENCRYPTION_KEY`)
@@ -322,7 +315,7 @@ Cada agente publica o próprio contrato: endpoint, corpo, `dependencies`
 obrigatórias e exemplos. A documentação sai dos dados e não fica desatualizada.
 
 ```bash
-kuro --json agents integrate suporte       # ou GET /agents/suporte/integration
+uv run kuro agents integrate suporte       # ou GET /agents/suporte/integration
 ```
 
 | Endpoint | Uso |
@@ -341,34 +334,102 @@ entram no contexto do modelo; as tools as recebem via `source: "dependency"`.
 
 ## Operar pelo terminal: `kuro`
 
-A CLI é um cliente da API HTTP. Ela não precisa de banco local e aponta para
-`http://127.0.0.1:58000` (mude com `--url` ou `KURO_API_URL`).
+Tudo o que o console faz, você também faz pelo terminal. A CLI conversa com a
+API em `http://127.0.0.1:58000` (mude com `--url` ou `KURO_API_URL`) e não
+precisa de banco local.
 
-```bash
-uv run kuro                    # shell interativo: /agents, /tools, /chat <agente>, /help
-uv run kuro agents             # seletor: testar, ver, editar, versões, remover
-uv run kuro chat suporte       # conversa (REPL; /nova troca de sessão)
+### O shell do Kuro
+
+Rode `uv run kuro` sem argumentos e você entra num shell com menus. A `/` é
+opcional, e qualquer comando da CLI funciona lá dentro:
+
+```text
+$ uv run kuro
+kuro · http://127.0.0.1:58000 · /help para comandos
+kuro> /agents
+? Agente:  suporte  —  Agente de Suporte
+? Agente de Suporte (suporte):
+  » Testar (chat)
+    Testar em sessão nova
+    Ver definição
+    Editar no editor
+    Histórico do prompt
+    Remover
 ```
 
-**Para IAs e scripts**, tudo funciona sem interação:
-
-- `--json` em qualquer posição: dados no stdout e erros em JSON no stderr (`{"error", "status", "detail"}`).
-- Códigos de saída: `0` sucesso · `1` falhou (API, tool `ok: false`, erro no chat) · `2` uso incorreto · `3` serviço inacessível.
-- `--no-input` (ou `KURO_NO_INPUT=1`): nunca pergunta nada; se faltar algo, falha.
-- `chave=valor` é lido como JSON quando possível: `n=3`, `ativo=true`, `tags='["a"]'`.
-
-| Área | Comandos |
+| No shell | O que faz |
 |---|---|
-| Agentes | `agents list · get · apply · set · edit · delete · versions · test · feedback · integrate` |
-| Conversa | `chat <agente> -m ... -d cpf=... -a arquivo` · `analyze <agente> -f doc.txt` |
-| Tools | `tools list · get · catalog · invoke` |
-| Execuções | `runs list · show · score` |
-| Conhecimento | `collections list · create · delete · add · search` |
-| Modelos | `providers list` · `credentials list · add · edit · delete · test` |
-| Diagnóstico | `health` |
+| `/agents` | escolhe um agente e abre as ações: testar, ver, editar, versões, remover |
+| `/chat <agente>` | conversa direto com o agente |
+| `/analyze <agente>` | analisa um documento com um agente `analysis` |
+| `/agents feedback <agente>` | ensina o agente a partir da última conversa |
+| `/agents integrate <agente>` | mostra como outro módulo chama o agente |
+| `/tools` | escolhe uma tool para ver e invocar |
+| `/collections` | bases de conhecimento |
+| `/runs` · `/runs show <run_id>` | execuções recentes e o detalhe de uma |
+| `/providers` · `/credentials` | provedores e chaves de modelo |
+| `/health` | diagnóstico do serviço |
+| `/help` · `/sair` | ajuda e saída |
 
-Receitas completas para agentes de IA: **[AGENTS.md](AGENTS.md)**. Para ter
-`kuro` no PATH (e iniciar mais rápido que via `uv run`): `uv tool install -e .`.
+### O dia a dia, comando a comando
+
+**Criar e ajustar um agente**
+
+```bash
+uv run kuro agents apply -f suporte.json        # cria ou atualiza a partir de um arquivo
+uv run kuro agents edit suporte                 # abre a definição no seu $EDITOR e salva o que mudar
+uv run kuro agents set suporte num_history_runs=5 tools='["cep"]'   # muda só esses campos
+uv run kuro agents versions suporte             # histórico do prompt
+```
+
+**Testar**
+
+```bash
+uv run kuro chat suporte                        # conversa contínua; /nova troca de sessão, /sair volta
+uv run kuro chat suporte -m "meu wifi caiu" -d cpf=12345678900     # uma mensagem, com dependencies
+uv run kuro chat suporte -m "o que tem nessa foto?" -a foto.png    # com anexo
+uv run kuro analyze extrator-contrato -a contrato.pdf              # agente analista
+```
+
+A sessão do chat fica salva por agente, então mensagens seguidas continuam a
+mesma conversa. Use `--new-session` para recomeçar.
+
+**Ensinar com feedback**
+
+```bash
+uv run kuro agents feedback suporte -m "deveria confirmar o CPF antes de dar detalhes"
+uv run kuro agents feedback suporte --show      # a nota que o agente segue agora
+```
+
+**Investigar o que aconteceu**
+
+```bash
+uv run kuro runs list --agent suporte           # execuções com latência, tokens, custo e status
+uv run kuro runs show <run_id>                  # chamadas ao modelo, tools e avaliações
+uv run kuro runs score <run_id> 1 --comment "resposta correta"
+```
+
+**Tools, conhecimento e modelos**
+
+```bash
+uv run kuro tools                               # escolhe uma tool e invoca
+uv run kuro tools invoke calculator --fn add -a a=2 -a b=3
+uv run kuro collections search manuais "prazo de garantia"
+uv run kuro credentials test <credential_id>    # valida a chave sem gastar tokens
+uv run kuro health                              # serviço, Langfuse e provedores
+```
+
+Qualquer comando aceita `--help`, por exemplo `uv run kuro chat --help`.
+
+> **Dica:** instale com `uv tool install -e .` para chamar só `kuro` de
+> qualquer pasta, e com a inicialização mais rápida.
+
+### Para agentes de IA e scripts
+
+A mesma CLI funciona sem ninguém no teclado: `--json` devolve dados no stdout
+e erros em JSON no stderr, os códigos de saída são previsíveis (`0` sucesso,
+`1` falha, `2` uso incorreto, `3` serviço inacessível) e `--no-input` garante
+que nada fica esperando resposta. As receitas estão em **[AGENTS.md](AGENTS.md)**.
 
 ---
 
@@ -414,8 +475,8 @@ toda resposta aponta para o próprio trace. O envio não atrasa a resposta, e
 com o Langfuse fora do ar os runs seguem normais, só sem rastreio.
 
 ```bash
-kuro --json runs list --agent suporte -n 5            # latência, tokens, custo, 👍/👎
-kuro --json runs show <run_id>                        # spans e scores
+uv run kuro runs list --agent suporte -n 5            # latência, tokens, custo, 👍/👎
+uv run kuro runs show <run_id>                        # spans e scores
 curl "http://127.0.0.1:58000/observability/runs?status=error&limit=20"
 curl "http://127.0.0.1:58000/observability/sessions?limit=50"
 curl "http://127.0.0.1:58000/observability/stats?agent_type=suporte"
