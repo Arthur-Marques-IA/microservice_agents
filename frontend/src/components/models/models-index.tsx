@@ -84,7 +84,7 @@ export function ModelsIndex() {
     <>
       <PageHeader
         title="Chaves de API"
-        description="Credenciais de LLM para os agentes usarem — o mesmo provedor pode ter várias chaves, cada agente escolhe a sua."
+        description="Chaves de LLM usadas pelos agentes. O mesmo provedor pode ter várias; na configuração de cada agente você define qual ele usa."
         actions={backendReachable && modelCredentials.length > 0 ? newKeyButton : undefined}
       />
       <PageBody className="flex flex-col gap-6">

@@ -198,7 +198,7 @@ export function CredentialDialog({
         )}
         <label className="flex w-fit cursor-pointer items-center gap-2 text-[13px]">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-primary" />
-          Habilitada (disponível para os agentes escolherem)
+          Habilitada (pode ser atribuída a agentes)
         </label>
 
         <div className="flex items-center gap-2 border-t border-border pt-4">

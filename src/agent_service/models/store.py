@@ -1,7 +1,8 @@
 """Persistência das credenciais de modelo — uma linha por credencial
-(`model_credentials`), várias credenciais por provedor permitidas: cada
-agente escolhe qual usar (`agent_definitions.model_credential_id`), então
-provedores iguais podem ter chaves diferentes para clientes/times diferentes.
+(`model_credentials`), várias credenciais por provedor permitidas: na
+configuração de cada agente, quem o cadastra define qual usar
+(`agent_definitions.model_credential_id`), então provedores iguais podem ter
+chaves diferentes para clientes/times diferentes.
 A chave de API nunca é guardada em texto plano: `crypto.py` cifra antes de
 `insert`/`update` e decifra só quando `provider.get_model` precisa montar o
 cliente do SDK; as respostas da API (`api/model_credentials_routes.py`)

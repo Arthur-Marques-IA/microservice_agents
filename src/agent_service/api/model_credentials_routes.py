@@ -1,8 +1,9 @@
 """CRUD e teste de credenciais de modelo (`/model-credentials`).
 
-Várias chaves por provedor são permitidas — cada agente escolhe qual usar
-(`model_credential_id` em `api/agents_routes.py`); sem escolha explícita,
-`models/provider.py` cai na credencial habilitada mais antiga do provedor.
+Várias chaves por provedor são permitidas. Quem configura o agente define qual
+ele usa (`model_credential_id` em `api/agents_routes.py`) — é configuração, o
+modelo nunca escolhe; sem definição, `models/provider.py` cai na credencial
+habilitada mais antiga do provedor.
 As chaves nunca voltam numa resposta: só `configured` (bool) e `key_hint`
 (últimos 4 chars). `POST .../test` chama um endpoint de leitura barato do
 SDK oficial do provedor (listar modelos) pra validar a chave sem gastar
