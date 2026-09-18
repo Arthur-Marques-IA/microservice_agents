@@ -31,27 +31,10 @@ uv run kuro runs list --agent suporte         # vê o que aconteceu, com tokens 
 
 ## Três portas para o mesmo serviço
 
-```mermaid
-flowchart LR
-    subgraph Quem usa
-        M["Outros módulos<br/>da plataforma"]
-        A["Agentes de IA<br/>(Claude Code...)<br/>e operadores"]
-        H["Pessoas<br/>(admin, suporte)"]
-    end
-
-    M -- "HTTP · /chat · /analyze" --> API
-    A -- "CLI kuro" --> API
-    H -- "navegador" --> UI["Console web<br/>Next.js (BFF)"]
-    UI -- "proxy server-side" --> API
-
-    subgraph Kuro
-        API["agent-service<br/>FastAPI + Agno"]
-    end
-
-    API --> LLM["Gemini · OpenAI<br/>Anthropic · Ollama"]
-    API --> PG[("Postgres + pgvector<br/>agentes · sessões · RAG")]
-    API -. "traces" .-> LF["Langfuse<br/>(opcional)"]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagramas/tres-portas-escuro.svg">
+  <img alt="Outros módulos, agentes de IA e pessoas acessam o agent-service pela API, pela CLI e pelo console" src="docs/diagramas/tres-portas-claro.svg">
+</picture>
 
 - **API** para integrar: o contrato estável que os outros módulos chamam.
 - **CLI (`kuro`)** para operar e corrigir, por humanos ou por IAs.
@@ -114,27 +97,10 @@ curl -X POST http://127.0.0.1:58000/chat -H "Content-Type: application/json" \
 
 ## Como uma mensagem é processada
 
-```mermaid
-sequenceDiagram
-    participant C as Seu módulo
-    participant K as Kuro
-    participant DB as Postgres
-    participant L as LLM
-    participant T as Sua API
-
-    C->>K: POST /chat com message, user_id, session_id e cpf
-    K->>K: valida as dependencies do agente
-    K->>DB: carrega o agente, o histórico e as memórias
-    K->>L: envia instruções, nota de feedback e contexto
-    L-->>K: pede a tool consulta_contrato
-    K->>T: GET /contratos com o CPF da requisição
-    T-->>K: dados do contrato
-    K->>L: devolve o resultado da tool
-    L-->>K: resposta final
-    K-->>C: content, run_id e trace_id
-    Note over K: o trace é gravado em background
-    C->>K: POST /observability/scores com o run_id
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagramas/fluxo-do-chat-escuro.svg">
+  <img alt="Sequência de uma requisição ao /chat, da validação das dependencies até o feedback" src="docs/diagramas/fluxo-do-chat-claro.svg">
+</picture>
 
 ---
 
@@ -170,16 +136,10 @@ primeiro boot.
 
 #### Versões e melhoria contínua
 
-```mermaid
-flowchart TB
-    E["Você edita as instruções"] --> V["Nova versão do prompt<br/>com histórico e diff"]
-    V --> R["Cada execução grava<br/>a versão que respondeu"]
-    R --> S["Feedback por execução<br/>no console ou pela API"]
-    S --> F["Admin comenta<br/>uma conversa"]
-    F --> N["IA mescla o comentário<br/>na nota do agente"]
-    N --> R
-    S --> E
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagramas/versoes-e-feedback-escuro.svg">
+  <img alt="Ciclo de versões do prompt, execuções, feedback e nota do agente" src="docs/diagramas/versoes-e-feedback-claro.svg">
+</picture>
 
 - **Versões:** cada mudança em `instructions` grava uma versão nova. O console
   mostra o diff contra a atual e permite "restaurar no editor", que publica o
@@ -200,17 +160,10 @@ Uma tabela, três formatos:
 
 **De onde vem cada parâmetro** é o que torna as tools de API seguras:
 
-```mermaid
-flowchart TB
-    MSG["message<br/>qual meu saldo em março?"] --> LLM["Modelo"]
-    LLM -- "source: model<br/>mes = 03" --> CALL
-    DEP["dependencies da requisição<br/>cpf = 123..."] -- "source: dependency<br/>o servidor injeta" --> CALL
-    CONST["valor fixo"] -- "source: const<br/>versao = v2" --> CALL
-    CALL["Chamada HTTP<br/>GET /saldo com cpf, mes e versao"] --> API["Sua API"]
-
-    style DEP fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-    style LLM fill:#fff3e0,stroke:#ef6c00,color:#7a3000
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagramas/origem-dos-parametros-escuro.svg">
+  <img alt="Parâmetros de uma tool vindos do modelo, das dependencies da requisição ou de um valor fixo" src="docs/diagramas/origem-dos-parametros-claro.svg">
+</picture>
 
 - `model` (padrão): o modelo preenche. Só esses parâmetros aparecem no schema dele.
 - `dependency`: o servidor injeta `dependencies[<campo>]` da requisição. O
@@ -457,16 +410,10 @@ console fica no `localStorage` do navegador.
 
 ## Observabilidade
 
-```mermaid
-flowchart LR
-    RUN["Execução do agente"] -- "OpenTelemetry<br/>(OpenInference)" --> EXP["Exportação em lote,<br/>em background"]
-    EXP --> LF[("Langfuse")]
-    LF -- "API pública<br/>(chaves só no servidor)" --> TS["TraceStore<br/>(interface)"]
-    TS --> OBS["/observability/*"]
-    OBS --> CON["Console /logs"]
-    OBS --> CLI["kuro runs"]
-    OBS --> MOD["Outros módulos"]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagramas/observabilidade-escuro.svg">
+  <img alt="Caminho dos traces da execução até o console, a CLI e outros módulos" src="docs/diagramas/observabilidade-claro.svg">
+</picture>
 
 Cada run registra a mensagem, as `dependencies`, cada chamada ao modelo
 (prompt, resposta, tokens, latência, custo) e cada tool call, com `user_id`,
@@ -500,28 +447,10 @@ marcados `CHANGEME` no compose em qualquer ambiente que não seja a sua máquina
 
 ## Arquitetura
 
-```mermaid
-flowchart TB
-    subgraph frontend["frontend/ · Next.js"]
-        PAGES["Páginas do console"] --> BFF["Route Handlers (BFF)"]
-    end
-
-    subgraph backend["src/agent_service/ · FastAPI"]
-        ROUTES["api/<br/>contrato + CRUD"] --> REG["agents/registry<br/>monta o Agent do Agno<br/>(cache por updated_at)"]
-        REG --> STORE["agents/store<br/>definições + versões"]
-        REG --> TOOLS["tools/registry<br/>builtin · api · python"]
-        REG --> MODELS["models/provider<br/>credenciais cifradas"]
-        REG --> MEM["memory/<br/>Agno ou Mem0"]
-        REG --> DOCS["documents/<br/>collections pgvector"]
-        ROUTES --> OBSV["observability/<br/>tracing + trace_store"]
-        CLI["cli/ · kuro"] -. "HTTP" .-> ROUTES
-    end
-
-    BFF -- "AGENT_SERVICE_URL" --> ROUTES
-    STORE & TOOLS & MODELS & MEM & DOCS --> PG[("Postgres + pgvector")]
-    ROUTES -.-> RD[("Redis Streams")]
-    OBSV -.-> LF[("Langfuse")]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagramas/arquitetura-escuro.svg">
+  <img alt="Componentes do frontend e do backend e onde cada um guarda dados" src="docs/diagramas/arquitetura-claro.svg">
+</picture>
 
 ```
 src/agent_service/
@@ -584,6 +513,16 @@ uv run pytest
 
 Não há migrações: o schema é criado no startup (`create_all`), e colunas novas
 entram por `ALTER TABLE` em cada `store.py`.
+
+**Diagramas:** as fontes ficam em `docs/diagramas/*.mmd` e o README exibe os
+SVGs gerados a partir delas (uma versão clara e uma escura), porque o
+renderizador de Mermaid do GitHub falha de forma intermitente. Depois de editar
+um `.mmd`, regenere os dois SVGs:
+
+```bash
+npx -p @mermaid-js/mermaid-cli mmdc -i docs/diagramas/arquitetura.mmd -o docs/diagramas/arquitetura-claro.svg -t default -b transparent -c docs/diagramas/mermaid.json
+npx -p @mermaid-js/mermaid-cli mmdc -i docs/diagramas/arquitetura.mmd -o docs/diagramas/arquitetura-escuro.svg -t dark -b transparent -c docs/diagramas/mermaid.json
+```
 
 ---
 

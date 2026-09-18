@@ -1,0 +1,8 @@
+flowchart LR
+    RUN["Execução do agente"] -- "OpenTelemetry<br/>(OpenInference)" --> EXP["Exportação em lote,<br/>em background"]
+    EXP --> LF[("Langfuse")]
+    LF -- "API pública<br/>(chaves só no servidor)" --> TS["TraceStore<br/>(interface)"]
+    TS --> OBS["/observability/*"]
+    OBS --> CON["Console /logs"]
+    OBS --> CLI["kuro runs"]
+    OBS --> MOD["Outros módulos"]

@@ -1,0 +1,19 @@
+sequenceDiagram
+    participant C as Seu módulo
+    participant K as Kuro
+    participant DB as Postgres
+    participant L as LLM
+    participant T as Sua API
+
+    C->>K: POST /chat com message, user_id, session_id e cpf
+    K->>K: valida as dependencies do agente
+    K->>DB: carrega o agente, o histórico e as memórias
+    K->>L: envia instruções, nota de feedback e contexto
+    L-->>K: pede a tool consulta_contrato
+    K->>T: GET /contratos com o CPF da requisição
+    T-->>K: dados do contrato
+    K->>L: devolve o resultado da tool
+    L-->>K: resposta final
+    K-->>C: content, run_id e trace_id
+    Note over K: o trace é gravado em background
+    C->>K: POST /observability/scores com o run_id

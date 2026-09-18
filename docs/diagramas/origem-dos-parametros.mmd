@@ -1,0 +1,9 @@
+flowchart TB
+    MSG["message<br/>qual meu saldo em março?"] --> LLM["Modelo"]
+    LLM -- "source: model<br/>mes = 03" --> CALL
+    DEP["dependencies da requisição<br/>cpf = 123..."] -- "source: dependency<br/>o servidor injeta" --> CALL
+    CONST["valor fixo"] -- "source: const<br/>versao = v2" --> CALL
+    CALL["Chamada HTTP<br/>GET /saldo com cpf, mes e versao"] --> API["Sua API"]
+
+    style DEP fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
+    style LLM fill:#fff3e0,stroke:#ef6c00,color:#7a3000

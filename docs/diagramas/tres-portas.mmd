@@ -1,0 +1,19 @@
+flowchart LR
+    subgraph Quem usa
+        M["Outros módulos<br/>da plataforma"]
+        A["Agentes de IA<br/>(Claude Code...)<br/>e operadores"]
+        H["Pessoas<br/>(admin, suporte)"]
+    end
+
+    M -- "HTTP · /chat · /analyze" --> API
+    A -- "CLI kuro" --> API
+    H -- "navegador" --> UI["Console web<br/>Next.js (BFF)"]
+    UI -- "proxy server-side" --> API
+
+    subgraph Kuro
+        API["agent-service<br/>FastAPI + Agno"]
+    end
+
+    API --> LLM["Gemini · OpenAI<br/>Anthropic · Ollama"]
+    API --> PG[("Postgres + pgvector<br/>agentes · sessões · RAG")]
+    API -. "traces" .-> LF["Langfuse<br/>(opcional)"]
