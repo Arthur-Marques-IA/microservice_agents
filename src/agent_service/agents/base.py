@@ -38,7 +38,11 @@ def build_agent(
     # Agentes "analysis" são one-shot: sem sessão contínua, sem histórico nem
     # memória — só o documento de entrada e o `output_schema` de saída.
     is_analysis = kind == "analysis"
-    memory = None if is_analysis else CommonMemoryBackend()
+    # Um backend de memória de longo prazo por vez: com "mem0", o Mem0 substitui
+    # a memória do Agno (sem memory_manager, sem a tool `update_user_memory` e sem
+    # as memórias do Agno no prompt). O histórico da sessão continua valendo.
+    use_agno_memory = not is_analysis and memory_backend == "common"
+    memory = CommonMemoryBackend() if use_agno_memory else None
     # `search_knowledge=True` dá ao agente uma tool de busca na collection (RAG
     # agêntico): ele decide quando consultar, em vez de injetarmos tudo no prompt.
     knowledge = get_collection(knowledge_collection) if knowledge_collection else None
@@ -71,8 +75,8 @@ def build_agent(
         tools=tools or [],
         add_history_to_context=not is_analysis,
         num_history_runs=num_history_runs,
-        add_memories_to_context=not is_analysis,
-        enable_agentic_memory=not is_analysis,
+        add_memories_to_context=use_agno_memory,
+        enable_agentic_memory=use_agno_memory,
         pre_hooks=pre_hooks or None,
         post_hooks=post_hooks or None,
         add_dependencies_to_context=add_dependencies_to_context,
