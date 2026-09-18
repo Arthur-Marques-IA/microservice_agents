@@ -4,7 +4,9 @@ A sessão fica salva por agente em `~/.kuro/sessions.json` (ou `KURO_HOME`),
 então mensagens seguidas continuam a mesma conversa; `--new-session` troca.
 """
 
+import base64
 import json
+import mimetypes
 import os
 import sys
 import uuid
@@ -46,6 +48,12 @@ def _load_sessions() -> dict[str, str]:
         return {}
 
 
+def session_for_existing(agent_type: str) -> str | None:
+    """A sessão já salva desse agente (sem criar uma nova) — usada por
+    `agents feedback`, que precisa de uma conversa que já aconteceu."""
+    return _load_sessions().get(agent_type)
+
+
 def session_for(agent_type: str, *, new: bool = False) -> str:
     sessions = _load_sessions()
     if new or agent_type not in sessions:
@@ -57,6 +65,29 @@ def session_for(agent_type: str, *, new: bool = False) -> str:
         except OSError:
             pass  # sem onde salvar: a sessão vale só para esta execução
     return sessions[agent_type]
+
+
+# -- anexos ------------------------------------------------------------------------
+
+
+def read_attachments(st: State, paths: list[str]) -> list[dict[str, Any]]:
+    """Lê cada arquivo e monta o `attachments` da API (base64 + mime type
+    adivinhado pela extensão). Sai com erro de uso se algum não puder ser lido."""
+    attachments: list[dict[str, Any]] = []
+    for raw in paths:
+        path = Path(raw)
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            fail(st, f"não consegui ler o anexo {raw}: {exc}", EXIT_USAGE)
+        attachments.append(
+            {
+                "content_base64": base64.b64encode(content).decode("ascii"),
+                "mime_type": mimetypes.guess_type(path.name)[0],
+                "filename": path.name,
+            }
+        )
+    return attachments
 
 
 # -- dependencies ----------------------------------------------------------------
@@ -159,6 +190,9 @@ def chat(
     session_id: str | None = typer.Option(None, "--session-id", help="Usa esta sessão em vez da salva."),
     new_session: bool = typer.Option(False, "--new-session", help="Começa uma sessão nova (e a salva)."),
     user_id: str = typer.Option("cli", "--user-id", envvar="KURO_USER_ID", help="user_id enviado ao agente."),
+    attach: list[str] = typer.Option(
+        [], "--attach", "-a", help="Anexa um arquivo (imagem, áudio, vídeo, PDF...) à mensagem (repetível)."
+    ),
 ) -> None:
     """Conversa com um agente. Ex.: `kuro chat conversational -m "oi" --json`."""
     st = state(ctx)
@@ -170,6 +204,7 @@ def chat(
         session_id=session_id,
         new_session=new_session,
         user_id=user_id,
+        attachments=read_attachments(st, attach),
     )
 
 
@@ -187,6 +222,7 @@ def run_chat(
     session_id: str | None = None,
     new_session: bool = False,
     user_id: str = "cli",
+    attachments: list[dict[str, Any]] | None = None,
 ) -> None:
     definition = call(st, st.client.get_agent, agent_type)
     if message is None and not stdin_is_tty():
@@ -196,15 +232,23 @@ def run_chat(
 
     dependencies = resolve_dependencies(st, definition, deps or {})
     session = session_id or session_for(agent_type, new=new_session)
+    # No REPL os anexos vão só com a primeira mensagem — reenviá-los a cada turno
+    # os repetiria no histórico da sessão (e no custo de tokens).
+    pending = list(attachments or [])
 
     def body(text: str) -> dict[str, Any]:
-        return {
+        sent = list(pending)
+        pending.clear()
+        payload: dict[str, Any] = {
             "agent_type": agent_type,
             "user_id": user_id,
             "session_id": session,
             "message": text,
             "dependencies": dependencies or None,
         }
+        if sent:
+            payload["attachments"] = sent
+        return payload
 
     if message is not None:
         result = send(st, body(message), live=not st.json_mode)

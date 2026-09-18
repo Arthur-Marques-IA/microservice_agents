@@ -19,11 +19,14 @@ from agent_service.agents.dependency_fields import (
     FieldType,
     validate_field_specs,
 )
+from agent_service.agents.feedback import merge_feedback
+from agent_service.agents.registry import get_agent_with_definition
 from agent_service.agents.store import (
     DefinitionNotFoundError,
     create_definition,
     delete_definition,
     get_definition,
+    get_feedback_note,
     list_definitions,
     list_prompt_versions,
     update_definition,
@@ -32,6 +35,8 @@ from agent_service.documents.collections import collection_exists
 from agent_service.tools.api_tool import required_dependencies
 from agent_service.tools.registry import tool_exists
 from agent_service.tools.store import get_tool
+
+AgentKind = Literal["conversational", "analysis"]
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -70,6 +75,11 @@ class AgentDefinitionIn(BaseModel):
     dependency_fields: list[DependencyFieldIn] = []
     memory_backend: Literal["common", "mem0"] = "common"
     num_history_runs: int = 10
+    kind: AgentKind = "conversational"
+    response_schema: list[DependencyFieldIn] = Field(
+        default=[],
+        description="Só para kind='analysis': campos da saída estruturada (mesma forma de dependency_fields).",
+    )
 
     @field_validator("agent_type")
     @classmethod
@@ -78,7 +88,7 @@ class AgentDefinitionIn(BaseModel):
             raise ValueError("agent_type deve ser um slug: letras minúsculas, números, '-' ou '_'")
         return v
 
-    @field_validator("dependency_fields")
+    @field_validator("dependency_fields", "response_schema")
     @classmethod
     def _validate_dependency_fields(cls, v: list[DependencyFieldIn]) -> list[DependencyFieldIn]:
         _normalize_dependency_fields(v)
@@ -96,8 +106,10 @@ class AgentDefinitionUpdate(BaseModel):
     dependency_fields: list[DependencyFieldIn] | None = None
     memory_backend: Literal["common", "mem0"] | None = None
     num_history_runs: int | None = None
+    kind: AgentKind | None = None
+    response_schema: list[DependencyFieldIn] | None = None
 
-    @field_validator("dependency_fields")
+    @field_validator("dependency_fields", "response_schema")
     @classmethod
     def _validate_dependency_fields(cls, v: list[DependencyFieldIn] | None) -> list[DependencyFieldIn] | None:
         if v is not None:
@@ -117,9 +129,22 @@ class AgentDefinitionOut(BaseModel):
     dependency_fields: list[DependencyFieldOut]
     memory_backend: str
     num_history_runs: int
+    kind: AgentKind
+    response_schema: list[DependencyFieldOut]
     is_seed: bool
     prompt_version: int
     created_at: datetime
+    updated_at: datetime
+
+
+class FeedbackIn(BaseModel):
+    session_id: str
+    feedback: str
+
+
+class FeedbackOut(BaseModel):
+    agent_type: str
+    content: str
     updated_at: datetime
 
 
@@ -134,6 +159,15 @@ class PromptVersionOut(BaseModel):
     version: int
     instructions: list[str]
     created_at: datetime
+
+
+def _validate_kind(kind: str, response_schema: list[dict[str, Any]]) -> None:
+    if kind == "analysis" and not response_schema:
+        raise HTTPException(status_code=422, detail="kind='analysis' precisa de response_schema (ao menos 1 campo)")
+    if kind == "conversational" and response_schema:
+        raise HTTPException(
+            status_code=422, detail="response_schema só se aplica a kind='analysis' (deixe [] para conversational)"
+        )
 
 
 def _validate_collection(name: str | None) -> None:
@@ -177,8 +211,10 @@ def create_agent(body: AgentDefinitionIn) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=f"Agente {body.agent_type!r} já existe")
     payload = body.model_dump()
     payload["dependency_fields"] = _normalize_dependency_fields(body.dependency_fields)
+    payload["response_schema"] = _normalize_dependency_fields(body.response_schema)
     _validate_tools(body.tools, {f["name"] for f in payload["dependency_fields"]})
     _validate_collection(body.knowledge_collection)
+    _validate_kind(body.kind, payload["response_schema"])
     return create_definition(**payload)
 
 
@@ -201,12 +237,19 @@ def update_agent(agent_type: str, body: AgentDefinitionUpdate) -> dict[str, Any]
         _validate_collection(payload["knowledge_collection"])
     if body.dependency_fields is not None:
         payload["dependency_fields"] = _normalize_dependency_fields(body.dependency_fields)
+    if body.response_schema is not None:
+        payload["response_schema"] = _normalize_dependency_fields(body.response_schema)
     # Valida contra o estado final: tools e dependency_fields podem vir juntos ou só um deles.
     if body.tools is not None or body.dependency_fields is not None:
         campos = payload.get("dependency_fields", current["dependency_fields"] or [])
         _validate_tools(
             body.tools if body.tools is not None else (current["tools"] or []),
             {f["name"] for f in campos},
+        )
+    if body.kind is not None or body.response_schema is not None:
+        _validate_kind(
+            payload.get("kind", current["kind"]),
+            payload.get("response_schema", current["response_schema"] or []),
         )
     try:
         updated = update_definition(agent_type, **payload)
@@ -230,3 +273,43 @@ def get_prompt_versions(agent_type: str) -> list[dict[str, Any]]:
     if get_definition(agent_type) is None:
         raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
     return list_prompt_versions(agent_type)
+
+
+def _transcript(agent_type: str, session_id: str) -> str:
+    """Últimas mensagens da sessão, direto do storage do próprio agente
+    (`Agent.get_chat_history` do Agno) — sem reimplementar leitura de sessão."""
+    agent, _ = get_agent_with_definition(agent_type)
+    try:
+        messages = agent.get_chat_history(session_id=session_id, last_n_runs=10)
+    except Exception:  # noqa: BLE001 - o Agno levanta Exception("Session not found") pra sessão inexistente
+        messages = []
+    lines = [f"{m.role}: {m.content}" for m in messages if m.content]
+    if not lines:
+        raise HTTPException(
+            status_code=422, detail=f"Sessão {session_id!r} não tem histórico para {agent_type!r}."
+        )
+    return "\n".join(lines)
+
+
+@router.post("/{agent_type}/feedback", response_model=FeedbackOut)
+def send_feedback(agent_type: str, body: FeedbackIn) -> dict[str, Any]:
+    """Mescla um feedback textual sobre uma conversa numa nota de comportamento
+    persistente — `agents/registry.py` concatena essa nota nas instructions do
+    agente a partir da próxima chamada (sem virar uma prompt_version nova)."""
+    if get_definition(agent_type) is None:
+        raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
+    transcript = _transcript(agent_type, body.session_id)
+    merge_feedback(agent_type, feedback=body.feedback, transcript=transcript)
+    note = get_feedback_note(agent_type)
+    assert note is not None
+    return note
+
+
+@router.get("/{agent_type}/feedback", response_model=FeedbackOut)
+def get_feedback(agent_type: str) -> dict[str, Any]:
+    if get_definition(agent_type) is None:
+        raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
+    note = get_feedback_note(agent_type)
+    if note is None:
+        raise HTTPException(status_code=404, detail=f"Nenhum feedback registrado ainda para {agent_type!r}.")
+    return note

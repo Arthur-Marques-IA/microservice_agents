@@ -13,7 +13,7 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
-from agent_service.cli.chat import run_chat
+from agent_service.cli.chat import run_chat, session_for_existing
 from agent_service.cli.common import (
     EXIT_USAGE,
     State,
@@ -41,6 +41,8 @@ EDITABLE_FIELDS = (
     "dependency_fields",
     "memory_backend",
     "num_history_runs",
+    "kind",
+    "response_schema",
 )
 
 
@@ -71,8 +73,9 @@ def _render_list(agents: list[dict[str, Any]]) -> None:
 
 
 def _render_agent(a: dict[str, Any]) -> None:
+    kind = a.get("kind", "conversational")
     lines = [
-        f"[bold]{a['name']}[/] [dim]({a['agent_type']}{' · seed' if a['is_seed'] else ''})[/]",
+        f"[bold]{a['name']}[/] [dim]({a['agent_type']}{' · seed' if a['is_seed'] else ''} · {kind})[/]",
         f"modelo: {a['model_provider'] or 'padrão'} / {a['model_id'] or 'padrão'}"
         f" · credencial: {a.get('model_credential_id') or 'padrão do provedor'}",
         f"memória: {a['memory_backend']} · histórico: {a['num_history_runs']} runs · prompt v{a['prompt_version']}",
@@ -82,6 +85,9 @@ def _render_agent(a: dict[str, Any]) -> None:
     if a["dependency_fields"]:
         deps = ", ".join(f"{f['name']}:{f['type']}{'*' if f['required'] else ''}" for f in a["dependency_fields"])
         lines.append(f"dependencies: {deps}  [dim](* obrigatório)[/]")
+    if kind == "analysis" and a.get("response_schema"):
+        campos = ", ".join(f"{f['name']}:{f['type']}{'*' if f['required'] else ''}" for f in a["response_schema"])
+        lines.append(f"response_schema: {campos}  [dim](* obrigatório)[/]")
     lines.append("\n[bold]instructions[/]")
     lines += [f"  {i + 1}. {text}" for i, text in enumerate(a["instructions"])]
     console.print(Panel("\n".join(lines), expand=False))
@@ -220,6 +226,40 @@ def test_agent(
     """Atalho para `kuro chat` com este agente."""
     st = state(ctx)
     run_chat(st, agent_type, message=message, deps=parse_pairs(st, dep, "--dep"), new_session=new_session)
+
+
+@app.command("feedback")
+def feedback(
+    ctx: typer.Context,
+    agent_type: str,
+    message: str | None = typer.Option(
+        None, "--message", "-m", help="O que ajustar (ex.: 'deveria confirmar o CPF antes')."
+    ),
+    session_id: str | None = typer.Option(
+        None, "--session-id", help="Sessão específica; por padrão usa a sessão salva da última `kuro chat`."
+    ),
+    show: bool = typer.Option(False, "--show", help="Só mostra a nota atual, sem enviar feedback novo."),
+) -> None:
+    """Ensina o agente a partir de uma conversa: mescla o feedback numa nota
+    que passa a orientar as respostas dele dali pra frente."""
+    st = state(ctx)
+    if show:
+        note = call(st, st.client.get_feedback, agent_type)
+        emit(st, note, lambda n: console.print(n["content"] or "[dim](sem notas ainda)[/]"))
+        return
+
+    if not message:
+        fail(st, "use -m/--message com o que ajustar, ou --show para ver a nota atual", EXIT_USAGE)
+    session = session_id or session_for_existing(agent_type)
+    if not session:
+        fail(
+            st,
+            f"nenhuma sessão salva para {agent_type!r} — converse primeiro com `kuro chat {agent_type}` "
+            "ou informe --session-id",
+            EXIT_USAGE,
+        )
+    updated = call(st, st.client.send_feedback, agent_type, session, message)
+    emit(st, updated, lambda n: console.print(f"[green]✓[/] nota de {agent_type} atualizada"))
 
 
 # -- modo interativo -------------------------------------------------------------------

@@ -37,6 +37,28 @@ kuro --json chat suporte -m "recomeçar" --new-session
 echo "mensagem longa" | kuro --json chat suporte
 # retorna {content, run_id, trace_id, session_id, usage, error}
 
+# Anexos: imagem, áudio, vídeo ou arquivo (PDF, DOCX, CSV, TXT...) direto ao modelo
+kuro --json chat suporte -m "o que tem nessa foto?" --attach foto.png       # -a, repetível
+kuro --json analyze extrator -a contrato.pdf                                # PDF sem extrair texto antes
+# Pela API: `attachments: [{content_base64|url, mime_type, filename}]` no /chat e no /analyze.
+# O modelo do agente precisa suportar o tipo (ex.: Gemini). Limite: MAX_ATTACHMENT_MB (20).
+# No REPL do chat, os anexos vão só na 1ª mensagem. Em conversas, o anexo fica no histórico da
+# sessão (Postgres) e volta como contexto nos turnos seguintes — para anexos grandes ou
+# recorrentes prefira `analyze` (sem sessão).
+
+# Agentes analistas (one-shot, sem sessão) — kind="analysis"
+kuro --json agents apply -f - <<'EOF'
+{"agent_type": "extrator-contrato", "name": "Extrator de contrato", "instructions": ["Extraia os campos do contrato."],
+ "kind": "analysis", "response_schema": [{"name": "valor", "type": "number", "required": true},
+                                          {"name": "prazo_dias", "type": "integer"}]}
+EOF
+kuro --json analyze extrator-contrato -f contrato.txt        # ou stdin; devolve {result: {...}}
+
+# Feedback de conversa vira instrução (agentes conversacionais)
+kuro --json chat suporte -m "meu wifi caiu"
+kuro --json agents feedback suporte -m "deveria confirmar o CPF antes de dar detalhes"  # usa a sessão salva
+kuro --json agents feedback suporte --show                    # nota atual (markdown), já em uso nas próximas respostas
+
 # Tools (sem montar agente)
 kuro --json tools list
 kuro --json tools get calculator                # builtins listam as funções disponíveis

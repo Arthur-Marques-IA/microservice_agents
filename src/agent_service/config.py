@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     """Timeout do exportador de spans. O default do SDK (5s) descarta lotes
     silenciosamente quando o Langfuse está ocupado (ex.: logo após subir)."""
 
+    # Anexos multimodais em /chat e /analyze (imagem/áudio/vídeo/arquivo)
+    max_attachment_mb: int = 20
+    """Limite por anexo, checado antes de decodificar o base64 — evita gastar
+    memória decodificando algo gigante antes de rejeitar."""
+
     # Tools — kind="python" (ver agent_service/tools/python_tool.py)
     custom_python_tools_enabled: bool = False
     """Desligado por padrão: tools Python rodam num namespace restrito, mas

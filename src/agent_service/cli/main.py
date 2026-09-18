@@ -15,6 +15,7 @@ import typer
 from rich.table import Table
 
 from agent_service.cli import agents, collections, runs, tools
+from agent_service.cli.analyze import analyze
 from agent_service.cli.chat import chat
 from agent_service.cli.client import ApiError, Client, ServiceUnavailable
 from agent_service.cli.common import (
@@ -47,6 +48,7 @@ app.add_typer(tools.app, name="tools")
 app.add_typer(runs.app, name="runs")
 app.add_typer(collections.app, name="collections")
 app.command("chat")(chat)
+app.command("analyze")(analyze)
 
 providers_app = typer.Typer(help="Provedores de modelo (LLM) suportados.")
 app.add_typer(providers_app, name="providers")
@@ -291,6 +293,8 @@ def delete_credential(
 _SHELL_HELP = """[bold]Comandos[/] (a `/` é opcional; qualquer comando da CLI funciona aqui)
   /agents              escolher um agente → testar, ver, editar, versões
   /chat <agente>       conversar direto com um agente
+  /analyze <agente>    analisar um documento (agentes kind=analysis), one-shot
+  /agents feedback <agente>   ensinar o agente a partir de uma conversa
   /agents integrate <agente>   como chamar o agente de outro módulo
   /tools               escolher uma tool → ver e invocar
   /collections         bases de conhecimento (RAG) dos agentes

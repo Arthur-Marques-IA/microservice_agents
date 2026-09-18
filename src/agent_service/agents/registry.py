@@ -14,11 +14,16 @@ from typing import Any
 from agno.agent import Agent
 
 from agent_service.agents.base import build_agent
-from agent_service.agents.store import get_definition, list_definitions
+from agent_service.agents.response_model import build_response_model
+from agent_service.agents.store import get_definition, get_feedback_note, list_definitions
 from agent_service.tools.store import get_tool as get_tool_row
 from agent_service.tools.registry import resolve_tools_with_stamp
 
-_cache: dict[str, tuple[Agent, datetime, tuple[datetime, ...]]] = {}
+# (agent, definition.updated_at, tools_stamp, feedback_note.updated_at)
+_CacheEntry = tuple[Agent, datetime, tuple[datetime, ...], datetime | None]
+_cache: dict[str, _CacheEntry] = {}
+
+_FEEDBACK_HEADER = "Ajustes aprendidos com feedback de conversas anteriores:\n"
 
 
 class UnknownAgentTypeError(ValueError):
@@ -27,10 +32,19 @@ class UnknownAgentTypeError(ValueError):
 
 def _build_from_definition(definition: dict[str, Any]) -> tuple[Agent, tuple[datetime, ...]]:
     tools, tools_stamp = resolve_tools_with_stamp(definition["tools"] or [])
+    kind = definition.get("kind") or "conversational"
+    instructions = definition["instructions"]
+    output_schema = None
+    if kind == "analysis":
+        output_schema = build_response_model(definition["agent_type"], definition.get("response_schema") or [])
+    else:
+        note = get_feedback_note(definition["agent_type"])
+        if note and note["content"]:
+            instructions = [*instructions, _FEEDBACK_HEADER + note["content"]]
     return build_agent(
         agent_id=definition["agent_type"],
         name=definition["name"],
-        instructions=definition["instructions"],
+        instructions=instructions,
         tools=tools,
         model_provider=definition["model_provider"],
         model_id=definition["model_id"],
@@ -38,7 +52,16 @@ def _build_from_definition(definition: dict[str, Any]) -> tuple[Agent, tuple[dat
         knowledge_collection=definition.get("knowledge_collection"),
         num_history_runs=definition["num_history_runs"],
         memory_backend=definition["memory_backend"],
+        kind=kind,
+        output_schema=output_schema,
     ), tools_stamp
+
+
+def _feedback_stamp(definition: dict[str, Any]) -> datetime | None:
+    if (definition.get("kind") or "conversational") != "conversational":
+        return None
+    note = get_feedback_note(definition["agent_type"])
+    return note["updated_at"] if note else None
 
 
 def get_agent_with_definition(agent_type: str) -> tuple[Agent, dict[str, Any]]:
@@ -51,14 +74,14 @@ def get_agent_with_definition(agent_type: str) -> tuple[Agent, dict[str, Any]]:
         )
 
     cached = _cache.get(agent_type)
-    if cached is not None and cached[1] == definition["updated_at"]:
+    if cached is not None and cached[1] == definition["updated_at"] and cached[3] == _feedback_stamp(definition):
         # A definição não mudou, mas uma tool dela pode ter mudado: o `Function`
         # com o schema antigo está dentro do `Agent` já construído.
         if cached[2] == _tools_stamp(definition):
             return cached[0], definition
 
     agent, tools_stamp = _build_from_definition(definition)
-    _cache[agent_type] = (agent, definition["updated_at"], tools_stamp)
+    _cache[agent_type] = (agent, definition["updated_at"], tools_stamp, _feedback_stamp(definition))
     return agent, definition
 
 

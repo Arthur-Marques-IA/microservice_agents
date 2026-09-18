@@ -10,6 +10,7 @@ Collections de documentos ficam em `api/collections_routes.py`.
 
 import json
 import logging
+import uuid
 from contextlib import aclosing
 from typing import Any
 
@@ -20,6 +21,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from agno.run.agent import RunEvent
 
+from agent_service.agents.attachments import AttachmentError, AttachmentIn, build_media
 from agent_service.agents.dependency_fields import DependencyValidationError, validate_dependencies
 from agent_service.agents.registry import UnknownAgentTypeError, get_agent_with_definition, list_agent_types
 from agent_service.observability.tracing import RUN_FAILED, RunContext, get_langfuse, traced_run_events
@@ -38,6 +40,10 @@ class ChatRequest(BaseModel):
     dependencies: dict[str, Any] | None = None
     """Metadados opcionais (ex: cpf, nome) injetados como contexto estruturado
     no prompt — ver a aba Integração dos agentes no frontend para exemplos."""
+    attachments: list[AttachmentIn] = []
+    """Imagem, áudio, vídeo ou arquivo (PDF etc.) em base64 (`content_base64`)
+    ou por `url`, com `mime_type`/`filename` — o modelo do agente precisa
+    suportar o tipo (ex.: Gemini)."""
 
 
 class ChatResponse(BaseModel):
@@ -65,6 +71,8 @@ def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
     except DependencyValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    media = _build_media_or_422(request.attachments)
+
     run = RunContext(
         endpoint=endpoint,
         agent_type=request.agent_type,
@@ -74,8 +82,19 @@ def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
         session_id=request.session_id,
         message=request.message,
         dependencies=dependencies,
+        images=tuple(media["images"]),
+        audio=tuple(media["audio"]),
+        videos=tuple(media["videos"]),
+        files=tuple(media["files"]),
     )
     return agent, run
+
+
+def _build_media_or_422(attachments: list[AttachmentIn]) -> dict[str, list[Any]]:
+    try:
+        return build_media(attachments)
+    except AttachmentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/health")
@@ -107,6 +126,80 @@ async def chat(request: ChatRequest) -> ChatResponse:
         agent_type=request.agent_type,
         session_id=request.session_id,
         content=final_content if final_content is not None else "".join(chunks),
+        run_id=run.run_id,
+        trace_id=run.trace_id if get_langfuse() is not None else None,
+    )
+
+
+class AnalyzeRequest(BaseModel):
+    agent_type: str
+    document: str
+    dependencies: dict[str, Any] | None = None
+    attachments: list[AttachmentIn] = []
+    """Mesmo formato do `/chat` — ex.: um PDF direto em vez de texto extraído
+    (nesse caso `document` pode ser só uma instrução curta, como 'veja o anexo')."""
+
+
+class AnalyzeResponse(BaseModel):
+    agent_type: str
+    result: dict[str, Any]
+    """Saída validada contra o `response_schema` do agente."""
+    run_id: str
+    trace_id: str | None = None
+
+
+@router.post("/analyze", response_model=AnalyzeResponse)
+async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
+    """One-shot: sem sessão/histórico — devolve o `document` analisado como
+    objeto estruturado (`response_schema` do agente), não texto."""
+    try:
+        agent, definition = get_agent_with_definition(request.agent_type)
+    except UnknownAgentTypeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ToolBuildError, UnknownToolError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if (definition.get("kind") or "conversational") != "analysis":
+        raise HTTPException(
+            status_code=422, detail=f"Agente {request.agent_type!r} não é do tipo 'analysis' (veja GET /agents)."
+        )
+
+    try:
+        dependencies = validate_dependencies(definition.get("dependency_fields"), request.dependencies)
+    except DependencyValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    media = _build_media_or_422(request.attachments)
+
+    run = RunContext(
+        endpoint="analyze",
+        agent_type=request.agent_type,
+        agent_name=definition["name"],
+        prompt_version=definition["prompt_version"],
+        user_id="analysis",
+        session_id=f"analyze-{uuid.uuid4().hex}",
+        message=request.document,
+        dependencies=dependencies,
+        images=tuple(media["images"]),
+        audio=tuple(media["audio"]),
+        videos=tuple(media["videos"]),
+        files=tuple(media["files"]),
+    )
+
+    final_content: Any = None
+    async with aclosing(traced_run_events(agent, run)) as events:
+        async for event in events:
+            if event.event == RunEvent.run_completed.value:
+                final_content = event.content
+            elif event.event == RunEvent.run_error.value:
+                raise HTTPException(status_code=502, detail=event.content or RUN_FAILED)
+
+    if not isinstance(final_content, BaseModel):
+        raise HTTPException(status_code=502, detail="O agente não devolveu uma saída estruturada válida.")
+
+    return AnalyzeResponse(
+        agent_type=request.agent_type,
+        result=final_content.model_dump(mode="json"),
         run_id=run.run_id,
         trace_id=run.trace_id if get_langfuse() is not None else None,
     )

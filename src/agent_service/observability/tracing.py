@@ -61,11 +61,27 @@ class RunContext:
     session_id: str
     message: str
     dependencies: dict[str, Any] | None = None
+    # Mídia anexada (objetos `agno.media` já prontos — ver `agents/attachments.py`).
+    images: tuple[Any, ...] = ()
+    audio: tuple[Any, ...] = ()
+    videos: tuple[Any, ...] = ()
+    files: tuple[Any, ...] = ()
     run_id: str = field(default_factory=lambda: str(uuid4()))
 
     @property
     def trace_id(self) -> str:
         return trace_id_for_run(self.run_id)
+
+    @property
+    def attachment_counts(self) -> dict[str, int]:
+        """Quantos anexos de cada tipo — vai pro Langfuse no lugar do conteúdo."""
+        counts = {
+            "images": len(self.images),
+            "audio": len(self.audio),
+            "videos": len(self.videos),
+            "files": len(self.files),
+        }
+        return {k: v for k, v in counts.items() if v}
 
 
 def trace_id_for_run(run_id: str) -> str:
@@ -143,6 +159,10 @@ def _agent_events(agent: Agent, run: RunContext) -> AsyncIterator[RunOutputEvent
         stream_events=True,
         dependencies=run.dependencies,
         add_dependencies_to_context=True if run.dependencies else None,
+        images=list(run.images) or None,
+        audio=list(run.audio) or None,
+        videos=list(run.videos) or None,
+        files=list(run.files) or None,
     )
 
 
@@ -200,7 +220,11 @@ async def _produce(client: Langfuse, agent: Agent, run: RunContext, queue: async
             client.start_as_current_observation(
                 trace_context={"trace_id": run.trace_id},
                 name=run.endpoint,
-                input={"message": run.message, "dependencies": run.dependencies},
+                input={
+                    "message": run.message,
+                    "dependencies": run.dependencies,
+                    **({"attachments": run.attachment_counts} if run.attachment_counts else {}),
+                },
             ) as root,
         ):
             try:

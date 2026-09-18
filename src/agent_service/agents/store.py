@@ -24,6 +24,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    Text,
     delete,
     func,
     insert,
@@ -65,6 +66,13 @@ agent_definitions = Table(
     Column("dependency_fields", JSON, nullable=False, default=list),
     Column("memory_backend", String, nullable=False, default="common"),
     Column("num_history_runs", Integer, nullable=False, default=10),
+    # "conversational" (padrão, com histórico/memória) ou "analysis" (one-shot,
+    # devolve `response_schema` validado em vez de texto — ver `agents/response_model.py`).
+    Column("kind", String, nullable=False, default="conversational"),
+    # Só usado quando kind="analysis": mesma forma de `dependency_fields`
+    # ({name, type, label, description, required, default}), validada pela
+    # mesma `dependency_fields.validate_field_specs`.
+    Column("response_schema", JSON, nullable=False, default=list),
     Column("is_seed", Boolean, nullable=False, default=False),
     Column("prompt_version", Integer, nullable=False, default=1),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
@@ -87,6 +95,23 @@ agent_prompt_versions = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
 
+# Nota de comportamento por agente, gerada pelo agente de merge de feedback
+# (`agents/feedback.py`) — concatenada nas `instructions` em runtime por
+# `registry.py`, sem virar uma `prompt_version` nova a cada ajuste.
+agent_feedback_notes = Table(
+    "agent_feedback_notes",
+    metadata,
+    Column("agent_type", String, primary_key=True),
+    Column("content", Text, nullable=False, default=""),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    ),
+)
+
 
 def _add_missing_columns() -> None:
     """`create_all(checkfirst=True)` só cria tabelas que não existem — uma coluna
@@ -101,6 +126,12 @@ def _add_missing_columns() -> None:
         if column not in existing:
             with engine.begin() as conn:
                 conn.execute(text(f"ALTER TABLE agent_definitions ADD COLUMN {column} VARCHAR"))
+    if "kind" not in existing:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE agent_definitions ADD COLUMN kind VARCHAR NOT NULL DEFAULT 'conversational'"))
+    if "response_schema" not in existing:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE agent_definitions ADD COLUMN response_schema JSON NOT NULL DEFAULT '[]'::json"))
 
 
 def init_store() -> None:
@@ -139,6 +170,8 @@ def create_definition(
     dependency_fields: list[dict[str, Any]] | None = None,
     memory_backend: str = "common",
     num_history_runs: int = 10,
+    kind: str = "conversational",
+    response_schema: list[dict[str, Any]] | None = None,
     is_seed: bool = False,
 ) -> dict[str, Any]:
     engine = get_db().db_engine
@@ -156,6 +189,8 @@ def create_definition(
                 dependency_fields=dependency_fields or [],
                 memory_backend=memory_backend,
                 num_history_runs=num_history_runs,
+                kind=kind,
+                response_schema=response_schema or [],
                 is_seed=is_seed,
                 prompt_version=1,
             )
@@ -195,6 +230,8 @@ def update_definition(
     dependency_fields: list[dict[str, Any]] | None = None,
     memory_backend: str | None = None,
     num_history_runs: int | None = None,
+    kind: str | None = None,
+    response_schema: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     current = get_definition(agent_type)
     if current is None:
@@ -219,6 +256,10 @@ def update_definition(
         values["memory_backend"] = memory_backend
     if num_history_runs is not None:
         values["num_history_runs"] = num_history_runs
+    if kind is not None:
+        values["kind"] = kind
+    if response_schema is not None:
+        values["response_schema"] = response_schema
 
     prompt_changed = instructions is not None and instructions != current["instructions"]
     if prompt_changed:
@@ -252,6 +293,7 @@ def delete_definition(agent_type: str) -> None:
     with engine.begin() as conn:
         conn.execute(delete(agent_definitions).where(agent_definitions.c.agent_type == agent_type))
         conn.execute(delete(agent_prompt_versions).where(agent_prompt_versions.c.agent_type == agent_type))
+        conn.execute(delete(agent_feedback_notes).where(agent_feedback_notes.c.agent_type == agent_type))
 
 
 def list_prompt_versions(agent_type: str) -> list[dict[str, Any]]:
@@ -262,3 +304,29 @@ def list_prompt_versions(agent_type: str) -> list[dict[str, Any]]:
             .order_by(agent_prompt_versions.c.version.desc())
         ).all()
         return [_row_to_dict(r) for r in rows]
+
+
+def get_feedback_note(agent_type: str) -> dict[str, Any] | None:
+    with get_db().db_engine.connect() as conn:
+        row = conn.execute(
+            select(agent_feedback_notes).where(agent_feedback_notes.c.agent_type == agent_type)
+        ).first()
+        return _row_to_dict(row) if row else None
+
+
+def upsert_feedback_note(agent_type: str, content: str) -> dict[str, Any]:
+    engine = get_db().db_engine
+    with engine.begin() as conn:
+        if conn.execute(
+            select(agent_feedback_notes.c.agent_type).where(agent_feedback_notes.c.agent_type == agent_type)
+        ).first():
+            conn.execute(
+                update(agent_feedback_notes)
+                .where(agent_feedback_notes.c.agent_type == agent_type)
+                .values(content=content)
+            )
+        else:
+            conn.execute(insert(agent_feedback_notes).values(agent_type=agent_type, content=content))
+    note = get_feedback_note(agent_type)
+    assert note is not None
+    return note

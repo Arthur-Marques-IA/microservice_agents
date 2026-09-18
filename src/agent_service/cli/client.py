@@ -83,6 +83,14 @@ class Client:
             "GET", f"/agents/{agent_type}/integration", params={"base_url": self.base_url}
         )
 
+    def send_feedback(self, agent_type: str, session_id: str, feedback: str) -> dict[str, Any]:
+        return self._request(
+            "POST", f"/agents/{agent_type}/feedback", json={"session_id": session_id, "feedback": feedback}
+        )
+
+    def get_feedback(self, agent_type: str) -> dict[str, Any]:
+        return self._request("GET", f"/agents/{agent_type}/feedback")
+
     # -- chat ----------------------------------------------------------------
 
     def chat_stream(self, body: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
@@ -96,6 +104,9 @@ class Client:
                 yield from _parse_sse(response.iter_lines())
         except httpx.TransportError as exc:
             raise ServiceUnavailable(f"não consegui falar com {self.base_url} ({type(exc).__name__})") from exc
+
+    def analyze(self, body: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/analyze", json=body)
 
     # -- tools ---------------------------------------------------------------
 

@@ -9,6 +9,7 @@ e histórico — sem duplicar essa configuração em cada agente.
 from typing import Any, Literal
 
 from agno.agent import Agent
+from pydantic import BaseModel
 
 from agent_service.db import get_db
 from agent_service.documents.collections import get_collection
@@ -16,6 +17,7 @@ from agent_service.memory.common import CommonMemoryBackend
 from agent_service.models.provider import get_model
 
 MemoryBackendName = Literal["common", "mem0"]
+AgentKind = Literal["conversational", "analysis"]
 
 
 def build_agent(
@@ -30,8 +32,13 @@ def build_agent(
     knowledge_collection: str | None = None,
     num_history_runs: int = 10,
     memory_backend: MemoryBackendName = "common",
+    kind: AgentKind = "conversational",
+    output_schema: type[BaseModel] | None = None,
 ) -> Agent:
-    memory = CommonMemoryBackend()
+    # Agentes "analysis" são one-shot: sem sessão contínua, sem histórico nem
+    # memória — só o documento de entrada e o `output_schema` de saída.
+    is_analysis = kind == "analysis"
+    memory = None if is_analysis else CommonMemoryBackend()
     # `search_knowledge=True` dá ao agente uma tool de busca na collection (RAG
     # agêntico): ele decide quando consultar, em vez de injetarmos tudo no prompt.
     knowledge = get_collection(knowledge_collection) if knowledge_collection else None
@@ -40,7 +47,7 @@ def build_agent(
     post_hooks = []
     add_dependencies_to_context = False
 
-    if memory_backend == "mem0":
+    if memory_backend == "mem0" and not is_analysis:
         from agent_service.memory.mem0_hooks import mem0_post_hook, mem0_pre_hook
 
         pre_hooks = [mem0_pre_hook]
@@ -57,17 +64,18 @@ def build_agent(
         name=name,
         model=get_model(provider=model_provider, model_id=model_id, credential_id=model_credential_id),
         db=get_db(),
-        memory_manager=memory.manager,
+        memory_manager=memory.manager if memory else None,
         knowledge=knowledge,
         search_knowledge=knowledge is not None,
         instructions=instructions,
         tools=tools or [],
-        add_history_to_context=True,
+        add_history_to_context=not is_analysis,
         num_history_runs=num_history_runs,
-        add_memories_to_context=True,
-        enable_agentic_memory=True,
+        add_memories_to_context=not is_analysis,
+        enable_agentic_memory=not is_analysis,
         pre_hooks=pre_hooks or None,
         post_hooks=post_hooks or None,
         add_dependencies_to_context=add_dependencies_to_context,
-        markdown=True,
+        output_schema=output_schema,
+        markdown=output_schema is None,
     )

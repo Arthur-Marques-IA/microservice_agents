@@ -1,5 +1,6 @@
 """CLI `kuro` contra uma API falsa (httpx.MockTransport) — sem serviço no ar."""
 
+import base64
 import json
 
 import httpx
@@ -158,6 +159,118 @@ def test_tool_invoke_ok_false_exits_nonzero(api):
     routes, _ = api
     routes[("POST", "/tools/calc/invoke")] = httpx.Response(200, json={"ok": False, "result": None, "error": "boom"})
     assert _run("tools", "invoke", "calc", "-a", "x=1").exit_code == 1
+
+
+ANALYST = {**AGENT, "agent_type": "extrator", "kind": "analysis", "dependency_fields": [],
+           "response_schema": [{"name": "valor", "type": "number", "label": "Valor", "description": "",
+                                 "required": True, "default": None}]}
+
+
+def test_analyze_rejects_non_analysis_agent(api):
+    routes, _ = api
+    routes[("GET", "/agents/suporte")] = httpx.Response(200, json=AGENT)
+    result = _run("analyze", "suporte", "-f", "-", input="doc")
+    assert result.exit_code == 2
+
+
+def test_analyze_sends_document_and_prints_result(api, tmp_path):
+    routes, calls = api
+    routes[("GET", "/agents/extrator")] = httpx.Response(200, json=ANALYST)
+    routes[("POST", "/analyze")] = httpx.Response(
+        200, json={"agent_type": "extrator", "result": {"valor": 42}, "run_id": "r1", "trace_id": None}
+    )
+    doc = tmp_path / "doc.txt"
+    doc.write_text("contrato de 42 reais", encoding="utf-8")
+
+    result = _run("--json", "analyze", "extrator", "-f", str(doc))
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["result"] == {"valor": 42}
+    body = json.loads(calls[-1].content)
+    assert body["document"] == "contrato de 42 reais"
+
+
+def test_chat_attach_sends_base64_attachment(api, tmp_path):
+    routes, calls = api
+    routes[("GET", "/agents/suporte")] = httpx.Response(200, json={**AGENT, "dependency_fields": []})
+    routes[("POST", "/chat/stream")] = httpx.Response(
+        200,
+        content=_sse(("run", {"run_id": "r1"}), ("message", {"content": "ok"}), ("done", {})),
+        headers={"content-type": "text/event-stream"},
+    )
+    image = tmp_path / "foto.png"
+    image.write_bytes(b"\x89PNGdados")
+
+    assert _run("--json", "chat", "suporte", "-m", "o que é isso?", "-a", str(image)).exit_code == 0
+    [attachment] = json.loads(calls[-1].content)["attachments"]
+    assert attachment["mime_type"] == "image/png"
+    assert attachment["filename"] == "foto.png"
+    assert base64.b64decode(attachment["content_base64"]) == b"\x89PNGdados"
+
+
+def test_chat_without_attach_omits_attachments_key(api):
+    routes, calls = api
+    routes[("GET", "/agents/suporte")] = httpx.Response(200, json={**AGENT, "dependency_fields": []})
+    routes[("POST", "/chat/stream")] = httpx.Response(
+        200, content=_sse(("run", {"run_id": "r1"}), ("done", {})), headers={"content-type": "text/event-stream"}
+    )
+    assert _run("--json", "chat", "suporte", "-m", "oi").exit_code == 0
+    assert "attachments" not in json.loads(calls[-1].content)
+
+
+def test_chat_attach_missing_file_fails(api):
+    routes, _ = api
+    routes[("GET", "/agents/suporte")] = httpx.Response(200, json={**AGENT, "dependency_fields": []})
+    assert _run("--json", "chat", "suporte", "-m", "oi", "-a", "nao-existe.png").exit_code == 2
+
+
+def test_analyze_with_only_attachment_uses_default_prompt(api, tmp_path):
+    routes, calls = api
+    routes[("GET", "/agents/extrator")] = httpx.Response(200, json=ANALYST)
+    routes[("POST", "/analyze")] = httpx.Response(
+        200, json={"agent_type": "extrator", "result": {"valor": 1}, "run_id": "r1", "trace_id": None}
+    )
+    pdf = tmp_path / "contrato.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+
+    assert _run("--json", "analyze", "extrator", "-a", str(pdf)).exit_code == 0
+    body = json.loads(calls[-1].content)
+    assert body["document"] == "Analise o(s) anexo(s)."
+    assert body["attachments"][0]["mime_type"] == "application/pdf"
+
+
+def test_feedback_show_prints_current_note(api):
+    routes, _ = api
+    routes[("GET", "/agents/suporte/feedback")] = httpx.Response(
+        200, json={"agent_type": "suporte", "content": "- seja breve", "updated_at": "2026-01-01T00:00:00Z"}
+    )
+    result = _run("--json", "agents", "feedback", "suporte", "--show")
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["content"] == "- seja breve"
+
+
+def test_feedback_without_saved_session_fails(api):
+    result = _run("agents", "feedback", "suporte", "-m", "seja mais direto")
+    assert result.exit_code == 2
+
+
+def test_feedback_uses_saved_chat_session(api):
+    routes, calls = api
+    routes[("GET", "/agents/suporte")] = httpx.Response(200, json={**AGENT, "dependency_fields": []})
+    routes[("POST", "/chat/stream")] = httpx.Response(
+        200,
+        content=_sse(("run", {"run_id": "r1", "trace_id": "t1"}), ("message", {"content": "oi"}), ("done", {})),
+        headers={"content-type": "text/event-stream"},
+    )
+    assert _run("--json", "chat", "suporte", "-m", "oi").exit_code == 0
+    session_id = json.loads(calls[-1].content)["session_id"]
+
+    routes[("POST", "/agents/suporte/feedback")] = httpx.Response(
+        200, json={"agent_type": "suporte", "content": "- seja mais direto", "updated_at": "2026-01-01T00:00:00Z"}
+    )
+    result = _run("agents", "feedback", "suporte", "-m", "seja mais direto")
+    assert result.exit_code == 0
+    body = json.loads(calls[-1].content)
+    assert body == {"session_id": session_id, "feedback": "seja mais direto"}
 
 
 def test_global_flags_accepted_after_subcommand(api):
