@@ -1,659 +1,571 @@
-# agent-service
+# Kuro · agent-service
 
-Microserviço de agentes de IA para ser embarcado em uma plataforma maior,
-ao lado de outros módulos. Constrói sobre o [Agno](https://docs.agno.com) as
-abstrações de modelo, memória, tools e agentes, expõe um contrato de API
-estável para os demais módulos, usa o [AgentOS](https://docs.agno.com/agent-os)
-do próprio Agno para sessões e ingestão de conhecimento, manda a
-observabilidade para um [Langfuse](https://langfuse.com) self-hosted, e tem um
-console web (Next.js) que integra playground, gestão de agentes e base de
-conhecimento. Todo o stack roda via Docker Compose.
+**Agentes de IA prontos para produção, entregues como um microserviço.**
+Você descreve o agente em JSON, e o Kuro devolve uma API estável para os outros
+módulos da sua plataforma, com versões de prompt, tools sem código, base de
+conhecimento, memória e observabilidade de cada execução.
 
-## Stack
-
-**Backend**
-- **Python 3.12 + Agno** — framework de agentes (agent loop, memória, tools, knowledge).
-- **FastAPI** — API HTTP, síncrona e streaming (SSE).
-- **PostgreSQL + pgvector** — memória comum (sessões/histórico) e collections de documentos.
-- **Redis Streams** — mensageria assíncrona entre módulos da plataforma.
-- **Google Gemini** — provedor de modelo inicial, via abstração em `models/provider.py`.
-- **Langfuse** (self-hosted) — observabilidade: traces das execuções via OpenTelemetry/OpenInference, custo, sessões e feedback.
-- **Mem0** — camada de memória semântica opcional (fase 2).
-
-**Frontend** (`frontend/`)
-- **Next.js (App Router) + TypeScript** — console único: playground, agentes e base de conhecimento.
-- **Tailwind CSS**, componentes no estilo shadcn/ui (escritos à mão em `components/ui/`, sem depender do CLI).
-- Padrão **BFF**: o browser só fala com o Next.js. Os Route Handlers em `app/api/**`
-  proxeiam para o `agent-service` usando a env var interna `AGENT_SERVICE_URL`
-  (nunca exposta ao browser) — sem CORS, sem expor o backend publicamente.
-
-**Infra**: Docker Compose orquestra Postgres+pgvector, Redis, `agent-service`,
-`frontend` e o stack do Langfuse (web, worker e os bancos dele).
-
-## Estrutura
-
-```
-src/agent_service/
-  api/            # contrato estável de API (/chat, /chat/stream, /health) + agents_routes.py/tools_routes.py (CRUD)
-  agents/         # store.py (definições+versionamento no Postgres), registry.py (resolução dinâmica)
-  memory/         # abstração de memória (comum via Agno/Postgres; Mem0 como backend plugável)
-  models/         # abstração de provedor de modelo (LLM)
-  tools/          # store.py (CRUD), catalog.py (builtins do Agno), api_tool.py, python_tool.py, registry.py (resolução)
-  documents/      # collections de documentos (pgvector) para RAG
-  messaging/      # producer/consumer Redis Streams
-  observability/  # tracing.py: Langfuse + instrumentação do Agno; trace_store.py: leitura de runs/traces
-  cli/            # CLI `kuro` (cliente HTTP da API; ver seção CLI e AGENTS.md)
-  db.py           # instância compartilhada do Postgres (agno.db.postgres.PostgresDb)
-  config.py       # settings (env vars)
-  main.py         # FastAPI + AgentOS
-tests/
-Dockerfile        # imagem do agent-service (uv, multi-stage)
-frontend/
-  src/app/(workspace)/ # console: chat/, agents/, tools/, knowledge/, observability/ sob um layout com sidebar
-  src/app/api/         # Route Handlers do BFF (proxy pro agent-service)
-  src/components/      # ui/ (primitivas), workspace/ (shell, sidebar, paleta), chat/, agents/, tools/, knowledge/, integration/
-  src/lib/             # api.ts (proxy), sse.ts (parser SSE), use-chat.ts, sessions.ts, hooks
-  Dockerfile         # multi-stage, output standalone do Next.js
-docker-compose.yml  # postgres, redis, agent-service, frontend + stack do Langfuse
-```
-
-## Rodando localmente (Docker, recomendado)
-
-1. Copie `.env.example` para `.env` e preencha `GOOGLE_API_KEY`. Esse `.env` é
-   usado pelo `agent-service`; dentro do compose, `DATABASE_URL`/`REDIS_URL` e
-   as variáveis do Langfuse são sobrescritas para os hostnames internos
-   (`postgres`, `redis`, `langfuse-web`) — os valores do `.env.example` para
-   elas são só para rodar o backend fora do Docker. As chaves do Langfuse já
-   vêm com defaults de dev (ver **Observabilidade** abaixo).
-
-2. Suba tudo:
-
-   ```bash
-   docker compose up -d --build
-   ```
-
-   | Serviço | URL no host | Observação |
-   |---|---|---|
-   | frontend | http://localhost:3000 | console: `/chat`, `/agents`, `/knowledge`, `/logs` |
-   | agent-service | http://localhost:58000 | API própria; `/docs` pra explorar |
-   | postgres | localhost:55432 | pgvector; porta não-default pra não colidir com um Postgres nativo |
-   | redis | localhost:6379 | |
-
-   O Langfuse (`langfuse-web`, `langfuse-worker`, ClickHouse, Redis e MinIO
-   próprios) roda só na rede interna do compose, sem porta publicada —
-   ninguém loga nele. O metadata dele mora no banco `langfuse`, na mesma
-   instância de Postgres do `agent-service` (um container a menos; os traces
-   em si ficam no ClickHouse, que é dele). Quem olha as execuções é o
-   console, em `/logs` (ver a seção **Observabilidade** abaixo). O primeiro
-   boot demora (migrações do ClickHouse) e o stack pede memória — o projeto
-   recomenda ~4 CPUs / 16 GB. Ele não é pré-requisito do `agent-service`: com
-   o Langfuse fora do ar os runs continuam normais, só não são rastreados.
-
-3. Teste o agente conversacional direto na API (sem passar pelo frontend):
-
-   ```bash
-   curl -X POST http://localhost:58000/chat \
-     -H "Content-Type: application/json" \
-     -d '{"user_id": "u1", "session_id": "s1", "message": "oi, tudo bem?"}'
-   ```
-
-   Streaming (SSE via POST — o corpo é o mesmo do `/chat`; não é `GET`
-   porque `EventSource` do browser não manda corpo, então o cliente consome
-   isso com `fetch` + leitura manual do stream, não com `EventSource`):
-
-   ```bash
-   curl -N -X POST http://localhost:58000/chat/stream \
-     -H "Content-Type: application/json" \
-     -d '{"user_id": "u1", "session_id": "s1", "message": "oi"}'
-   ```
-
-4. **Playground do AgentOS**: com o `agent-service` rodando, conecte o
-   playground hospedado em [os.agno.com](https://os.agno.com) apontando para
-   `http://localhost:58000` — o AgentOS já expõe as rotas que o playground
-   consome (sessões, execução, streaming).
-
-5. **Docs da API própria** (`/health`, `/chat`, `/agents`, `/tools`, `/collections`): `http://localhost:58000/docs`.
-
-## Rodando sem Docker (dev do backend isolado)
+Pensado para ser operado **por pessoas e por outros agentes de IA**: um Claude
+Code consegue criar, testar e depurar um agente inteiro pelo terminal, em
+poucas linhas.
 
 ```bash
-uv sync
-uv run uvicorn agent_service.main:app --app-dir src --reload
+kuro --json agents apply -f suporte.json          # cria o agente
+kuro --json chat suporte -m "meu wifi caiu"       # conversa com ele
+kuro --json runs list --agent suporte -n 1        # vê o que aconteceu, com tokens e custo
 ```
 
-Usa o `DATABASE_URL`/`REDIS_URL` do `.env.example` (localhost, portas
-publicadas pelo compose) — então ainda precisa de `docker compose up -d
-postgres redis` rodando (mais `docker compose up -d langfuse-web`, que puxa
-os bancos dele, se quiser tracing; `LANGFUSE_BASE_URL` do `.env.example`
-já aponta para `http://localhost:3100`, publicada só em `127.0.0.1`).
+---
 
-## Agentes: criação dinâmica e versionamento de prompt
+## Por que o Kuro
 
-Agentes não são mais hardcoded em Python — são linhas em `agent_definitions`
-(Postgres), criadas/editadas via `/agents` (API) ou pela tela `/agents` do
-frontend, e resolvidas em runtime sem restart do processo. O agente
-`conversational` original é só a primeira linha, semeada automaticamente no
-startup (`agents/seed.py`) se ainda não existir.
+| | |
+|---|---|
+| 🧩 **Um contrato, muitos agentes** | `POST /chat` é igual para qualquer agente. Criar ou editar um agente não exige deploy nem restart. |
+| 🔒 **O modelo não escolhe dado sensível** | O CPF usado numa chamada à sua API vem da requisição, injetado pelo servidor. O modelo não consegue inventar nem trocar o valor, nem ser induzido a consultar o CPF de outra pessoa. |
+| 🛠️ **Tools sem escrever código** | Descreva uma API HTTP em JSON e ela vira uma tool. Também há toolkits prontas do Agno. |
+| 🕰️ **Tudo versionado** | Cada mudança de prompt gera uma versão, com diff no console. Cada execução registra a versão que respondeu. |
+| 🔍 **Cada execução explicada** | Chamadas ao modelo, tools, tokens, latência e custo de cada run, pelo console, pela CLI ou pela API. |
+| 📈 **Melhora com o uso** | O feedback do admin sobre uma conversa vira uma regra que o agente segue nas próximas. |
+| 🤖 **Feito para agentes operarem** | CLI com `--json`, códigos de saída previsíveis e nenhum prompt interativo sem TTY. Receitas em [AGENTS.md](AGENTS.md). |
+
+## Três portas para o mesmo serviço
+
+```mermaid
+flowchart LR
+    subgraph Quem usa
+        M["Outros módulos<br/>da plataforma"]
+        A["Agentes de IA<br/>(Claude Code...)<br/>e operadores"]
+        H["Pessoas<br/>(admin, suporte)"]
+    end
+
+    M -- "HTTP · /chat · /analyze" --> API
+    A -- "kuro (CLI) --json" --> API
+    H -- "navegador" --> UI["Console web<br/>Next.js (BFF)"]
+    UI -- "proxy server-side" --> API
+
+    subgraph Kuro
+        API["agent-service<br/>FastAPI + Agno"]
+    end
+
+    API --> LLM["Gemini · OpenAI<br/>Anthropic · Ollama"]
+    API --> PG[("Postgres + pgvector<br/>agentes · sessões · RAG")]
+    API -. "traces" .-> LF["Langfuse<br/>(opcional)"]
+```
+
+- **API** para integrar: o contrato estável que os outros módulos chamam.
+- **CLI (`kuro`)** para operar e corrigir, por humanos ou por IAs.
+- **Console web** para inspecionar quando precisar: playground, logs e edição visual.
+
+---
+
+## Comece em 5 minutos
+
+**Pré-requisitos:** Docker e uma chave do Google Gemini.
 
 ```bash
-# criar
-curl -X POST http://localhost:58000/agents -H "Content-Type: application/json" -d '{
+cp .env.example .env
+# edite o .env: GOOGLE_API_KEY=... e CREDENTIALS_ENCRYPTION_KEY=...
+# gere a chave de cifra com:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+docker compose up -d --build
+uv run kuro health          # serviço, Langfuse e provedores de modelo
+```
+
+| Serviço | Endereço | Para quê |
+|---|---|---|
+| Console | http://localhost:3000 | playground, agentes, tools, base de conhecimento, logs |
+| API | http://127.0.0.1:58000 | contrato de integração; `/docs` tem o OpenAPI |
+| Postgres | `127.0.0.1:55432` | pgvector; porta fora do padrão para não colidir |
+| Redis | `127.0.0.1:6379` | mensageria |
+
+> **Windows:** use `127.0.0.1` para a API, não `localhost`. Com o Docker
+> Desktop, `localhost:58000` pode tentar IPv6 primeiro e travar por 30 s.
+
+**Crie e teste o primeiro agente:**
+
+```bash
+uv run kuro --json agents apply -f - <<'EOF'
+{
   "agent_type": "suporte",
   "name": "Agente de Suporte",
-  "instructions": ["Você é um agente de suporte técnico.", "Responda de forma objetiva."],
-  "memory_backend": "common"
-}'
+  "instructions": ["Você é um agente de suporte técnico.", "Responda de forma objetiva."]
+}
+EOF
 
-# usar imediatamente, sem restart
-curl -X POST http://localhost:58000/chat -H "Content-Type: application/json" \
-  -d '{"agent_type": "suporte", "user_id": "u1", "session_id": "s1", "message": "meu wifi caiu"}'
-
-# editar o prompt (cria uma nova versão automaticamente)
-curl -X PUT http://localhost:58000/agents/suporte -H "Content-Type: application/json" \
-  -d '{"instructions": ["Nova versão do prompt."]}'
-
-# ver o histórico de versões (read-only, sem endpoint de rollback)
-curl http://localhost:58000/agents/suporte/versions
+uv run kuro chat suporte -m "meu wifi caiu"
 ```
 
-Cada edição de `instructions` grava uma linha nova em `agent_prompt_versions`
-e incrementa `prompt_version` — é auditoria/histórico, não um sistema de
-rollback (reverter = editar de novo copiando o texto de uma versão antiga).
-`memory_backend` (`"common"` ou `"mem0"`) e `model_provider`/`model_id`
-também são campos por-agente agora, em vez da antiga env var global
-`MEM0_ENABLED` (que continua existindo só como guarda de configuração do
-Mem0 — ver seção abaixo).
+Ou pela API, de qualquer linguagem:
 
-`GET /tools` lista as tools disponíveis para o campo `tools` (só os nomes são
-salvos na definição do agente — a tool em si é resolvida em runtime, ver
-**Tools dos agentes** abaixo).
+```bash
+curl -X POST http://127.0.0.1:58000/chat -H "Content-Type: application/json" \
+  -d '{"agent_type": "suporte", "user_id": "u1", "session_id": "s1", "message": "meu wifi caiu"}'
+```
 
-**Parâmetros opcionais no chat (`dependencies`)**: `ChatRequest` aceita um
-campo livre `dependencies` (ex: `{"cpf": "...", "nome": "..."}`) — vira
-contexto estruturado injetado no prompt via `add_dependencies_to_context` do
-Agno. Ver a aba **Integração** de cada agente no console para exemplos
-completos (cURL, JavaScript e Python).
+> **Máquina com pouca RAM?** O Langfuse self-hosted (ClickHouse, MinIO, Redis
+> e dois serviços) pede ~16 GB. Numa máquina de 8 GB ele sozinho deixou as
+> respostas 4x mais lentas. Para testar, suba só o núcleo e desligue o tracing
+> (`LANGFUSE_ENABLED=false` no `.env`):
+> `docker compose up -d postgres redis agent-service frontend`.
 
-## Tools dos agentes
+---
 
-Tools são criadas pela API ou pela tela `/tools` do console — nunca editando
-`tools/registry.py`, que só resolve o nome salvo em `AgentDefinition.tools`
-pro objeto real do Agno em runtime (`agents/registry.py` chama isso a cada
-`/chat`, com cache invalidado por `updated_at`, igual ao agente em si). Uma
-tabela só (`tool_definitions`), três formatos (`kind`):
+## Como uma mensagem é processada
 
-| `kind` | O que é | Onde mora a config |
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Seu módulo
+    participant K as Kuro (/chat)
+    participant DB as Postgres
+    participant L as LLM
+    participant T as Sua API (tool)
+
+    C->>K: message + user_id + session_id + dependencies {cpf}
+    K->>K: valida dependencies contra o agente
+    K->>DB: definição atual do agente (cache por versão)
+    K->>DB: histórico da sessão + memórias do usuário
+    K->>L: prompt (instruções + nota de feedback + contexto)
+    L-->>K: "chamar consulta_contrato"
+    K->>T: GET /contratos/{cpf}  ← CPF injetado pelo servidor
+    T-->>K: dados do contrato
+    K->>L: resultado da tool
+    L-->>K: resposta final
+    K-->>C: content + run_id + trace_id
+    Note over K: o trace (modelo, tools, tokens,<br/>custo, versão do prompt) é gravado em background
+    C->>K: POST /observability/scores {run_id, 👍}
+```
+
+---
+
+## Conceitos
+
+### Agentes
+
+Um agente é uma linha no Postgres, não código. Crie pela API, pela CLI ou
+pelo console, e ele responde **na próxima requisição**.
+
+| Tipo (`kind`) | Endpoint | Para quê | Saída |
+|---|---|---|---|
+| `conversational` (padrão) | `POST /chat`, `POST /chat/stream` | atendimento, assistentes | texto, com histórico e memória |
+| `analysis` | `POST /analyze` | análise de documento, extração, classificação | **JSON validado** contra o `response_schema` |
+
+```bash
+# agente analista: devolve um objeto, não texto
+kuro --json agents apply -f - <<'EOF'
+{"agent_type": "extrator-contrato", "name": "Extrator de contrato",
+ "instructions": ["Extraia os campos do contrato."], "kind": "analysis",
+ "response_schema": [{"name": "valor", "type": "number", "required": true},
+                     {"name": "prazo_dias", "type": "integer"}]}
+EOF
+
+kuro --json analyze extrator-contrato -a contrato.pdf    # → {"result": {"valor": 1200.0, "prazo_dias": 30}}
+```
+
+Campos de um agente: `agent_type` (slug), `name`, `instructions`, `tools`,
+`model_provider`, `model_id`, `model_credential_id`, `knowledge_collection`,
+`dependency_fields`, `memory_backend`, `num_history_runs`, `kind` e
+`response_schema`. O agente `conversational` é criado automaticamente no
+primeiro boot.
+
+#### Versões e melhoria contínua
+
+```mermaid
+flowchart LR
+    E["Edita instructions"] --> V["prompt-v{N+1}<br/>(histórico + diff)"]
+    V --> R["Execuções gravam<br/>a versão que respondeu"]
+    R --> S["👍/👎 e notas<br/>por run"]
+    S --> F["Admin comenta uma conversa:<br/>'devia confirmar o CPF antes'"]
+    F --> N["Nota de comportamento<br/>(markdown mesclado por IA)"]
+    N --> P["Entra no prompt<br/>nas próximas respostas"]
+    P --> R
+    S -. "compare versões<br/>em /logs" .-> E
+```
+
+- **Versões:** cada mudança em `instructions` grava uma versão nova. O console
+  mostra o diff contra a atual e permite "restaurar no editor", que publica o
+  texto antigo como versão nova. Mudar nome, tools ou modelo não gera versão.
+- **Nota de feedback:** `kuro agents feedback suporte -m "..."` junta o
+  comentário com as regras anteriores numa nota em markdown, que passa a
+  valer nas respostas seguintes (`kuro agents feedback suporte --show`).
+
+### Tools
+
+Uma tabela, três formatos:
+
+| `kind` | O que é | Você fornece |
 |---|---|---|
-| `builtin` | Uma toolkit padrão do Agno, do catálogo curado em `tools/catalog.py` (busca na web, calculadora, Hacker News, e-mail, arquivos...) | `{"builtin_id": "...", "params": {...}}` |
-| `api` | Chama uma API HTTP existente, descrita em JSON — sem escrever código | método, URL (com `{param}` de path), parâmetros (com a origem de cada valor), autenticação |
-| `python` | Uma função Python enviada por você, `exec`ada num namespace restrito | `{"code": "def handler(...): ...", "entrypoint": "handler"}` |
+| `builtin` | Toolkit pronta do Agno: busca na web, calculadora, Hacker News, e-mail, arquivos... | `builtin_id` e parâmetros |
+| `api` | Qualquer API HTTP, **sem código** | método, URL, parâmetros e autenticação |
+| `python` | Uma função Python sua | código e função de entrada (desligado por padrão, ver [Segurança](#segurança-e-limitações-atuais)) |
 
-**De onde vem cada parâmetro (`source`)**: `"model"` (padrão) é o que o modelo
-preenche; `"dependency"` faz o servidor injetar `dependencies[<campo>]` da
-requisição — o parâmetro some do schema do modelo, que portanto não pode
-inventá-lo (é assim que um CPF chega na API sem passar pelo LLM); `"const"` fixa
-um valor. `required` é cobrado antes da chamada HTTP. Um agente só pode usar uma
-tool se declarar, em `dependency_fields`, os campos que ela exige — e a recíproca
-também vale: a API recusa uma edição de tool que passe a exigir um campo que
+**De onde vem cada parâmetro** é o que torna as tools de API seguras:
+
+```mermaid
+flowchart LR
+    subgraph Requisição
+        MSG["message<br/>'qual meu saldo?'"]
+        DEP["dependencies<br/>{cpf: '123...'}"]
+    end
+    MSG --> LLM["Modelo"]
+    LLM -- "source: model<br/>(ex.: mês)" --> CALL
+    DEP -- "source: dependency<br/>injetado pelo servidor" --> CALL
+    CONST["source: const<br/>(ex.: versão da API)"] --> CALL
+    CALL["Chamada HTTP<br/>GET /saldo?cpf=...&mes=..."] --> API["Sua API"]
+
+    style DEP fill:#e8f5e9,stroke:#2e7d32
+    style LLM fill:#fff3e0,stroke:#ef6c00
+```
+
+- `model` (padrão): o modelo preenche. Só esses parâmetros aparecem no schema dele.
+- `dependency`: o servidor injeta `dependencies[<campo>]` da requisição. O
+  parâmetro fica fora do schema da tool, então o modelo não consegue
+  inventá-lo nem trocá-lo.
+- `const`: valor fixo.
+
+> **Atenção:** hoje todas as `dependencies` enviadas também entram no contexto
+> do modelo, como informação para personalizar a resposta. O `source:
+> "dependency"` protege **qual** valor vai na chamada, não esconde o valor do
+> modelo. Se o dado não pode chegar ao provedor de LLM, não o envie em
+> `dependencies` (esconder campo por campo está no roadmap).
+
+`required` é cobrado antes da chamada HTTP. E o Kuro mantém a consistência
+nos dois sentidos: um agente só salva se declarar em `dependency_fields` os
+campos que suas tools exigem, e uma tool não pode passar a exigir um campo que
 algum agente em uso não declara.
 
 ```bash
-# catálogo de builtins disponíveis (id, params aceitos)
-curl http://localhost:58000/tools/catalog
-
-# criar uma tool builtin
-curl -X POST http://localhost:58000/tools -H "Content-Type: application/json" -d '{
-  "tool_name": "web_search", "kind": "builtin", "label": "Busca na web",
-  "config": {"builtin_id": "web_search", "params": {"max_results": 5}}
-}'
-
-# criar uma tool de API — sem código, só descrição
-curl -X POST http://localhost:58000/tools -H "Content-Type: application/json" -d '{
+# uma tool de API em uma requisição
+curl -X POST http://127.0.0.1:58000/tools -H "Content-Type: application/json" -d '{
   "tool_name": "cep", "kind": "api", "label": "Consulta de CEP",
-  "config": {
-    "method": "GET", "url": "https://viacep.com.br/ws/{cep}/json/",
-    "parameters": [{"name": "cep", "type": "string", "location": "path", "required": true}]
-  }
+  "config": {"method": "GET", "url": "https://viacep.com.br/ws/{cep}/json/",
+             "parameters": [{"name": "cep", "type": "string", "location": "path", "required": true}]}
 }'
 
-# testar uma tool sem montar um agente em volta dela
-curl -X POST http://localhost:58000/tools/cep/invoke -H "Content-Type: application/json" \
-  -d '{"arguments": {"cep": "01310-100"}}'
-
-# usar no agente, como sempre
-curl -X PUT http://localhost:58000/agents/conversational -H "Content-Type: application/json" \
-  -d '{"tools": ["web_search", "cep"]}'
+kuro --json tools invoke cep -a cep=01310-100          # testa sem montar agente
+kuro --json agents set suporte tools='["cep"]'          # liga ao agente
 ```
 
-`GET/PUT /tools/{name}` mascaram segredos (token de auth, senha de app de
-e-mail) na resposta — editar sem mexer no campo mascarado preserva o valor
-real salvo. Excluir é bloqueado se a tool for semeada pelo sistema (`is_seed`)
-ou estiver em uso por algum agente (a resposta diz qual). `POST
-/tools/{name}/invoke` roda a tool uma vez fora de um agente — pra `kind:
-"builtin"`, que expõe várias funções por toolkit, é obrigatório informar
-`function_name` (a lista vem em `GET /tools/{name}.functions`).
+Segredos (token, senha) voltam mascarados nas leituras, e editar sem mexer no
+campo mascarado preserva o valor salvo. Uma tool em uso por algum agente não
+pode ser excluída. O seed cria `calculator`, `hackernews` e `cat_fact`.
+A builtin `web_search` precisa do extra `tools` (`uv sync --extra tools`).
 
-**Tools Python são desligadas por padrão** (`CUSTOM_PYTHON_TOOLS_ENABLED=false`).
-Dá pra criar e editar mesmo desligado — só não roda (nem num agente, nem em
-`/invoke`) até ligar a env var. A validação (`tools/python_tool.py`) recusa
-código com `import` fora de uma lista liberada (math, json, re, datetime,
-statistics, httpx, random...) e qualquer nome/atributo perigoso (`os`,
-`subprocess`, `eval`, `__globals__`, `__subclasses__`...), mais `builtins`
-restritos na execução. **Isso não é uma sandbox forte** — é uma barreira
-contra erro e abuso acidental, não contra um autor mal-intencionado
-determinado (exigiria isolar por processo/container, fora do escopo deste
-serviço). Só ligue se todo mundo com acesso à API/console já for confiável —
-hoje o serviço não tem autenticação (ver **Roadmap**).
+### Base de conhecimento (RAG)
 
-`web_search` (builtin) precisa do extra `tools`: `uv sync --extra tools`
-(instala `ddgs`). As demais builtins do catálogo já funcionam sem instalar
-nada. O seed cria três tools de exemplo prontas pra usar (`calculator`,
-`hackernews`, `cat_fact` — uma tool de API pública, sem segredo nenhum).
-
-## Provedores de modelo
-
-`google` (Gemini) continua o único provedor fixo no `.env`
-(`GOOGLE_API_KEY`) — os demais (`openai`, `anthropic`, `ollama`) são
-cadastrados em runtime pelo console, em **Modelos** (`/models`), ou via API:
+Uma *collection* é uma base de documentos com tabela pgvector própria. O
+agente que aponta para ela em `knowledge_collection` ganha uma tool de busca e
+decide sozinho quando consultar.
 
 ```bash
-# lista o catálogo + o que já está configurado (a chave nunca volta na resposta)
-curl http://localhost:58000/model-providers
-
-# cadastra/atualiza (cifra a chave antes de gravar; omitir api_key mantém a salva)
-curl -X PUT http://localhost:58000/model-providers/openai \
-  -H 'Content-Type: application/json' \
-  -d '{"api_key": "sk-...", "enabled": true}'
-
-# valida a chave chamando um endpoint de leitura barato do SDK oficial (não gasta tokens de geração)
-curl -X POST http://localhost:58000/model-providers/openai/test
-```
-
-As chaves ficam cifradas em repouso (`models/crypto.py`, Fernet) com a chave
-de cifragem em `CREDENTIALS_ENCRYPTION_KEY` — nunca no banco, nunca numa
-resposta da API (só `configured: true` + os últimos 4 caracteres em
-`key_hint`). Sem essa variável configurada, salvar ou ler uma chave falha alto
-em vez de cair para texto plano. `openai` e `ollama` aceitam um `base_url`
-customizado (gateway compatível, self-hosted); `google`/`anthropic` não —
-mantidos nos endpoints oficiais. `ollama` não exige chave, só o endereço do
-servidor (`http://localhost:11434` por padrão).
-
-`agents/store.py` já aceitava `model_provider`/`model_id` como texto livre —
-`models/provider.get_model` é quem resolve isso pro SDK certo (branch por
-provedor) usando a chave cadastrada aqui; sem chave configurada, `openai` e
-`anthropic` levantam `ProviderNotConfiguredError` (erro claro na criação do
-agente, não uma falha silenciosa em runtime). O formulário de agente
-(`/agents/new`) só lista modelos dos provedores já habilitados — `google`
-sempre aparece, pelo fallback do `.env`.
-
-## Collections de documentos (RAG)
-
-Uma collection é uma base de conhecimento: uma linha em `document_collections`
-(`documents/store.py`) com uma tabela pgvector própria. **Um agente consulta a
-collection que estiver em `knowledge_collection`** — com isso o Agno dá a ele
-uma tool de busca e o agente decide quando usá-la (RAG agêntico). Sem esse
-campo, o agente não tem base de conhecimento.
-
-```bash
-# cadastrar uma coleção e alimentá-la
 kuro collections create manuais --label "Manuais do produto"
 cat manual.txt | kuro collections add manuais --title "Manual v2"
-
-# ver o que o agente enxergaria
-kuro collections search manuais "prazo de garantia"
-
-# ligar ao agente (ou pelo seletor na aba Modelo, no console)
+kuro collections search manuais "prazo de garantia"      # o mesmo que o agente enxerga
 kuro agents set suporte knowledge_collection=manuais
 ```
 
-Pela API: `GET/POST /collections`, `DELETE /collections/{nome}`,
-`POST /collections/{nome}/documents` (texto) e
-`GET /collections/{nome}/search`. Excluir uma coleção em uso por algum agente
-é recusado, e a coleção semeada (`general`) não sai.
+O console também aceita upload de arquivo e URL, com chunking e processamento
+assíncrono (pipeline do AgentOS), por enquanto só na coleção padrão (`general`).
+Nas demais, use texto.
 
-O AgentOS expõe por cima disso o pipeline de ingestão completo — upload de
-arquivo/URL em `POST /knowledge/content`, com `reader_id`/`chunker`/
-`chunk_size` opcionais e processamento assíncrono (status em
-`GET /knowledge/content/{id}/status`). **Ressalva:** esse pipeline escreve na
-coleção padrão e não aceita escolher outra, então no console as abas Arquivo e
-URL só ficam ativas na coleção padrão; nas demais, use texto (ou
-`kuro collections add`). Uma coleção criada depois do boot também só aparece
-nas rotas de knowledge do AgentOS após o próximo restart — no `/chat` ela
-funciona na hora.
+### Memória
 
-## Memória com Mem0
+| Camada | Alcance | Como liga |
+|---|---|---|
+| Histórico da sessão | a conversa atual (`session_id`) | sempre, `num_history_runs` mensagens |
+| Memória de longo prazo (Agno) | o usuário (`user_id`), entre sessões | `memory_backend: "common"` (padrão) |
+| Memória de longo prazo (Mem0) | o usuário, com busca semântica | `memory_backend: "mem0"`, que **substitui** a do Agno |
 
-Por padrão todo agente usa a memória comum (`memory/common.py`, sobre
-Postgres, gerenciada nativamente pelo Agno — é a memória "autogerenciada" do
-Agno, o default do framework). Para um agente específico usar o
-[Mem0](https://mem0.ai) como memória semântica:
+Com `common`, o próprio modelo decide o que guardar sobre o usuário e grava no
+Postgres. Com `mem0`, o Mem0 busca as memórias relevantes antes de responder e
+grava depois. Ele exige `uv sync --extra mem0`, `MEM0_ENABLED=true` e
+`MEM0_API_KEY`; a imagem Docker não inclui o extra por padrão. Sem essa
+configuração o agente responde normalmente, mas sem memória de longo prazo,
+e o erro aparece só no log.
 
-1. Instale o extra: `uv sync --extra mem0`.
-2. No `.env`: `MEM0_ENABLED=true` e `MEM0_API_KEY=<sua chave>`.
-3. Crie ou edite o agente com `"memory_backend": "mem0"` (via `POST/PUT
-   /agents`, ou pelo formulário em `/agents` no frontend).
+### Modelos e credenciais
 
-Com isso, `agents/base.py::build_agent` liga `memory/mem0_hooks.py` como
-`pre_hooks`/`post_hooks` do Agent: antes de responder, busca memórias
-relevantes no Mem0 e injeta em `dependencies.mem0_memories`; depois de
-responder, grava a mensagem do usuário no Mem0. O Mem0 **substitui** a
-memória de longo prazo do Agno: um agente `mem0` não tem `memory_manager`, nem
-a tool `update_user_memory`, nem as memórias do Agno no prompt. O histórico da
-sessão (`num_history_runs`) continua igual, porque não é memória de longo prazo.
-Sem o Mem0 configurado (extra instalado, `MEM0_ENABLED`, `MEM0_API_KEY`), um
-agente `mem0` fica sem memória de longo prazo: os hooks falham no log e a
-resposta segue normal.
-
-## Observabilidade (Langfuse)
-
-Toda execução de agente vira um trace no [Langfuse](https://langfuse.com), que
-roda self-hosted no próprio compose — como armazenamento interno, não como
-uma tela do produto: ninguém precisa abrir ou logar na UI dele, o console tem
-sua própria página (`/logs`, ver a seção **Frontend**) que lê os
-mesmos dados pela API. `observability/tracing.py` cria o cliente do Langfuse e liga o
-`AgnoInstrumentor` (OpenInference) ao TracerProvider dele — daí cada trace
-mostra:
-
-- a observação raiz do endpoint (`chat` ou `chat.stream`), com a mensagem, o
-  `dependencies` enviado e a resposta final;
-- o run do agente, **cada chamada ao modelo** (prompt completo, resposta,
-  tokens, latência — o custo o Langfuse calcula pela tabela de preços dele) e
-  **cada tool call** (argumentos, resultado, duração);
-- `user_id` e `session_id` (a aba *Sessions* junta a conversa inteira),
-  `trace_name` = slug do agente, tags e `version = prompt-v{N}`, o que permite
-  comparar versões de prompt no dashboard.
-
-O `run_id` é gerado pelo serviço **antes** do run e o trace usa um id derivado
-dele (`Langfuse.create_trace_id(seed=run_id)`), então qualquer resposta —
-inclusive as reidratadas do histórico — aponta para o próprio trace. O envio é
-em lote e em background: não atrasa nem derruba a resposta. Sem
-`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` (ou com `LANGFUSE_ENABLED=false`)
-o tracing vira no-op e o serviço segue igual.
-
-**Chaves e acesso administrativo**: no primeiro boot o `langfuse-web`
-provisiona (headless init) a organização/projeto `agent-service`, as chaves de
-API que o serviço usa e o usuário `LANGFUSE_INIT_USER_EMAIL`/
-`LANGFUSE_INIT_USER_PASSWORD` — tudo com defaults de dev no
-`docker-compose.yml`. Esse login só importa se você mesmo (infra/admin)
-precisar abrir a UI do Langfuse para algo que a nossa API ainda não cobre (um
-avaliador automático, a tabela de preços de um modelo novo): a porta
-`langfuse-web` é publicada só em `127.0.0.1:3100`, então em `http://localhost:3100`
-na própria máquina onde o compose roda. Troque os valores marcados `CHANGEME`
-(salt, `ENCRYPTION_KEY`, senha do Postgres — compartilhado com o
-`agent-service`, ver **Rodando localmente** — e de ClickHouse/Redis/MinIO,
-chaves do projeto, login) em qualquer ambiente que não seja a sua máquina. Para usar o
-**Langfuse Cloud** no lugar do self-hosted, apague os serviços `langfuse-*` do
-compose e aponte `LANGFUSE_BASE_URL=https://cloud.langfuse.com` com as chaves
-do seu projeto.
-
-**Feedback e scores**: outros módulos (e o console) avaliam uma resposta pelo
-`run_id`, que vira um score no trace:
+Gemini funciona com a `GOOGLE_API_KEY` do `.env`. OpenAI, Anthropic e Ollama
+(e chaves extras do Google) são cadastrados em runtime, pelo console em
+**Modelos** ou pela CLI:
 
 ```bash
-curl -X POST http://localhost:58000/observability/scores \
-  -H "Content-Type: application/json" \
-  -d '{"run_id": "<run_id>", "name": "feedback", "value": 1, "user_id": "u1"}'
+kuro --json providers list
+KEY=sk-... kuro --json credentials add -p openai -l "Produção" --api-key-env KEY
+kuro --json credentials test <credential_id>     # valida sem gastar tokens de geração
+kuro --json agents set suporte model_provider=openai model_id=gpt-4.1-mini
 ```
 
-`feedback` é booleano (1 👍 / 0 👎; o último voto de cada usuário substitui o
-anterior); qualquer outro nome é numérico, para notas de avaliação automática.
-`GET /observability/config` diz se o tracing está ligado. O `run_id` vem em
-`ChatResponse.run_id` e no primeiro evento do streaming (`event: run`).
+As chaves ficam **cifradas em repouso** (Fernet, `CREDENTIALS_ENCRYPTION_KEY`)
+e nunca voltam numa resposta, só os 4 últimos caracteres. Sem a chave de
+cifra, salvar falha em vez de gravar em texto plano. Cada agente pode fixar
+uma credencial (`model_credential_id`) ou usar a padrão do provedor. OpenAI e
+Ollama aceitam `base_url` próprio (gateway compatível ou self-hosted).
+Pela API: `GET /model-providers` e `GET/POST/PUT/DELETE /model-credentials`,
+com `POST /model-credentials/{id}/test`.
 
-**Leitura dos traces sem abrir o Langfuse**: `observability/trace_store.py` lê
-a API pública dele (as chaves ficam só no servidor) e devolve os dados num
-contrato próprio — o console usa essas rotas (é o que a página
-`/logs` mostra) e outros módulos também podem usar:
+### Anexos
+
+`/chat` e `/analyze` aceitam imagem, áudio, vídeo e arquivos (PDF, DOCX, CSV...)
+em `attachments: [{content_base64 | url, mime_type, filename}]`, até
+`MAX_ATTACHMENT_MB` (20) cada. O modelo do agente precisa suportar o tipo (o
+Gemini suporta). Na CLI: `-a arquivo.pdf`, repetível. Em conversas o anexo
+fica no histórico da sessão, então para arquivos grandes prefira `analyze`.
+
+---
+
+## Integrar com outro módulo
+
+Cada agente publica o próprio contrato: endpoint, corpo, `dependencies`
+obrigatórias e exemplos. A documentação sai dos dados e não fica desatualizada.
 
 ```bash
-# execuções de todos os agentes (mais recentes primeiro), com latência, tokens, custo e 👍/👎
-curl "http://localhost:58000/observability/runs?limit=20&status=error"
-# de um agente só: &agent_type=conversational (ou GET /observability/agents/conversational/runs)
-# próxima página: &cursor=<next_cursor>
-
-# trace completo de um run: resumo, spans (árvore via parent_id) e scores
-curl http://localhost:58000/observability/runs/<run_id>/trace
-
-# sessões recentes agregadas (tokens, custo, 👍/👎 por session_id) e série diária p/ gráficos
-curl "http://localhost:58000/observability/sessions?limit=50"
-curl "http://localhost:58000/observability/stats?agent_type=conversational"
+kuro --json agents integrate suporte       # ou GET /agents/suporte/integration
 ```
 
-Os filtros aceitos são `agent_type`, `prompt_version`, `status`
-(`success`/`error`/`interrupted`), `user_id`, `session_id`, `since`/`until`
-(ISO 8601), `limit` (≤ 100) e `cursor`. A ingestão do Langfuse é assíncrona: um
-run recém-terminado leva alguns segundos para aparecer, e até lá o `/trace`
-responde 404. `TraceStore` é uma interface — trocar o Langfuse por outro
-backend não muda o contrato.
+| Endpoint | Uso |
+|---|---|
+| `POST /chat` | resposta completa: `{content, run_id, trace_id, session_id}` |
+| `POST /chat/stream` | SSE via POST. Eventos: `run` (ids), `message` (trechos), `usage` (tokens), `error`, `done` |
+| `POST /analyze` | agente `analysis`, sem sessão: `{result: {...}}` |
+| `POST /observability/scores` | feedback de um run: `{run_id, name: "feedback", value: 1, user_id}` |
 
-`/sessions` e `/stats` não paginam de verdade (a API do Langfuse não agrupa
-por sessão nem por dia): varrem um lote das execuções mais recentes e agregam
-em memória — o campo `scanned` na resposta diz quantas entraram na varredura.
+O streaming é POST porque a mensagem vai no corpo e não na URL. No navegador,
+consuma com `fetch` e leia o `ReadableStream` (o `EventSource` só faz GET).
+As `dependencies` são validadas contra os `dependency_fields` do agente e
+entram no contexto do modelo; as tools as recebem via `source: "dependency"`.
 
-Limitações conhecidas do Langfuse v4: a API de scores não filtra vários traces
-de uma vez, então a listagem cruza o feedback do período no próprio serviço —
-com avaliações demais, `feedback_up`/`feedback_down` voltam `null` (o `/trace`
-sempre traz a contagem exata). E a API de métricas não cruza scores com
-atributos do trace, então "taxa de 👍 por versão do prompt" vai exigir um
-índice próprio.
+---
 
-## Frontend
+## Operar pelo terminal: `kuro`
 
-Um console único, em vez de abas isoladas. Um layout compartilhado
-(`app/(workspace)/layout.tsx`) busca no servidor o que todas as áreas usam
-(agentes, tools, collections) e envolve tudo numa sidebar persistente:
-
-- **Sidebar** — nova conversa, busca/paleta de comandos (`Ctrl/⌘+K`),
-  navegação entre as áreas (inclusive **Observabilidade**, quando o Langfuse
-  está ligado), **histórico de conversas** agrupado por data
-  (renomear/excluir), status da API e tema claro/escuro/sistema. Recolhível
-  (`Ctrl/⌘+B`); vira gaveta no mobile.
-- **Playground (`/chat`, `/chat/[sessionId]`)** — conversa em streaming com
-  qualquer agente. Cada conversa tem URL própria e o histórico é
-  **reidratado** a partir dos runs do AgentOS (`GET /sessions/{id}/runs`):
-  recarregar a página não perde mais as mensagens. O painel de detalhes
-  mostra agente, `session_id`/`user_id` e tokens (total ao fim de cada
-  resposta, via `event: usage`), edita o **contexto (`dependencies`)**
-  enviado a cada mensagem, abre o agente num painel lateral para ajustar o
-  prompt sem sair da conversa e gera o **código de integração** equivalente.
-  Cada resposta tem 👍/👎 (vira o score `feedback` do trace no Langfuse) e um
-  link **Trace**, que abre a execução no próprio console.
-- **Trace de uma execução (`/runs/[runId]`)** — latência, tokens, custo e
-  feedback; a cascata de spans (agente → chamadas ao modelo → tools) e, para o
-  span selecionado, entrada/saída (mensagens do prompt formatadas), modelo,
-  tokens e metadados; mais as avaliações registradas. Enquanto o run ainda
-  está sendo indexado, a página tenta de novo sozinha.
-- **Logs (`/logs`)** — sessões e execuções de todos os agentes, com KPIs e um
-  gráfico de execuções/dia (`StatsPanel`), filtráveis por agente, status e
-  período (a aba *Execuções* de cada agente é a mesma tabela, já filtrada).
-  Cada sessão abre em `/logs/sessions/[sessionId]`, com o histórico completo
-  e os mesmos gráficos filtrados por ela — é pra onde o botão **Ver sessão**
-  do trace e o inspector do chat linkam (filtrado por sessão ou usuário). É a
-  substituta da UI do Langfuse dentro do console — ninguém precisa abrir nem
-  logar nele.
-- **Agentes (`/agents`, `/agents/new`, `/agents/[slug]`)** — lista com busca;
-  a página do agente reúne *Configuração* (formulário com detecção de
-  alterações — só os campos alterados vão no `PUT`, então editar o nome não
-  cria versão de prompt), *Versões* (histórico com diff contra a atual e
-  "restaurar no editor", que salva como nova versão), *Execuções* (todas as
-  chamadas ao agente, de qualquer origem, filtráveis por versão do prompt e
-  status, cada uma abrindo o trace), *Conversas* com o
-  agente e *Integração* (cURL/JavaScript/Python + referência do contrato
-  `/chat` e `/chat/stream`, no lugar da antiga página `/docs`). O multi-select
-  de tools mostra o tipo (builtin/API/Python) de cada uma, com um link para a
-  tela de gerenciamento.
-- **Tools (`/tools`)** — lista com busca, criação e edição de tools dos três
-  tipos (formulário próprio por tipo: escolher a toolkit e seus parâmetros
-  para builtin; método, URL, parâmetros e autenticação para API; editor de
-  código e função de entrada para Python), um botão **Testar** que roda a
-  tool uma vez fora de um agente (`POST /tools/{name}/invoke`) e exclusão
-  (bloqueada se a tool estiver em uso). Campos secretos (token de auth, senha
-  de app de e-mail) vêm mascarados do backend e só mudam se você de fato
-  editá-los.
-- **Base de conhecimento (`/knowledge`)** — tabela dos documentos ingeridos
-  (`GET /knowledge/content`) com status e mensagem de erro, atualização
-  automática enquanto algo processa, exclusão, adição por texto, arquivo
-  (arrastar e soltar) ou URL, e um painel para testar a busca semântica.
-  Substitui o antigo `/admin`.
-
-As rotas antigas redirecionam (`/admin` → `/knowledge`, `/docs` → `/agents`).
-Sem autenticação no MVP: o `user_id` é gerado e guardado no `localStorage`
-do browser, e a sidebar lista só as conversas desse `user_id`.
-
-Nenhuma página fala com o `agent-service` diretamente — tudo passa pelos
-Route Handlers em `frontend/src/app/api/**` (inclusive os de sessões e
-conteúdo do AgentOS), que fazem proxy usando `AGENT_SERVICE_URL` (só
-server-side, sem prefixo `NEXT_PUBLIC_`); `AGENT_SERVICE_PUBLIC_URL` serve
-apenas para montar os exemplos de integração. O streaming do chat é `fetch`
-+ leitura manual do `ReadableStream` (`lib/sse.ts`), não `EventSource`,
-porque o endpoint é `POST`. As respostas renderizam markdown
-(`react-markdown` + `remark-gfm`, sem HTML bruto). Os componentes de UI
-(`components/ui/`: `Dialog`/sheet, `DropdownMenu`, `Tabs`, `Toast`,
-`Confirm`…) seguem escritos à mão, sem `@radix-ui`/`class-variance-authority`.
-
-Dev sem Docker:
+A CLI é um cliente da API HTTP. Ela não precisa de banco local e aponta para
+`http://127.0.0.1:58000` (mude com `--url` ou `KURO_API_URL`).
 
 ```bash
-cd frontend
-npm install
-# AGENT_SERVICE_PUBLIC_URL é opcional: só muda a URL exibida nos exemplos de integração.
-AGENT_SERVICE_URL=http://localhost:58000 AGENT_SERVICE_PUBLIC_URL=http://localhost:58000 npm run dev
+uv run kuro                    # shell interativo: /agents, /tools, /chat <agente>, /help
+uv run kuro agents             # seletor: testar, ver, editar, versões, remover
+uv run kuro chat suporte       # conversa (REPL; /nova troca de sessão)
 ```
 
-## CLI (`kuro`)
+**Para IAs e scripts**, tudo funciona sem interação:
 
-Com a CLI você opera o serviço pelo terminal: listar, criar e editar agentes, conversar com eles,
-invocar tools e ler execuções. Ela é só um cliente da API HTTP e não precisa de banco local.
-Por padrão aponta para `http://127.0.0.1:58000`; use `--url` ou `KURO_API_URL` para outro endereço.
+- `--json` em qualquer posição: dados no stdout e erros em JSON no stderr (`{"error", "status", "detail"}`).
+- Códigos de saída: `0` sucesso · `1` falhou (API, tool `ok: false`, erro no chat) · `2` uso incorreto · `3` serviço inacessível.
+- `--no-input` (ou `KURO_NO_INPUT=1`): nunca pergunta nada; se faltar algo, falha.
+- `chave=valor` é lido como JSON quando possível: `n=3`, `ativo=true`, `tags='["a"]'`.
 
-```bash
-uv run kuro                  # shell interativo: /agents, /tools, /collections, /chat <agente>, /help
-uv run kuro agents           # seletor: escolha o agente → testar, ver, editar, versões, remover
-uv run kuro chat suporte     # conversa direto (REPL; /nova troca de sessão)
-uv run kuro health           # diagnóstico
-uv run kuro agents integrate suporte   # endpoint, cURL e dependências obrigatórias do agente
+| Área | Comandos |
+|---|---|
+| Agentes | `agents list · get · apply · set · edit · delete · versions · test · feedback · integrate` |
+| Conversa | `chat <agente> -m ... -d cpf=... -a arquivo` · `analyze <agente> -f doc.txt` |
+| Tools | `tools list · get · catalog · invoke` |
+| Execuções | `runs list · show · score` |
+| Conhecimento | `collections list · create · delete · add · search` |
+| Modelos | `providers list` · `credentials list · add · edit · delete · test` |
+| Diagnóstico | `health` |
+
+Receitas completas para agentes de IA: **[AGENTS.md](AGENTS.md)**. Para ter
+`kuro` no PATH (e iniciar mais rápido que via `uv run`): `uv tool install -e .`.
+
+---
+
+## Console web
+
+| Página | O que tem |
+|---|---|
+| **Playground** `/chat` | conversa em streaming com qualquer agente; URL por conversa, histórico reidratado; edição de `dependencies`; 👍/👎; link para o trace; código de integração pronto |
+| **Agentes** `/agents` | configuração (só os campos alterados vão no `PUT`), versões com diff, execuções filtráveis por versão e status, conversas, aba Integração com cURL/JS/Python |
+| **Tools** `/tools` | criação e edição dos três tipos, com formulário próprio por tipo, botão **Testar** e origem de cada parâmetro |
+| **Conhecimento** `/knowledge` | documentos com status, upload por texto, arquivo ou URL, teste de busca semântica |
+| **Modelos** `/models` | credenciais por provedor, teste de chave |
+| **Logs** `/logs` | sessões e execuções de todos os agentes, KPIs, gráfico diário; cada sessão e cada run abrem em detalhe |
+| **Trace** `/runs/[id]` | cascata de spans (agente → modelo → tools), prompt formatado, tokens, custo e avaliações |
+
+Atalhos: `Ctrl/⌘+K` (paleta de comandos) e `Ctrl/⌘+B` (recolher a sidebar).
+Tema claro, escuro ou do sistema.
+
+O navegador só fala com o Next.js. Os Route Handlers em `frontend/src/app/api/**`
+fazem proxy para o `agent-service` usando `AGENT_SERVICE_URL`, que só existe no
+servidor: sem CORS e sem expor o backend. Não há login no MVP: o `user_id` do
+console fica no `localStorage` do navegador.
+
+---
+
+## Observabilidade
+
+```mermaid
+flowchart LR
+    RUN["Execução do agente"] -- "OpenTelemetry<br/>(OpenInference)" --> EXP["Exportação em lote,<br/>em background"]
+    EXP --> LF[("Langfuse")]
+    LF -- "API pública<br/>(chaves só no servidor)" --> TS["TraceStore<br/>(interface)"]
+    TS --> OBS["/observability/*"]
+    OBS --> CON["Console /logs"]
+    OBS --> CLI["kuro runs"]
+    OBS --> MOD["Outros módulos"]
 ```
 
-Todo comando também funciona sem interação, que é o modo pensado para IAs e scripts:
-use `--json`, os códigos de saída e `-m` no chat. As convenções e receitas estão no
-[AGENTS.md](AGENTS.md). Para ter `kuro` no PATH fora do projeto: `uv tool install -e .`.
-
-## Testes
+Cada run registra a mensagem, as `dependencies`, cada chamada ao modelo
+(prompt, resposta, tokens, latência, custo) e cada tool call, com `user_id`,
+`session_id`, agente e `prompt-v{N}`. O `run_id` é gerado antes do run, então
+toda resposta aponta para o próprio trace. O envio não atrasa a resposta, e
+com o Langfuse fora do ar os runs seguem normais, só sem rastreio.
 
 ```bash
+kuro --json runs list --agent suporte -n 5            # latência, tokens, custo, 👍/👎
+kuro --json runs show <run_id>                        # spans e scores
+curl "http://127.0.0.1:58000/observability/runs?status=error&limit=20"
+curl "http://127.0.0.1:58000/observability/sessions?limit=50"
+curl "http://127.0.0.1:58000/observability/stats?agent_type=suporte"
+```
+
+Filtros: `agent_type`, `prompt_version`, `status` (`success`/`error`/`interrupted`),
+`user_id`, `session_id`, `since`/`until` (ISO 8601), `limit` (≤ 100) e `cursor`.
+Um run leva alguns segundos para aparecer (a ingestão é assíncrona).
+`/sessions` e `/stats` agregam em memória um lote das execuções recentes (o
+campo `scanned` diz quantas), porque a API do Langfuse não agrupa por sessão
+nem por dia.
+
+O Langfuse roda no compose como armazenamento interno: ninguém precisa abrir
+a UI dele. Se precisar, ela fica em `http://localhost:3100`, só na máquina
+local (login em `LANGFUSE_INIT_USER_EMAIL`/`LANGFUSE_INIT_USER_PASSWORD`). Para
+usar o Langfuse Cloud, remova os serviços `langfuse-*` do compose e aponte
+`LANGFUSE_BASE_URL=https://cloud.langfuse.com`. Troque todos os valores
+marcados `CHANGEME` no compose em qualquer ambiente que não seja a sua máquina.
+
+---
+
+## Arquitetura
+
+```mermaid
+flowchart TB
+    subgraph frontend["frontend/ · Next.js"]
+        PAGES["Páginas do console"] --> BFF["Route Handlers (BFF)"]
+    end
+
+    subgraph backend["src/agent_service/ · FastAPI"]
+        ROUTES["api/<br/>contrato + CRUD"] --> REG["agents/registry<br/>monta o Agent do Agno<br/>(cache por updated_at)"]
+        REG --> STORE["agents/store<br/>definições + versões"]
+        REG --> TOOLS["tools/registry<br/>builtin · api · python"]
+        REG --> MODELS["models/provider<br/>credenciais cifradas"]
+        REG --> MEM["memory/<br/>Agno ou Mem0"]
+        REG --> DOCS["documents/<br/>collections pgvector"]
+        ROUTES --> OBSV["observability/<br/>tracing + trace_store"]
+        CLI["cli/ · kuro"] -. "HTTP" .-> ROUTES
+    end
+
+    BFF -- "AGENT_SERVICE_URL" --> ROUTES
+    STORE & TOOLS & MODELS & MEM & DOCS --> PG[("Postgres + pgvector")]
+    ROUTES -.-> RD[("Redis Streams")]
+    OBSV -.-> LF[("Langfuse")]
+```
+
+```
+src/agent_service/
+  api/            contrato estável (/chat, /chat/stream, /analyze) e CRUD de agentes, tools, collections, credenciais, observabilidade
+  agents/         store (definições + versões + nota de feedback), registry (resolução em runtime), anexos, dependências
+  tools/          store, catálogo de builtins, tools de API e Python, resolução
+  models/         catálogo de provedores, credenciais cifradas, criação do modelo
+  memory/         memória comum (Agno) e Mem0
+  documents/      collections de documentos (pgvector)
+  observability/  tracing (Langfuse + OpenTelemetry) e leitura de traces
+  messaging/      Redis Streams (produtor; consumidor ainda não ligado)
+  cli/            CLI kuro
+  main.py         FastAPI + AgentOS
+frontend/         console Next.js (App Router, Tailwind, componentes próprios em components/ui/)
+tests/            pytest
+```
+
+**Stack:** Python 3.12, [Agno](https://docs.agno.com) (agentes, memória, tools,
+knowledge) e [AgentOS](https://docs.agno.com/agent-os) (sessões e ingestão),
+FastAPI, PostgreSQL + pgvector, Redis Streams, Langfuse, Next.js + TypeScript +
+Tailwind, Docker Compose.
+
+---
+
+## Configuração
+
+| Variável | Padrão | Para quê |
+|---|---|---|
+| `GOOGLE_API_KEY` | — | chave do Gemini (provedor padrão) |
+| `CREDENTIALS_ENCRYPTION_KEY` | — | chave Fernet que cifra as credenciais de modelo; **obrigatória** para cadastrar chaves |
+| `DEFAULT_MODEL_PROVIDER` / `DEFAULT_MODEL_ID` | `google` / `gemini-2.5-flash` | modelo de quem não define um |
+| `DATABASE_URL` / `REDIS_URL` | localhost | sobrescritos dentro do compose |
+| `MAX_ATTACHMENT_MB` | `20` | limite por anexo |
+| `CUSTOM_PYTHON_TOOLS_ENABLED` | `false` | liga a execução de tools `python` |
+| `MEM0_ENABLED` / `MEM0_API_KEY` | `false` / — | habilita agentes com `memory_backend: "mem0"` |
+| `LANGFUSE_ENABLED` | `true` | liga o tracing |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` | valores de dev | conexão com o Langfuse |
+| `LANGFUSE_TIMEOUT_SECONDS` | `20` | timeout do envio de traces |
+| `AGENT_SERVICE_URL` (frontend) | — | endereço interno da API, só no servidor Next.js |
+| `AGENT_SERVICE_PUBLIC_URL` (frontend) | — | endereço exibido nos exemplos de integração |
+| `KURO_API_URL` / `KURO_JSON` / `KURO_NO_INPUT` (CLI) | `http://127.0.0.1:58000` | endereço, saída JSON e modo não interativo |
+
+---
+
+## Desenvolvimento
+
+```bash
+# backend fora do Docker (precisa de postgres e redis do compose rodando)
+docker compose up -d postgres redis
+uv sync
+uv run uvicorn agent_service.main:app --app-dir src --reload
+
+# frontend
+cd frontend && npm install
+AGENT_SERVICE_URL=http://127.0.0.1:58000 npm run dev
+
+# testes
 uv run pytest
 ```
 
-## Escopo do MVP (implementado)
+Não há migrações: o schema é criado no startup (`create_all`), e colunas novas
+entram por `ALTER TABLE` em cada `store.py`.
 
-- Abstrações centrais: `BaseAgent` (`agents/base.py`), memória comum (`memory/common.py`),
-  gerenciamento de modelo (`models/provider.py`).
-- **Agentes dinâmicos**: definições + versionamento de prompt em Postgres
-  (`agents/store.py`), resolvidos em runtime (`agents/registry.py`) sem
-  restart — CRUD completo via `/agents` (API) e pela tela `/agents`
-  (frontend). O agente `conversational` é só a primeira linha semeada.
-- **Tools construídas via API/console, sem código** (`tools/store.py` +
-  `api/tools_routes.py`): builtins do Agno (`tools/catalog.py`), chamadas de
-  API descritas em JSON (`tools/api_tool.py`) e funções Python sandboxed
-  (`tools/python_tool.py`, desligadas por padrão) — CRUD e teste (`/invoke`)
-  via API e pela tela `/tools`. `agents/registry.py` resolve os nomes salvos
-  no agente pros objetos reais do Agno em runtime.
-- API REST síncrona (`POST /chat`, com `dependencies` opcionais) e streaming
-  (`POST /chat/stream`, com tracing e `event: usage` de tokens ao final).
-- **Observabilidade via Langfuse self-hosted** (`observability/tracing.py`):
-  trace por execução com modelo, tools, tokens, custo, sessão e usuário;
-  feedback 👍/👎 do console e `POST /observability/scores` para outros módulos;
-  execuções e traces lidos pela própria API (`/observability/runs`,
-  `/observability/runs/{run_id}/trace`, `/observability/sessions`,
-  `/observability/stats`) e exibidos no console (`/logs`, aba *Execuções* de
-  cada agente) — a porta do Langfuse nem fica exposta na rede.
-- Collections de documentos via pgvector, com pipeline de ingestão completo
-  (`documents/collections.py` + rotas nativas do AgentOS em `/knowledge/*`,
-  mais o atalho `/collections/{name}/documents` para texto simples).
-- Memória semântica via Mem0, plugável por agente através de pre/post hooks
-  (`memory/mem0_backend.py` + `memory/mem0_hooks.py`) — `memory_backend` é um
-  campo por-agente (`"common"` ou `"mem0"`), configurável via `/agents`.
-- Esqueleto pronto para evoluir: mensageria via Redis Streams (`messaging/`).
-- **Todo o stack containerizado** (`Dockerfile` do backend, `frontend/Dockerfile`,
-  `docker-compose.yml` orquestrando serviço, console, bancos e o Langfuse) —
-  `docker compose up -d --build` sobe tudo.
-- **Frontend Next.js** (`frontend/`): console único com sidebar — playground
-  com histórico de conversas reidratado, agentes com versões/diff e
-  integração, e base de conhecimento — como BFF na frente do `agent-service`.
+---
 
-## Roadmap (fase 2+)
+## Segurança e limitações atuais
 
-- **Fallback de modelo**: o Agno já suporta `fallback_models`/`fallback_config`
-  nativamente (`agno.models.fallback.FallbackConfig`) — deliberadamente não
-  ligado ainda (hoje só há Gemini configurado). Entra quando houver um
-  segundo modelo/provedor real para compor a cadeia.
-- **Agente orquestrador**: roteia entre conversacional/analista, consumindo o
-  stream de tarefas do Redis (`messaging/redis_streams.py::consume_tasks` já
-  está pronto para virar a base de um worker).
-- **Agente analista**: usa `documents/collections.py` (knowledge/RAG) via uma
-  tool de busca — a base de conhecimento e a ingestão já existem, falta o
-  agente que a consome.
-- **Rollback de versão de prompt**: hoje o histórico em
-  `agent_prompt_versions` é só leitura/auditoria — o console já oferece
-  "restaurar no editor", que republica o texto antigo como uma versão nova. Um endpoint `POST /agents/{type}/versions/{v}/activate`
-  fecharia isso.
-- **Upload de arquivo por collection**: `POST /knowledge/content` hoje resolve
-  a collection automaticamente porque só existe uma (`general`). Com mais de
-  uma em `COLLECTION_NAMES`, o proxy em `frontend/src/app/api/knowledge/content/route.ts`
-  precisa passar `knowledge_id` (e a tela `/knowledge`, deixar escolher a
-  collection no upload) — a ingestão de texto já suporta isso via `/collections/{name}/documents`.
-- **Auth no frontend**: hoje sem login, `user_id` só vive no `localStorage`
-  do browser. Entra quando a plataforma tiver um sistema de auth definido.
-- **Múltiplos provedores de LLM**: adicionar branches em `models/provider.py`
-  para OpenAI, Anthropic e modelos locais (Ollama/vLLM).
-- **Gerenciamento de modelo mais rico**: fallback entre provedores, custo,
-  rate limiting por tenant.
-- **Autenticação/multi-tenancy** para uso dentro da plataforma (AgentOS já
-  suporta `authorization=True`/`authorization_config`).
-- **Avaliação automática**: datasets e LLM-as-a-judge do Langfuse sobre os
-  traces já coletados — a API de scores (`POST /observability/scores`) já é o
-  ponto de entrada para notas vindas de fora.
-- **CI/CD e deploy**: pipeline de testes + build de imagem, manifests de
-  deploy (k8s ou equivalente da plataforma).
+Leia antes de expor o serviço fora de uma rede confiável:
 
-O roadmap completo, com diagnóstico e prioridades, está em [ROADMAP.md](ROADMAP.md).
+- **Sem autenticação.** Qualquer cliente que alcança a API pode editar agentes
+  e ler traces. Rode em rede interna até a autenticação chegar (ver roadmap).
+- **Tools `python` não são uma sandbox.** O namespace é restrito (imports
+  liberados, nomes perigosos bloqueados), mas isso barra erro e abuso
+  acidental, não um autor mal-intencionado. Por isso vêm desligadas.
+- **Tools `api` chamam qualquer URL `http(s)`**, inclusive endereços internos.
+  Só dê acesso de edição de tools a quem é confiável.
+- **Agentes e collections criados depois do boot** funcionam no `/chat` na
+  hora, mas só aparecem nas rotas nativas do AgentOS (e no playground de
+  os.agno.com) depois de um restart.
+- **Mem0 hospedado** envia as mensagens dos usuários para os servidores do Mem0.
+- **Langfuse self-hosted é pesado** (~16 GB recomendados). Ver
+  [Comece em 5 minutos](#comece-em-5-minutos) para rodar sem ele.
 
-### Desempenho, observabilidade e memória (medições de 2026-09-18)
+---
 
-- **O Langfuse self-hosted é o maior gargalo em máquinas modestas**: em
-  7,3 GB de RAM, os 5 containers do Langfuse ocupavam ~2,2 GB e mais de 3 CPUs
-  sem tráfego, e a VM do Docker entrou em swap. Um "oi" levava 22 s com o
-  Langfuse ligado e 5,3 s com ele parado (teste A/B no mesmo agente).
-- **Observabilidade em Postgres como padrão, Langfuse opcional**: um
-  `PostgresTraceStore` atrás do `TraceStore` existente, com as tabelas
-  `obs_runs` (uma linha por run, gravada ao fim do run), `obs_spans` (árvore do
-  OpenTelemetry, atributos em JSONB, input/output truncados), `obs_scores`
-  (única por `run_id`/`name`/`user_id`) e `model_prices` (custo). O
-  `tracing.py` passa a usar spans OpenTelemetry comuns, com atributos
-  OpenInference, e exporta via OTLP opcional para Langfuse, Phoenix ou o
-  coletor da plataforma. Retenção por idade para os spans. Migração em
-  paralelo: `OBSERVABILITY_BACKEND=postgres|langfuse` até comparar os dois no console.
-- **Thinking do Gemini configurável por agente**: o `gemini-2.5-flash` pensa
-  por padrão (1,33 s contra 0,86 s sem thinking, medido). Um campo como
-  `reasoning: off | low | auto` em `models/provider.py`.
-- **RAG com menos chamadas ao modelo**: uma pergunta à base fez 3 chamadas
-  (decidir buscar, buscar, responder). Para agentes que sempre precisam da
-  base, injetar os top-k trechos no contexto em vez da busca agêntica.
-- **Aquecimento no boot**: montar um agente pela primeira vez leva ~5 s e o
-  primeiro embedding ~3 s. Construir agentes e o cliente de embedding no
-  startup, e reconstruir em background depois de um `PUT`.
-- **`127.0.0.1` em vez de `localhost`**: no Windows, `http://localhost:58000`
-  trava 30 s (IPv6 no Docker Desktop). Trocar nos exemplos do console
-  (`AGENT_SERVICE_PUBLIC_URL`) e neste README.
-- **CLI mais rápida**: importar o `questionary`/`prompt_toolkit` (~2 s) só
-  nos fluxos interativos, e instalar com `uv tool install -e .` em vez de `uv run`.
-- **Memória explícita por agente**: `none` como padrão, `auto`
-  (`update_memory_on_run`, sem tool calls no meio da resposta), `agentic` (o
-  comportamento atual de `common`) e `mem0`. Limitar quantas memórias entram
-  no prompt (hoje entram todas) e criar `GET/DELETE /users/{user_id}/memories`
-  para atender à LGPD.
-- **Mem0 sem falha silenciosa**: recusar `memory_backend="mem0"` ao salvar o
-  agente quando o Mem0 não estiver configurado, mostrar o estado no
-  `kuro health`, gravar em background e buscar com timeout curto para não
-  travar o `/chat`. Auditar o Mem0 hospedado (dados saem da infra) contra o
-  Mem0 open-source sobre o pgvector.
+## Roadmap
+
+O plano completo, com diagnóstico, prioridades e o que cortar, está em
+**[ROADMAP.md](ROADMAP.md)**. Os próximos passos:
+
+- **Fundação:** autenticação por API key com escopos (`runtime`/`admin`),
+  bloqueio de IPs internos nas tools de API, Alembic, CI e `tenant_id` antes de existirem dados.
+- **Leve por padrão:** Docker Compose profiles (`ui`, `observability`) e
+  observabilidade em Postgres atrás do `TraceStore`, com o Langfuse como
+  destino OTLP opcional. Medido em 2026-09-18: numa máquina de 7,3 GB, um "oi"
+  levava 22 s com o Langfuse local e 5,3 s sem ele.
+- **Mais rápido:** thinking do Gemini configurável por agente (1,33 s → 0,86 s
+  medido), menos chamadas ao modelo no RAG, agentes montados no boot, import
+  preguiçoso na CLI.
+- **Agente procedural:** fluxos em etapas (coletar, confirmar, executar) com a
+  máquina de estados no servidor e o estado da etapa devolvido no `/chat`.
+- **Validado de verdade:** versão da configuração inteira, canais `draft`/`prod`,
+  `kuro eval` para comparar versões com execuções reais, servidor MCP e agentes como código.
+- **Dependências privadas:** marcar campos de `dependencies` que as tools
+  usam mas que nunca entram no prompt do modelo.
+- **Memória:** modos explícitos por agente (`none`, `auto`, `agentic`, `mem0`),
+  limite de memórias no prompt, rota para apagar as memórias de um usuário (LGPD)
+  e Mem0 sem falha silenciosa.

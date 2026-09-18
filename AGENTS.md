@@ -92,8 +92,11 @@ Cada parâmetro de uma tool `kind="api"` declara um `source`:
 
 - `"model"` (padrão): o modelo preenche — é o único que aparece no schema dele.
 - `"dependency"`: o servidor injeta `dependencies[<campo>]` da requisição do `/chat`.
-  Use isto para dado que **não pode passar pelo modelo** (CPF, id de conta): ele nem
-  vê o parâmetro. O agente é obrigado a declarar o campo em `dependency_fields`.
+  Use isto para dado que **o modelo não pode escolher** (CPF, id de conta): o parâmetro
+  fica fora do schema da tool, então o modelo não consegue inventar nem trocar o valor.
+  O agente é obrigado a declarar o campo em `dependency_fields`.
+  Atenção: todas as `dependencies` enviadas também entram no contexto do modelo. Isso
+  protege qual valor vai na chamada, mas não esconde o valor do provedor de LLM.
 - `"const"`: valor fixo em `value`.
 
 `required` é cobrado antes da chamada HTTP; faltando um, a tool devolve o que faltou.
@@ -102,4 +105,4 @@ Para testar sem montar agente: `kuro tools invoke <tool> --args-json '{"x": 1}'`
 
 O formato do `apply` é o mesmo do `POST /agents`: `agent_type`, `name`, `instructions`, `tools`,
 `model_provider`, `model_id`, `model_credential_id`, `knowledge_collection`, `dependency_fields`,
-`memory_backend` e `num_history_runs`. Editar `instructions` gera uma nova versão do prompt.
+`memory_backend`, `num_history_runs`, `kind` e `response_schema`. Editar `instructions` gera uma nova versão do prompt.
