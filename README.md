@@ -336,9 +336,13 @@ Agno, o default do framework). Para um agente específico usar o
 Com isso, `agents/base.py::build_agent` liga `memory/mem0_hooks.py` como
 `pre_hooks`/`post_hooks` do Agent: antes de responder, busca memórias
 relevantes no Mem0 e injeta em `dependencies.mem0_memories`; depois de
-responder, grava a mensagem do usuário no Mem0. A memória comum continua
-ativa em paralelo (histórico de sessão), então os dois backends coexistem —
-não há troca completa, só adição da camada semântica do Mem0.
+responder, grava a mensagem do usuário no Mem0. O Mem0 **substitui** a
+memória de longo prazo do Agno: um agente `mem0` não tem `memory_manager`, nem
+a tool `update_user_memory`, nem as memórias do Agno no prompt. O histórico da
+sessão (`num_history_runs`) continua igual, porque não é memória de longo prazo.
+Sem o Mem0 configurado (extra instalado, `MEM0_ENABLED`, `MEM0_API_KEY`), um
+agente `mem0` fica sem memória de longo prazo: os hooks falham no log e a
+resposta segue normal.
 
 ## Observabilidade (Langfuse)
 
@@ -611,3 +615,45 @@ uv run pytest
   ponto de entrada para notas vindas de fora.
 - **CI/CD e deploy**: pipeline de testes + build de imagem, manifests de
   deploy (k8s ou equivalente da plataforma).
+
+O roadmap completo, com diagnóstico e prioridades, está em [ROADMAP.md](ROADMAP.md).
+
+### Desempenho, observabilidade e memória (medições de 2026-09-18)
+
+- **O Langfuse self-hosted é o maior gargalo em máquinas modestas**: em
+  7,3 GB de RAM, os 5 containers do Langfuse ocupavam ~2,2 GB e mais de 3 CPUs
+  sem tráfego, e a VM do Docker entrou em swap. Um "oi" levava 22 s com o
+  Langfuse ligado e 5,3 s com ele parado (teste A/B no mesmo agente).
+- **Observabilidade em Postgres como padrão, Langfuse opcional**: um
+  `PostgresTraceStore` atrás do `TraceStore` existente, com as tabelas
+  `obs_runs` (uma linha por run, gravada ao fim do run), `obs_spans` (árvore do
+  OpenTelemetry, atributos em JSONB, input/output truncados), `obs_scores`
+  (única por `run_id`/`name`/`user_id`) e `model_prices` (custo). O
+  `tracing.py` passa a usar spans OpenTelemetry comuns, com atributos
+  OpenInference, e exporta via OTLP opcional para Langfuse, Phoenix ou o
+  coletor da plataforma. Retenção por idade para os spans. Migração em
+  paralelo: `OBSERVABILITY_BACKEND=postgres|langfuse` até comparar os dois no console.
+- **Thinking do Gemini configurável por agente**: o `gemini-2.5-flash` pensa
+  por padrão (1,33 s contra 0,86 s sem thinking, medido). Um campo como
+  `reasoning: off | low | auto` em `models/provider.py`.
+- **RAG com menos chamadas ao modelo**: uma pergunta à base fez 3 chamadas
+  (decidir buscar, buscar, responder). Para agentes que sempre precisam da
+  base, injetar os top-k trechos no contexto em vez da busca agêntica.
+- **Aquecimento no boot**: montar um agente pela primeira vez leva ~5 s e o
+  primeiro embedding ~3 s. Construir agentes e o cliente de embedding no
+  startup, e reconstruir em background depois de um `PUT`.
+- **`127.0.0.1` em vez de `localhost`**: no Windows, `http://localhost:58000`
+  trava 30 s (IPv6 no Docker Desktop). Trocar nos exemplos do console
+  (`AGENT_SERVICE_PUBLIC_URL`) e neste README.
+- **CLI mais rápida**: importar o `questionary`/`prompt_toolkit` (~2 s) só
+  nos fluxos interativos, e instalar com `uv tool install -e .` em vez de `uv run`.
+- **Memória explícita por agente**: `none` como padrão, `auto`
+  (`update_memory_on_run`, sem tool calls no meio da resposta), `agentic` (o
+  comportamento atual de `common`) e `mem0`. Limitar quantas memórias entram
+  no prompt (hoje entram todas) e criar `GET/DELETE /users/{user_id}/memories`
+  para atender à LGPD.
+- **Mem0 sem falha silenciosa**: recusar `memory_backend="mem0"` ao salvar o
+  agente quando o Mem0 não estiver configurado, mostrar o estado no
+  `kuro health`, gravar em background e buscar com timeout curto para não
+  travar o `/chat`. Auditar o Mem0 hospedado (dados saem da infra) contra o
+  Mem0 open-source sobre o pgvector.
