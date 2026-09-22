@@ -128,6 +128,19 @@ Cada parâmetro de uma tool `kind="api"` declara um `source`:
 
 `required` é cobrado antes da chamada HTTP; faltando um, a tool devolve o que faltou.
 
+Um parâmetro `source="model"` de tipo `object` exige `fields`, e de tipo `array` exige `items` —
+o mesmo vocabulário do `response_schema` de um agente analista:
+
+```json
+{"name": "ids",     "type": "array",  "location": "body", "items": {"type": "integer"}}
+{"name": "filtros", "type": "object", "location": "body",
+ "fields": [{"name": "status", "type": "string", "required": true}]}
+```
+
+Sem eles o schema declarado ao modelo sai como `{"type":"array"}` pelado, que o provedor recusa —
+então isso é 422 no cadastro. Em `source="dependency"`/`"const"` não se aplica: esses parâmetros
+não entram no schema do modelo.
+
 Toda tool só alcança endereços **públicos**: o destino é resolvido e conferido antes de cada
 chamada (com a URL já montada, porque um parâmetro `location="path"` pode compor o host). Salvar
 uma tool apontando para dentro falha com 422; uma chamada recusada devolve o motivo ao modelo.

@@ -20,12 +20,7 @@ from agent_service.agents.dependency_fields import (
     validate_field_specs,
 )
 from agent_service.agents.feedback import merge_feedback
-from agent_service.agents.response_model import (
-    RESPONSE_TYPES,
-    ITEM_TYPES,
-    ResponseSchemaError,
-    validate_response_schema,
-)
+from agent_service.agents.response_model import ResponseSchemaError, validate_response_schema
 from agent_service.agents.registry import get_agent_with_definition
 from agent_service.agents.store import (
     DefinitionNotFoundError,

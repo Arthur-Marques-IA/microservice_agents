@@ -4,6 +4,7 @@ exposto em `api/tools_routes.py`.
 """
 
 import asyncio
+import copy
 import json
 import time
 from unittest.mock import MagicMock, patch
@@ -546,3 +547,74 @@ def test_tool_python_enxerga_as_dependencies_da_requisicao():
 
         _run_with_timeout(espia, 5.0)
     assert visto == {"cpf": "123"}
+
+
+# -- parâmetros compostos numa tool de API ---------------------------------------
+#
+# Mesmo buraco que o `response_schema` tinha: um `array` sem `items` ou um
+# `object` sem `fields` vira uma declaração de tool que o provedor recusa — e o
+# erro só aparecia na chamada, longe de quem escreveu a tool.
+
+BASE_API = {"method": "POST", "url": "https://exemplo.test/busca"}
+
+
+@pytest.mark.parametrize(
+    "parametro, trecho",
+    [
+        ({"name": "ids", "type": "array", "location": "body"}, "items"),
+        ({"name": "filtros", "type": "object", "location": "body"}, "fields"),
+        ({"name": "itens", "type": "array", "location": "body", "items": {"type": "object"}}, "fields"),
+        ({"name": "matriz", "type": "array", "location": "body", "items": {"type": "array"}}, "tipo inválido"),
+    ],
+)
+def test_parametro_composto_sem_sub_schema_e_recusado(parametro, trecho):
+    with pytest.raises(ApiToolConfigError) as exc:
+        validate_api_config({**BASE_API, "parameters": [parametro]})
+    assert trecho in str(exc.value)
+
+
+def test_schema_da_tool_sai_com_items_e_properties():
+    config = validate_api_config(
+        {
+            **BASE_API,
+            "parameters": [
+                {"name": "ids", "type": "array", "location": "body", "required": True,
+                 "items": {"type": "integer"}},
+                {"name": "filtros", "type": "object", "location": "body",
+                 "fields": [{"name": "status", "type": "string", "required": True}]},
+            ],
+        }
+    )
+    schema = build_api_function(tool_name="busca", description=None, config=config).parameters
+    assert schema["properties"]["ids"]["items"] == {"type": "integer"}
+    filtros = schema["properties"]["filtros"]
+    assert filtros["properties"]["status"]["type"] == "string"
+    assert filtros["required"] == ["status"]
+    assert schema["required"] == ["ids"]  # só o que é obrigatório para o modelo
+
+
+def test_composto_de_dependency_ou_const_nao_precisa_de_sub_schema():
+    """Eles não entram no schema do modelo (`_parameters_schema` os pula), então
+    não há declaração inválida a evitar — exigir sub-schema só quebraria tool salva."""
+    config = validate_api_config(
+        {
+            **BASE_API,
+            "parameters": [
+                {"name": "perfil", "type": "object", "location": "body",
+                 "source": "dependency", "dependency": "perfil"},
+                {"name": "flags", "type": "array", "location": "body", "source": "const", "value": [1, 2]},
+            ],
+        }
+    )
+    schema = build_api_function(tool_name="busca", description=None, config=config).parameters
+    assert schema["properties"] == {}
+
+
+def test_validar_nao_altera_o_config_de_quem_chamou():
+    """A normalização do composto acontece numa cópia."""
+    original = {**BASE_API, "parameters": [
+        {"name": "ids", "type": "array", "location": "body", "items": {"type": "integer"}}
+    ]}
+    antes = copy.deepcopy(original)
+    validate_api_config(original)
+    assert original == antes

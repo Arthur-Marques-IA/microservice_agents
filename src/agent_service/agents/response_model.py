@@ -2,13 +2,14 @@
 de `response_schema`.
 
 Os campos folha (`string`, `integer`, `number`, `boolean`) têm a mesma forma de
-`dependency_fields` e são normalizados pelo mesmo
-`dependency_fields.validate_field_specs` — um formato só para descrever campo.
+`dependency_fields`. Além deles a saída aceita dois tipos compostos, que
+`dependency_fields` não tem: `object` (com `fields`) e `array` (com `items`). É
+o que permite extrair uma lista de itens de um documento — as parcelas de um
+contrato, as mensagens de um histórico de conversa — em vez de só campos soltos.
 
-Além deles, a saída aceita dois tipos compostos, que `dependency_fields` não
-tem: `object` (com `fields`) e `array` (com `items`). É o que permite extrair
-uma lista de itens de um documento — as parcelas de um contrato, as mensagens
-de um histórico de conversa — em vez de só campos soltos.
+A validação desse vocabulário mora em `agent_service/field_schema.py`, junto com
+os parâmetros de tool, que descrevem campo do mesmo jeito. Aqui fica só a parte
+que é específica daqui: virar um modelo pydantic.
 
 ```json
 {"name": "parcelas", "type": "array",
@@ -18,19 +19,15 @@ de um histórico de conversa — em vez de só campos soltos.
 {"name": "tags",    "type": "array",  "items": {"type": "string"}}
 ```
 
-`fields` e `items` são **obrigatórios** nos seus tipos, não por preciosismo: um
-`object` sem `fields` vira `{"type": "object", "additionalProperties": true}` no
-JSON Schema e um `array` sem `items` vira `"items": {}` — as duas formas que os
-provedores recusam em saída estruturada (o Gemini exige `properties` em OBJECT e
-um `items` tipado em ARRAY). Um schema assim seria aceito no cadastro e falharia
-em toda chamada.
+`fields` e `items` são obrigatórios nos seus tipos — o porquê está no docstring
+de `field_schema.py`.
 """
 
 from typing import Any
 
 from pydantic import BaseModel, Field, create_model
 
-from agent_service.agents.dependency_fields import DependencyFieldSpecError, validate_field_specs
+from agent_service.field_schema import FieldSchemaError, validate_fields
 
 _PY_TYPES: dict[str, type] = {
     "string": str,
@@ -39,108 +36,14 @@ _PY_TYPES: dict[str, type] = {
     "boolean": bool,
 }
 
-LEAF_TYPES = frozenset(_PY_TYPES)
-RESPONSE_TYPES = LEAF_TYPES | {"object", "array"}
-ITEM_TYPES = LEAF_TYPES | {"object"}
-"""`array` de `array` fica de fora: aninhar listas direto raramente é o que se
-quer (o caso real é lista de objetos) e complica o schema para o modelo."""
-
-_MAX_DEPTH = 5
+ResponseSchemaError = FieldSchemaError
+"""Nome histórico do erro, mantido porque as rotas e os testes importam por ele."""
 
 
-class ResponseSchemaError(ValueError):
-    """`response_schema` inválido — 422 ao criar/editar o agente."""
-
-
-def validate_response_schema(specs: list[dict[str, Any]] | None, *, _depth: int = 0, _path: str = "response_schema") -> list[dict[str, Any]]:
-    """Valida e normaliza `response_schema`, incluindo os tipos compostos."""
-    if not specs:
-        return []
-    if not isinstance(specs, list):
-        raise ResponseSchemaError(f"{_path} deve ser uma lista")
-    if _depth > _MAX_DEPTH:
-        raise ResponseSchemaError(f"{_path}: aninhamento passa de {_MAX_DEPTH} níveis")
-
-    normalized: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for raw in specs:
-        field = _validate_field(raw, depth=_depth, path=_path)
-        if field["name"] in seen:
-            raise ResponseSchemaError(f"{_path}: campo duplicado {field['name']!r}")
-        seen.add(field["name"])
-        normalized.append(field)
-    return normalized
-
-
-def _validate_field(raw: dict[str, Any], *, depth: int, path: str) -> dict[str, Any]:
-    if not isinstance(raw, dict):
-        raise ResponseSchemaError(f"{path}: cada campo deve ser um objeto")
-    field_type = raw.get("type", "string")
-    if field_type not in RESPONSE_TYPES:
-        raise ResponseSchemaError(
-            f"{path}: tipo inválido {field_type!r} em {raw.get('name')!r} (use {sorted(RESPONSE_TYPES)})"
-        )
-
-    # Os campos folha são exatamente os de `dependency_fields`: mesma normalização,
-    # para não existirem dois formatos de "descrever um campo" no produto.
-    base = _leaf(raw, path=path) if field_type in LEAF_TYPES else _composite_base(raw, path=path)
-    if field_type in LEAF_TYPES:
-        return base
-
-    nome = base["name"]
-    if field_type == "object":
-        subcampos = raw.get("fields")
-        if not subcampos:
-            raise ResponseSchemaError(
-                f"{path}.{nome}: type='object' exige `fields` (um objeto sem campos não vira schema válido "
-                "para o modelo — veja o docstring de agents/response_model.py)"
-            )
-        base["fields"] = validate_response_schema(subcampos, _depth=depth + 1, _path=f"{path}.{nome}.fields")
-        return base
-
-    items = raw.get("items")
-    if not isinstance(items, dict):
-        raise ResponseSchemaError(
-            f"{path}.{nome}: type='array' exige `items` com o tipo do elemento, ex.: "
-            '{"type": "string"} ou {"type": "object", "fields": [...]}'
-        )
-    item_type = items.get("type", "string")
-    if item_type not in ITEM_TYPES:
-        raise ResponseSchemaError(
-            f"{path}.{nome}.items: tipo inválido {item_type!r} (use {sorted(ITEM_TYPES)})"
-        )
-    normalized_items: dict[str, Any] = {"type": item_type}
-    if item_type == "object":
-        if not items.get("fields"):
-            raise ResponseSchemaError(f"{path}.{nome}.items: type='object' exige `fields`")
-        normalized_items["fields"] = validate_response_schema(
-            items["fields"], _depth=depth + 1, _path=f"{path}.{nome}.items.fields"
-        )
-    base["items"] = normalized_items
-    return base
-
-
-def _leaf(raw: dict[str, Any], *, path: str) -> dict[str, Any]:
-    try:
-        return validate_field_specs([raw])[0]
-    except DependencyFieldSpecError as exc:
-        raise ResponseSchemaError(f"{path}: {exc}") from exc
-
-
-def _composite_base(raw: dict[str, Any], *, path: str) -> dict[str, Any]:
-    """O mesmo que `_leaf` faria, mas sem passar pelo validador de folha, que só
-    conhece os quatro tipos simples."""
-    name = raw.get("name")
-    if not isinstance(name, str) or not name.isidentifier():
-        raise ResponseSchemaError(f"{path}: nome de campo inválido: {name!r}")
-    return {
-        "name": name,
-        "type": raw["type"],
-        "label": raw.get("label") or name,
-        "description": raw.get("description") or "",
-        "required": bool(raw.get("required", False)),
-        "default": None,  # composto não tem default: a ausência já é `None`
-    }
+def validate_response_schema(specs: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Valida e normaliza `response_schema` — as regras compostas vivem em
+    `agent_service/field_schema.py`, compartilhadas com os parâmetros de tool."""
+    return validate_fields(specs, path="response_schema")
 
 
 def _model_name(*parts: str) -> str:

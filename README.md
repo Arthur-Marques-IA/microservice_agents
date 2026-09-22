@@ -202,6 +202,11 @@ Uma tabela, três formatos:
 > modelo. Se o dado não pode chegar ao provedor de LLM, não o envie em
 > `dependencies` (esconder campo por campo está no roadmap).
 
+Um parâmetro que o modelo preenche e é `object` precisa declarar `fields`, e
+`array` precisa de `items` — mesmo vocabulário do `response_schema`. Sem eles a
+tool seria declarada ao modelo como um tipo pelado, que o provedor recusa; o
+cadastro falha com 422 em vez de a tool quebrar só na hora de usar.
+
 `required` é cobrado antes da chamada HTTP. E o Kuro mantém a consistência
 nos dois sentidos: um agente só salva se declarar em `dependency_fields` os
 campos que suas tools exigem, e uma tool não pode passar a exigir um campo que

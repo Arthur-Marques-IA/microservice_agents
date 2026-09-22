@@ -34,12 +34,14 @@ pode compor o host (`https://{host}/x`), e aí o destino seria escolha do modelo
 """
 
 import asyncio
+import copy
 import weakref
 from typing import Any, Literal
 
 import httpx
 from agno.tools.function import Function
 
+from agent_service.field_schema import FieldSchemaError, object_schema, validate_composite
 from agent_service.tools.context import get_dependencies
 from agent_service.tools.egress import EgressBlockedError, acheck_url, check_url_template
 
@@ -113,7 +115,9 @@ def validate_api_config(config: dict[str, Any]) -> dict[str, Any]:
     except EgressBlockedError as exc:
         raise ApiToolConfigError(str(exc)) from exc
 
-    parameters = config.get("parameters", [])
+    # Cópia: os compostos são normalizados no lugar, e mexer no dict de quem
+    # chamou seria efeito colateral escondido.
+    parameters = copy.deepcopy(config.get("parameters", []))
     if not isinstance(parameters, list):
         raise ApiToolConfigError("parameters deve ser uma lista")
     seen_names: set[str] = set()
@@ -144,6 +148,15 @@ def validate_api_config(config: dict[str, Any]) -> dict[str, Any]:
             raise ApiToolConfigError(f"{name!r}: source='const' exige `value`")
         if location == "header" and name.lower() == "authorization":
             raise ApiToolConfigError(f"{name!r}: um parâmetro não pode ser o header Authorization (use auth)")
+
+        # Só o que o modelo preenche entra no schema da tool (`_parameters_schema`),
+        # e é só aí que um composto sem sub-schema vira uma declaração que o
+        # provedor recusa. Em `dependency`/`const` o tipo é só o do valor.
+        if source == "model" and p["type"] in ("object", "array"):
+            try:
+                p.update(validate_composite(p, path=f"parâmetro {name}"))
+            except FieldSchemaError as exc:
+                raise ApiToolConfigError(str(exc)) from exc
 
     for placeholder in _format_placeholders(url):
         if placeholder not in path_names:
@@ -192,19 +205,12 @@ def _format_placeholders(url: str) -> set[str]:
 
 def _parameters_schema(parameters: list[dict[str, Any]]) -> dict[str, Any]:
     """Só os parâmetros `source="model"`: o que vem de dependency/const não é
-    assunto do modelo e fica fora do schema, para ele não tentar preencher."""
-    properties = {}
-    required = []
-    for p in parameters:
-        if p.get("source", "model") != "model":
-            continue
-        properties[p["name"]] = {
-            "type": _JSON_SCHEMA_TYPE[p["type"]],
-            "description": p.get("description") or "",
-        }
-        if p.get("required"):
-            required.append(p["name"])
-    return {"type": "object", "properties": properties, "required": required}
+    assunto do modelo e fica fora do schema, para ele não tentar preencher.
+
+    A montagem em si é do `field_schema`, o mesmo que serve o `response_schema`
+    de um agente analista — assim um `array` declarado a uma tool sai com `items`
+    e um `object` com `properties`, em vez do tipo pelado que o provedor recusa."""
+    return object_schema([p for p in parameters if p.get("source", "model") == "model"])
 
 
 def required_dependencies(config: dict[str, Any]) -> list[str]:

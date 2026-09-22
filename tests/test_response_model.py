@@ -1,6 +1,7 @@
 import pytest
 
 from agent_service.agents.dependency_fields import validate_field_specs
+from agent_service.field_schema import MAX_DEPTH
 from agent_service.agents.response_model import (
     ResponseSchemaError,
     build_response_model,
@@ -133,12 +134,22 @@ def test_campo_duplicado_dentro_de_um_objeto():
     assert "duplicado" in str(exc.value)
 
 
-def test_aninhamento_tem_limite():
-    campo = {"name": "n0", "type": "object", "fields": [{"name": "folha", "type": "string"}]}
-    for i in range(1, 9):
+def _aninhado(n: int) -> list[dict]:
+    campo = {"name": "folha", "type": "string"}
+    for i in range(n):
         campo = {"name": f"n{i}", "type": "object", "fields": [campo]}
+    return [campo]
+
+
+def test_aninhamento_no_limite_e_aceito():
+    """Fixa o lado de cá da fronteira: um schema legal recusado viraria um 422
+    aparentemente aleatório para quem o escreveu."""
+    assert validate_response_schema(_aninhado(MAX_DEPTH))
+
+
+def test_aninhamento_acima_do_limite_e_recusado():
     with pytest.raises(ResponseSchemaError) as exc:
-        validate_response_schema([campo])
+        validate_response_schema(_aninhado(MAX_DEPTH + 1))
     assert "aninhamento" in str(exc.value)
 
 
