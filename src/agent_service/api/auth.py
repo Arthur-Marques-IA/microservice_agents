@@ -39,9 +39,16 @@ from agent_service.config import get_settings
 
 Scope = Literal["runtime", "admin"]
 
-PUBLIC_PATHS = frozenset({"/health", "/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"})
-"""Aberto sempre. `/health` precisa estar: é o healthcheck do container e de
-qualquer load balancer na frente."""
+PUBLIC_PATHS = frozenset({"/health"})
+"""Aberto sempre, e só isto: é o healthcheck do container e de qualquer load
+balancer na frente, que não têm como mandar header.
+
+`/docs` e `/openapi.json` ficam **fora** desta lista de propósito. Publicar a
+superfície inteira da API — cada rota administrativa, cada schema — para quem
+alcança a porta é entregar o mapa antes da fechadura. Com uma chave admin eles
+continuam acessíveis: `curl -H "Authorization: Bearer $ADMIN_API_KEY"
+http://.../openapi.json`. Com o serviço aberto (sem chave configurada), abrir
+`/docs` no navegador segue funcionando como antes."""
 
 RUNTIME_PATHS = frozenset({"/chat", "/chat/stream", "/analyze", "/observability/scores"})
 """O que a chave `runtime` alcança — executar um agente e avaliar a execução.
@@ -81,10 +88,17 @@ def _scope_of(key: str) -> Scope | None:
 
 
 def required_scope(path: str) -> Scope | None:
-    """`None` = rota aberta."""
-    if path in PUBLIC_PATHS:
+    """`None` = rota aberta.
+
+    A barra final é normalizada antes da comparação: o middleware roda **antes**
+    do roteamento, então o redirect 307 que o FastAPI faria de `/chat/` para
+    `/chat` ainda não aconteceu. Sem isto, um cliente que normaliza URL com barra
+    no fim receberia 403 com a chave certa — e o dono do cliente HTTP do outro
+    lado não é você."""
+    normalizado = path.rstrip("/") or "/"
+    if normalizado in PUBLIC_PATHS:
         return None
-    return "runtime" if path in RUNTIME_PATHS else "admin"
+    return "runtime" if normalizado in RUNTIME_PATHS else "admin"
 
 
 def _authorized(presented: Scope | None, needed: Scope) -> bool:

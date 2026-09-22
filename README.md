@@ -649,6 +649,13 @@ Leia antes de expor o serviço fora de uma rede confiável:
   A chave de runtime é a que você entrega para fora: se vazar, o estrago é gastar
   token — não ler o histórico de todo mundo nem trocar o prompt. Rotacionar é
   trocar a variável e reiniciar; várias chaves com revogação é o passo seguinte.
+
+  O escopo `runtime` alcança exatamente quatro rotas: `/chat`, `/chat/stream`,
+  `/analyze` e `POST /observability/scores`. Todo o resto exige `admin`. Com auth
+  ligada, `/docs` e `/openapi.json` também exigem `admin` — publicar a superfície
+  inteira da API para quem alcança a porta seria entregar o mapa antes da
+  fechadura; para ler o OpenAPI, mande o header. `GET /health` fica sempre
+  aberta, porque é o healthcheck do container.
 - **Tools `python` não são uma sandbox.** O namespace é restrito (imports
   liberados, nomes perigosos bloqueados), mas isso barra erro e abuso
   acidental, não um autor mal-intencionado. Por isso vêm desligadas.

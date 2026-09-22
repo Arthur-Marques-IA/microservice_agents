@@ -123,3 +123,28 @@ def test_health_confirma_quando_esta_fechado(app_com_auth):
     from agent_service.api.routes import health
 
     assert health()["auth"] == "enabled"
+
+
+# -- detalhes que quebram integração de terceiro ----------------------------------
+
+
+def test_barra_no_fim_nao_muda_o_escopo(app_com_auth):
+    """O middleware roda antes do roteamento, então o redirect de `/chat/` para
+    `/chat` ainda não aconteceu. Sem normalizar, um cliente que põe barra no fim
+    levaria 403 com a chave certa."""
+    assert app_com_auth.post("/chat/", headers=_com(RUNTIME)).status_code in (200, 307)
+    assert auth.required_scope("/chat/") == "runtime"
+
+
+def test_openapi_nao_fica_publico_com_auth_ligada(app_com_auth):
+    """Publicar a superfície inteira da API para quem alcança a porta é entregar
+    o mapa antes da fechadura."""
+    assert auth.required_scope("/openapi.json") == "admin"
+    assert auth.required_scope("/docs") == "admin"
+    assert app_com_auth.get("/openapi.json").status_code == 401
+    assert app_com_auth.get("/openapi.json", headers=_com(ADMIN)).status_code == 200
+
+
+def test_health_continua_aberta_por_necessidade(app_com_auth):
+    assert auth.required_scope("/health") is None
+    assert auth.required_scope("/health/") is None
