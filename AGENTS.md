@@ -5,9 +5,13 @@ execuções. Ela fala com a API HTTP do serviço, que roda via Docker em
 `http://127.0.0.1:58000` (você pode trocar a URL com `--url` ou `KURO_API_URL`).
 
 ```bash
-uv run kuro health --json          # rode primeiro: serviço, Langfuse, provedores
+uv run kuro health --json          # rode primeiro: serviço, autenticação, Langfuse, provedores
 uv run kuro <comando> --help       # ajuda de qualquer comando
 ```
+
+Se o serviço exigir autenticação, exporte `KURO_API_KEY` (a chave de escopo admin) —
+sem ela os comandos saem com 1 e `{"status": 401}`. Dentro do container ela já está
+configurada: `docker compose exec agent-service kuro health --json`.
 
 ## Convenções
 

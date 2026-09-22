@@ -20,13 +20,13 @@
 
 | Lacuna | Evidência | Por que importa |
 |---|---|---|
-| Nenhuma autenticação | nenhuma rota exige credencial; README: "sem autenticação no MVP" | Em um microserviço dentro de uma plataforma, qualquer vizinho de rede consegue editar prompts e ler traces |
+| ~~Nenhuma autenticação~~ | **feito (parcial)** — `api/auth.py`: chave de API com escopos `runtime`/`admin`, por middleware (cobre também as rotas do AgentOS, onde a conversa está). Falta a tabela `api_keys` com várias chaves, revogação e `last_used_at`: hoje são duas chaves de ambiente, o tamanho certo para um tenant |
 | ~~SSRF nas tools de API~~ | **feito** — `tools/egress.py` resolve o destino e recusa loopback/privado/link-local antes de cada chamada, nos dois caminhos de rede (`kind="api"` e o `httpx` das tools Python), com `TOOL_EGRESS_ALLOWLIST` para o host interno legítimo |
 | Sem migrações | `agents/store.py::_add_missing_columns` faz `ALTER TABLE` à mão, já com 4 casos | Vai quebrar na primeira mudança de tipo ou de constraint |
-| Sem CI | não existe `.github/`, apesar dos 19 arquivos de teste | Os testes só rodam quando alguém lembra |
+| ~~Sem CI~~ | **feito** — `.github/workflows/ci.yml`: pytest, lint e build do frontend, e build das duas imagens, em todo push e PR |
 | Versionamento parcial | só `instructions` gera versão; mudar modelo, tools ou a nota de feedback não gera | O trace grava `prompt-v{N}`, então uma regressão causada por troca de modelo ou pela nota fica invisível |
 | RAG preso ao Google | `documents/collections.py` fixa `GeminiEmbedder(settings.google_api_key)` | Um agente em OpenAI/Anthropic continua precisando de `GOOGLE_API_KEY`, e o cofre de credenciais é ignorado |
-| Modo só-terminal fica sem logs | com o Langfuse desligado, `kuro runs` não tem dados (o `health` avisa) | É exatamente o usuário que você quer atender com a "UI opcional" |
+| Modo só-terminal fica sem logs | com o Langfuse desligado, `kuro runs` não tem dados (o `health` avisa) | É exatamente o usuário que você quer atender com a "UI opcional" — que agora existe (profiles `ui`/`observability`), o que torna o trace store local da §4.1 mais urgente, não menos |
 
 ## 2. Posicionamento (para guiar as escolhas)
 
@@ -44,7 +44,13 @@ falta o ciclo que as une: *mudei o agente → provo que não piorou → publico*
 
 ## 3. Horizonte 0: fundação (bloqueia o resto; ~2–3 semanas)
 
-1. **Autenticação por API key com escopos.** Tabela `api_keys` (hash, escopos, tenant, `last_used_at`).
+1. ~~**Autenticação por API key com escopos.**~~ **Feito em parte** (`api/auth.py`): duas chaves de
+   ambiente (`ADMIN_API_KEY`, `RUNTIME_API_KEY`) com os escopos abaixo, cobrando por middleware para
+   alcançar também as rotas do AgentOS (`/sessions`, `/knowledge/...`), que uma dependência por router
+   deixaria de fora. A CLI lê `KURO_API_KEY` e o BFF do Next injeta a chave admin server-side. **Falta**
+   a tabela `api_keys` (hash, escopos, tenant, `last_used_at`) para várias chaves e revogação sem
+   restart — necessário assim que houver mais de um consumidor ou mais de um tenant.
+   Contexto original: tabela `api_keys` (hash, escopos, tenant, `last_used_at`).
    Escopos mínimos:
    - `runtime`: `/chat`, `/analyze`, `/chat/stream`, scores. É o que os outros módulos recebem.
    - `admin`: CRUD de agentes, tools, credenciais, collections e leitura de traces. É o que CLI/UI usam.
@@ -55,8 +61,10 @@ falta o ciclo que as une: *mudei o agente → provo que não piorou → publico*
    para tools, collections e credenciais. Mesmo que haja um tenant só, crie a coluna `tenant_id`
    (default `'default'`) e PKs compostas. Fazer isso depois exige migrar 5 tabelas com dados.
 3. **Alembic.** Uma migração inicial que reflete o schema atual e o fim de `_add_missing_columns`.
-4. **CI (GitHub Actions):** `uv run pytest`, `ruff`, `npm run lint && npm run build` e build das duas imagens.
-   Entre todos os itens, é o de maior valor para o esforço.
+4. ~~**CI (GitHub Actions).**~~ **Feito** (`.github/workflows/ci.yml`): pytest, `npm run lint`,
+   `npm run build` e build das duas imagens. Sem `ruff` por enquanto — não está nas dependências de
+   dev nem configurado, e adicioná-lo junto com a CI misturaria "passar a rodar os testes" com
+   "formatar o repo inteiro".
 5. ~~**Proteção de egress nas tools de API.**~~ **Feito** (`tools/egress.py`): resolve o DNS e recusa
    loopback, privado, link-local, multicast e reservado, com `TOOL_EGRESS_ALLOWLIST` por host. A
    checagem roda com a URL já montada, porque um parâmetro `location="path"` pode compor o host. O
@@ -79,13 +87,9 @@ Custa pouco, porque o frontend já é um serviço separado que só consome a API
 no código, use `profiles` do Compose.** O peso real nem é a UI: é o Langfuse (ClickHouse + MinIO +
 Redis + worker, ~16 GB recomendados). Quem quer só terminal quer os dois desligados.
 
-```yaml
-# docker-compose.yml
-frontend:        { profiles: ["ui"], ... }
-langfuse-web:    { profiles: ["observability"], ... }
-langfuse-worker: { profiles: ["observability"], ... }
-# ... clickhouse, minio, langfuse-redis também em "observability"
-```
+**Feito.** `frontend` está em `profiles: ["ui"]` e os cinco serviços do Langfuse em
+`profiles: ["observability"]`; `LANGFUSE_ENABLED` passou a ter default `false` no `agent-service`,
+como a ressalva abaixo exigia. `docker compose up -d` sobe três serviços; o comando completo sobe nove.
 
 ```bash
 docker compose up -d                                   # núcleo: postgres, redis, agent-service

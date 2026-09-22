@@ -1,0 +1,65 @@
+# Os testes só rodavam quando alguém lembrava. Com o serviço indo para um
+# ambiente compartilhado, isso passa a rodar em todo push e PR.
+name: CI
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+
+concurrency:
+  # Um push novo na mesma branch cancela a execução anterior: não adianta
+  # esperar CI de um commit que já foi substituído.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: pytest
+        run: uv run pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - name: build
+        # O build do Next é o que pega erro de tipo e de import que o lint deixa passar.
+        run: npm run build
+
+  images:
+    # Build das duas imagens: um Dockerfile quebrado só apareceria no deploy.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: agent-service
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

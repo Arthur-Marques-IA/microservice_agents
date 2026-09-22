@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: agent_service
     ports:
-      - "55432:5432"
+      - "${POSTGRES_BIND:-127.0.0.1:55432}:5432"
     volumes:
       - agent_service_postgres_data:/var/lib/postgresql/data
       # Cria o banco `langfuse` no primeiro boot — uma instância de Postgres a
@@ -24,7 +24,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_BIND:-127.0.0.1:6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -48,8 +48,30 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-local-agent-service}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-local-agent-service}
       LANGFUSE_PROJECT_ID: ${LANGFUSE_PROJECT_ID:-agent-service}
+      # Desligado por padrão: com o profile `observability` fora do ar, o
+      # exportador continuaria instrumentando e cada run tentaria falar com um
+      # host que não existe (timeout de 20s por run). `kuro up --observability`
+      # e o comando completo abaixo ligam junto com os containers.
+      LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
+      # Sem as duas, o serviço fica aberto a quem alcança a porta (ver
+      # agent_service/api/auth.py). Obrigatórias em qualquer ambiente compartilhado.
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      RUNTIME_API_KEY: ${RUNTIME_API_KEY:-}
+      # A CLI `kuro` já vem instalada na imagem. Estas duas fazem
+      # `docker compose exec agent-service kuro health` funcionar sem argumento
+      # nenhum — é por onde se dá manutenção quando o console está desligado.
+      KURO_API_URL: http://localhost:8000
+      KURO_API_KEY: ${ADMIN_API_KEY:-}
+    restart: unless-stopped
     ports:
-      - "58000:8000"
+      - "${AGENT_SERVICE_BIND:-127.0.0.1:58000}:8000"
+    healthcheck:
+      # Sem curl na imagem (python-slim), então o próprio Python faz a chamada.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,6 +81,10 @@ services:
       # sobe (e responde) mesmo com o Langfuse fora do ar.
 
   frontend:
+    # `docker compose up -d` sobe só o núcleo (postgres, redis, agent-service).
+    # O console entra com `--profile ui`.
+    profiles: ["ui"]
+    restart: unless-stopped
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -66,11 +92,14 @@ services:
       # Server-side apenas (sem prefixo NEXT_PUBLIC_) — o browser nunca
       # fala direto com o agent-service, só com o BFF do Next.js.
       AGENT_SERVICE_URL: http://agent-service:8000
+      # O console edita agente e lê trace, então usa a chave de escopo admin.
+      # Sem prefixo NEXT_PUBLIC_: fica no servidor do Next, nunca no browser.
+      AGENT_SERVICE_API_KEY: ${ADMIN_API_KEY:-}
       # Só para exibir exemplos de integração (cURL etc.) no console — é o
       # endereço pelo qual outros módulos alcançam o agent-service.
       AGENT_SERVICE_PUBLIC_URL: http://localhost:58000
     ports:
-      - "3000:3000"
+      - "${FRONTEND_BIND:-127.0.0.1:3000}:3000"
     depends_on:
       agent-service:
         condition: service_started
@@ -89,6 +118,7 @@ services:
   # .env em qualquer outro ambiente (ENCRYPTION_KEY: `openssl rand -hex 32`).
   # ---------------------------------------------------------------------------
   langfuse-worker:
+    profiles: ["observability"]
     image: docker.langfuse.com/langfuse/langfuse-worker:4
     restart: unless-stopped
     depends_on: &langfuse-depends-on
@@ -135,6 +165,7 @@ services:
       REDIS_TLS_ENABLED: "false"
 
   langfuse-web:
+    profiles: ["observability"]
     image: docker.langfuse.com/langfuse/langfuse:4
     restart: unless-stopped
     depends_on: *langfuse-depends-on
@@ -163,6 +194,7 @@ services:
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-agent-service-admin} # CHANGEME
 
   langfuse-clickhouse:
+    profiles: ["observability"]
     image: clickhouse/clickhouse-server:25.12
     restart: unless-stopped
     user: "101:101"
@@ -181,6 +213,7 @@ services:
       start_period: 1s
 
   langfuse-redis:
+    profiles: ["observability"]
     image: redis:7
     restart: unless-stopped
     command: >
@@ -195,6 +228,7 @@ services:
       retries: 10
 
   langfuse-minio:
+    profiles: ["observability"]
     image: cgr.dev/chainguard/minio
     restart: unless-stopped
     entrypoint: sh

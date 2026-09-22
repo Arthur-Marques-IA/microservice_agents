@@ -24,9 +24,18 @@ class ServiceUnavailable(Exception):
 
 
 class Client:
-    def __init__(self, base_url: str, timeout: float = 120.0, transport: httpx.BaseTransport | None = None):
+    def __init__(
+        self,
+        base_url: str,
+        timeout: float = 120.0,
+        transport: httpx.BaseTransport | None = None,
+        api_key: str | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
-        self._http = httpx.Client(base_url=self.base_url, timeout=timeout, transport=transport)
+        # A chave vai no cliente, não em cada chamada: esquecer de passá-la em
+        # um comando novo viraria um 401 sem explicação.
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+        self._http = httpx.Client(base_url=self.base_url, timeout=timeout, transport=transport, headers=headers)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         # Uma nova tentativa para falhas de transporte transitórias (port-forward do

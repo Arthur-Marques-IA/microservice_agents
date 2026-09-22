@@ -13,6 +13,22 @@ export function backendUrl(path: string): string {
 }
 
 /**
+ * Chave de API do agent-service, injetada server-side. O console usa o escopo
+ * `admin` (edita agente, lê trace e sessão), então esta variável NÃO pode ter
+ * prefixo NEXT_PUBLIC_: ela nunca vai para o bundle do browser. É o mesmo
+ * motivo de o BFF existir — quem fala com o backend é o servidor do Next.
+ */
+const AGENT_SERVICE_API_KEY = process.env.AGENT_SERVICE_API_KEY;
+
+/** Acrescenta o header de autenticação, preservando os headers da chamada. */
+function withAuth(init?: RequestInit): RequestInit {
+  if (!AGENT_SERVICE_API_KEY) return { ...init, cache: "no-store" };
+  const headers = new Headers(init?.headers);
+  headers.set("Authorization", `Bearer ${AGENT_SERVICE_API_KEY}`);
+  return { ...init, headers, cache: "no-store" };
+}
+
+/**
  * URL do agent-service *como outros módulos a enxergam* — usada só para
  * montar exemplos de integração (cURL etc.), nunca para requisições.
  */
@@ -31,7 +47,7 @@ function unavailable(error: unknown): Response {
 export async function proxyJson(path: string, init?: RequestInit): Promise<Response> {
   let upstream: Response;
   try {
-    upstream = await fetch(backendUrl(path), { ...init, cache: "no-store" });
+    upstream = await fetch(backendUrl(path), withAuth(init));
   } catch (error) {
     return unavailable(error);
   }
@@ -51,7 +67,7 @@ export async function proxyJson(path: string, init?: RequestInit): Promise<Respo
 export async function proxyStream(path: string, init?: RequestInit): Promise<Response> {
   let upstream: Response;
   try {
-    upstream = await fetch(backendUrl(path), { ...init, cache: "no-store" });
+    upstream = await fetch(backendUrl(path), withAuth(init));
   } catch (error) {
     return unavailable(error);
   }
@@ -69,7 +85,7 @@ export async function proxyStream(path: string, init?: RequestInit): Promise<Res
 /** GET JSON para Server Components: `null` se o backend falhar ou responder erro. */
 export async function fetchBackendJson<T>(path: string): Promise<T | null> {
   try {
-    const res = await fetch(backendUrl(path), { cache: "no-store" });
+    const res = await fetch(backendUrl(path), withAuth());
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {

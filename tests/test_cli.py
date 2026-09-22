@@ -44,7 +44,9 @@ def api(monkeypatch, tmp_path):
         return response if response is not None else httpx.Response(404, json={"detail": "não encontrado"})
 
     transport = httpx.MockTransport(handler)
-    monkeypatch.setattr(cli_main, "Client", lambda url, timeout: Client(url, timeout, transport=transport))
+    monkeypatch.setattr(
+        cli_main, "Client", lambda url, timeout, api_key=None: Client(url, timeout, transport=transport, api_key=api_key)
+    )
     return routes, calls
 
 
@@ -77,7 +79,9 @@ def test_service_unavailable_exit_code(monkeypatch):
         raise httpx.ConnectError("recusado", request=request)
 
     transport = httpx.MockTransport(handler)
-    monkeypatch.setattr(cli_main, "Client", lambda url, timeout: Client(url, timeout, transport=transport))
+    monkeypatch.setattr(
+        cli_main, "Client", lambda url, timeout, api_key=None: Client(url, timeout, transport=transport, api_key=api_key)
+    )
     assert _run("agents", "list").exit_code == 3
 
 

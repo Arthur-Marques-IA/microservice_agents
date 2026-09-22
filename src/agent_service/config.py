@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     """Fallback do provedor `google` quando não há chave salva em `model_providers`
     (ver `models/store.py`) — mantém o comportamento anterior à UI de chaves."""
 
+    # Autenticação da API (ver agent_service/api/auth.py)
+    admin_api_key: str | None = None
+    """Chave com acesso total: CRUD de agentes/tools/credenciais e leitura de
+    traces e sessões. É a do console e da CLI (`KURO_API_KEY`)."""
+    runtime_api_key: str | None = None
+    """Chave que só executa: `/chat`, `/chat/stream`, `/analyze` e scores. É a que
+    vai para os outros módulos da plataforma — se vazar, não lê conversa alheia
+    nem troca prompt."""
+
     # Criptografia das chaves de provedor de modelo salvas pela UI (`/model-providers`)
     credentials_encryption_key: str | None = None
     """Chave Fernet (`Fernet.generate_key()`) usada para cifrar em repouso as chaves de

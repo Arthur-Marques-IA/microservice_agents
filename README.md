@@ -52,16 +52,34 @@ cp .env.example .env
 # gere a chave de cifra com:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
-docker compose up -d --build
-uv run kuro health          # serviço, Langfuse e provedores de modelo
+docker compose up -d --build                       # núcleo: postgres, redis, agent-service
+uv run kuro health                                 # serviço, autenticação, Langfuse, provedores
 ```
 
-| Serviço | Endereço | Para quê |
-|---|---|---|
-| Console | http://localhost:3000 | playground, agentes, tools, base de conhecimento, logs |
-| API | http://127.0.0.1:58000 | contrato de integração; `/docs` tem o OpenAPI |
-| Postgres | `127.0.0.1:55432` | pgvector; porta fora do padrão para não colidir |
-| Redis | `127.0.0.1:6379` | mensageria |
+O núcleo sobe sozinho. Console e observabilidade são **opcionais**, cada um num
+profile do Compose — o peso real é o Langfuse (ClickHouse + MinIO + Redis +
+worker, ~16 GB recomendados), e quem só quer terminal não precisa dele:
+
+```bash
+docker compose --profile ui up -d                              # + console web
+LANGFUSE_ENABLED=true docker compose --profile ui --profile observability up -d   # tudo
+```
+
+> Com o profile `observability` fora, `LANGFUSE_ENABLED` fica `false` por padrão.
+> Sem isso o serviço continuaria instrumentando e cada execução tentaria exportar
+> para um host que não existe — 20 s de timeout por run.
+
+| Serviço | Endereço | Profile | Para quê |
+|---|---|---|---|
+| API | http://127.0.0.1:58000 | (núcleo) | contrato de integração; `/docs` tem o OpenAPI |
+| Postgres | `127.0.0.1:55432` | (núcleo) | pgvector; porta fora do padrão para não colidir |
+| Redis | `127.0.0.1:6379` | (núcleo) | mensageria |
+| Console | http://localhost:3000 | `ui` | playground, agentes, tools, base de conhecimento, logs |
+| Langfuse | http://localhost:3100 | `observability` | traces, tokens e custo por execução |
+
+As portas são publicadas **só em `127.0.0.1`**. Para expor numa rede, mude
+`AGENT_SERVICE_BIND` no `.env` — e nesse caso configure as chaves de API antes
+(ver [Segurança](#segurança-e-limitações-atuais)).
 
 > **Windows:** use `127.0.0.1` para a API, não `localhost`. Com o Docker
 > Desktop, `localhost:58000` pode tentar IPv6 primeiro e travar por 30 s.
@@ -440,6 +458,23 @@ Qualquer comando aceita `--help`, por exemplo `uv run kuro chat --help`.
 > **Dica:** instale com `uv tool install -e .` para chamar só `kuro` de
 > qualquer pasta, e com a inicialização mais rápida.
 
+**Manutenção no servidor, sem console.** A CLI já vem instalada na imagem, com
+a URL e a chave configuradas — dá para operar tudo de dentro do container:
+
+```bash
+docker compose exec agent-service kuro health
+docker compose exec agent-service kuro --json agents list
+docker compose exec -it agent-service kuro            # shell interativo
+```
+
+Fora do servidor, aponte a CLI com as duas variáveis:
+
+```bash
+export KURO_API_URL=https://kuro.interno
+export KURO_API_KEY=...        # a ADMIN_API_KEY
+uv run kuro health
+```
+
 ### Para agentes de IA e scripts
 
 A mesma CLI funciona sem ninguém no teclado: `--json` devolve dados no stdout
@@ -542,6 +577,9 @@ Tailwind, Docker Compose.
 
 | Variável | Padrão | Para quê |
 |---|---|---|
+| `ADMIN_API_KEY` / `RUNTIME_API_KEY` | — | chaves de API; **sem elas o serviço fica aberto** |
+| `AGENT_SERVICE_BIND` | `127.0.0.1:58000` | onde a API é publicada no host |
+| `LANGFUSE_ENABLED` | `false` | ligue junto com o profile `observability` |
 | `GOOGLE_API_KEY` | — | chave do Gemini (provedor padrão) |
 | `CREDENTIALS_ENCRYPTION_KEY` | — | chave Fernet que cifra as credenciais de modelo; **obrigatória** para cadastrar chaves |
 | `DEFAULT_MODEL_PROVIDER` / `DEFAULT_MODEL_ID` | `google` / `gemini-2.5-flash` | modelo de quem não define um |
@@ -596,13 +634,28 @@ uv run python docs/diagramas/fixar-tamanho.py    # grava o tamanho real, para o 
 
 Leia antes de expor o serviço fora de uma rede confiável:
 
-- **Sem autenticação.** Qualquer cliente que alcança a API pode editar agentes
-  e ler traces. Rode em rede interna até a autenticação chegar (ver roadmap).
+- **Autenticação: defina as duas chaves antes de sair da sua máquina.**
+  `ADMIN_API_KEY` e `RUNTIME_API_KEY` no `.env`. Sem elas o serviço fica aberto
+  (comportamento de antes, para não quebrar quem roda local) e quem alcança a
+  porta lê toda conversa que passou por ali (`/observability/runs`, `/sessions`),
+  reescreve o prompt de um agente em produção e lê as credenciais de modelo.
+  `kuro health` mostra em vermelho quando está aberto.
+
+  | Escopo | Alcança | Quem usa |
+  |---|---|---|
+  | `RUNTIME_API_KEY` | `/chat`, `/chat/stream`, `/analyze`, scores | os outros módulos da plataforma |
+  | `ADMIN_API_KEY` | tudo: CRUD, traces, sessões, credenciais | console e CLI (`KURO_API_KEY`) |
+
+  A chave de runtime é a que você entrega para fora: se vazar, o estrago é gastar
+  token — não ler o histórico de todo mundo nem trocar o prompt. Rotacionar é
+  trocar a variável e reiniciar; várias chaves com revogação é o passo seguinte.
 - **Tools `python` não são uma sandbox.** O namespace é restrito (imports
   liberados, nomes perigosos bloqueados), mas isso barra erro e abuso
   acidental, não um autor mal-intencionado. Por isso vêm desligadas.
-- **Tools `api` chamam qualquer URL `http(s)`**, inclusive endereços internos.
-  Só dê acesso de edição de tools a quem é confiável.
+- **Tools só alcançam endereços públicos.** O destino é resolvido e conferido
+  antes de cada chamada, nos dois caminhos de rede (`kind="api"` e o `httpx` das
+  tools Python). Libere um host interno legítimo em `TOOL_EGRESS_ALLOWLIST`.
+  Limite conhecido: DNS rebinding — para isso, política de saída no ambiente.
 - **Agentes e collections criados depois do boot** funcionam no `/chat` na
   hora, mas só aparecem nas rotas nativas do AgentOS (e no playground de
   os.agno.com) depois de um restart.

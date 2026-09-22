@@ -100,7 +100,16 @@ def _build_media_or_422(attachments: list[AttachmentIn]) -> dict[str, list[Any]]
 
 @router.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    """Aberta de propósito: é o healthcheck do container e de qualquer load
+    balancer na frente. Só responde se o processo está de pé — não checa banco:
+    com o Postgres fora, reiniciar o container não resolveria nada.
+
+    `auth` aparece aqui porque é a primeira coisa que alguém precisa saber ao
+    olhar um serviço que não conhece, e não é segredo: quem não tem chave
+    descobre no primeiro request de qualquer jeito."""
+    from agent_service.api.auth import auth_enabled
+
+    return {"status": "ok", "auth": "enabled" if auth_enabled() else "disabled"}
 
 
 @router.get("/agent-types")

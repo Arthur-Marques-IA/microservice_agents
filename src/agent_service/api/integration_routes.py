@@ -104,9 +104,15 @@ def get_integration_contract(
 
     base = base_url.rstrip("/")
     corpo = json.dumps(request_example, ensure_ascii=False, indent=2)
+    # Com auth ligada o exemplo precisa do header: um cURL que não funciona é
+    # pior que exemplo nenhum, porque manda quem integra procurar no lugar errado.
+    from agent_service.api.auth import auth_enabled
+
+    auth_header = "  -H 'Authorization: Bearer $KURO_RUNTIME_API_KEY' \\\n" if auth_enabled() else ""
     curl = (
         f"curl -X POST {base}/chat \\\n"
         f"  -H 'Content-Type: application/json' \\\n"
+        f"{auth_header}"
         f"  -d '{corpo}'"
     )
 

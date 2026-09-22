@@ -68,8 +68,14 @@ def root(
         False, "--no-input", envvar="KURO_NO_INPUT", help="Nunca pergunta nada (falha se faltar argumento)."
     ),
     timeout: float = typer.Option(120.0, "--timeout", help="Timeout das requisições, em segundos."),
+    api_key: str | None = typer.Option(
+        None,
+        "--api-key",
+        envvar="KURO_API_KEY",
+        help="Chave de API do serviço (escopo admin). Normalmente vem de KURO_API_KEY.",
+    ),
 ) -> None:
-    ctx.obj = State(client=Client(url, timeout=timeout), json_mode=json_mode, no_input=no_input)
+    ctx.obj = State(client=Client(url, timeout=timeout, api_key=api_key), json_mode=json_mode, no_input=no_input)
     if ctx.invoked_subcommand is None:
         if ctx.obj.interactive:
             shell(ctx)
@@ -106,6 +112,16 @@ def health(ctx: typer.Context) -> None:
 
     def render(r: dict[str, Any]) -> None:
         console.print(f"[green]●[/] agent-service em {r['url']}")
+        fechado = r["service"].get("auth") == "enabled"
+        console.print(
+            f"{'[green]●[/]' if fechado else '[red]●[/]'} autenticação "
+            + (
+                "exigida"
+                if fechado
+                else "[red]desligada — quem alcança esta porta lê as conversas e edita os "
+                "prompts[/] (defina ADMIN_API_KEY e RUNTIME_API_KEY)"
+            )
+        )
         obs = r["observability"]
         on = obs.get("enabled")
         console.print(f"{'[green]●[/]' if on else '[yellow]●[/]'} Langfuse {'ligado' if on else 'desligado — `kuro runs` não terá dados'}")
@@ -332,6 +348,8 @@ def shell(ctx: typer.Context) -> None:
             err_console.print(f"[red]erro:[/] {exc}")
             continue
         globals_ = ["--url", root_params["url"], "--timeout", str(root_params["timeout"])]
+        if root_params.get("api_key"):
+            globals_ += ["--api-key", root_params["api_key"]]
         try:
             command.main(args=globals_ + hoist_global_flags(args), prog_name="kuro", standalone_mode=False)
         except click.exceptions.Exit:
