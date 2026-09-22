@@ -29,8 +29,7 @@ from typing import Any
 from agent_service.agents.dependency_fields import DependencyFieldSpecError, validate_field_specs
 
 LEAF_TYPES = frozenset({"string", "integer", "number", "boolean"})
-COMPOSITE_TYPES = frozenset({"object", "array"})
-ALL_TYPES = LEAF_TYPES | COMPOSITE_TYPES
+ALL_TYPES = LEAF_TYPES | {"object", "array"}
 ITEM_TYPES = LEAF_TYPES | {"object"}
 """`array` de `array` fica de fora: aninhar listas direto raramente é o que se
 quer (o caso real é lista de objetos) e complica o schema para o modelo."""

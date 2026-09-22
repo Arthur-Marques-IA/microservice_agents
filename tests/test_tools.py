@@ -610,6 +610,28 @@ def test_composto_de_dependency_ou_const_nao_precisa_de_sub_schema():
     assert schema["properties"] == {}
 
 
+def test_config_de_tool_com_composto_sobrevive_ao_get_e_apply():
+    """O fluxo `tools get --editable > f.json && tools apply -f f.json`: a config
+    lida já vem normalizada, e revalidá-la não pode fazer o `fields`/`items`
+    derivar a cada edição."""
+    config = {
+        "method": "POST", "url": "https://exemplo.test/busca",
+        "parameters": [
+            {"name": "ids", "type": "array", "location": "body", "items": {"type": "integer"}},
+            {"name": "filtros", "type": "object", "location": "body",
+             "fields": [{"name": "status", "type": "string", "required": True}]},
+        ],
+    }
+    criada = create_tool(ToolIn(tool_name="rt_tool", kind="api", label="RT", config=config))
+    try:
+        reaplicada = update_tool("rt_tool", ToolUpdateIn(config=get_tool("rt_tool")["config"]))
+        assert reaplicada["config"]["parameters"] == criada["config"]["parameters"]
+        de_novo = update_tool("rt_tool", ToolUpdateIn(config=get_tool("rt_tool")["config"]))
+        assert de_novo["config"]["parameters"] == criada["config"]["parameters"]
+    finally:
+        delete_tool("rt_tool")
+
+
 def test_validar_nao_altera_o_config_de_quem_chamou():
     """A normalização do composto acontece numa cópia."""
     original = {**BASE_API, "parameters": [
