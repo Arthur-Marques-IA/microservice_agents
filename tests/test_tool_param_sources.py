@@ -3,11 +3,15 @@ ela cria com o agente: o que o modelo vê, o que o servidor injeta a partir de
 `dependencies`, e a recusa de salvar um agente que não declara o que a tool exige.
 """
 
+import asyncio
 import time
 from unittest.mock import patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
+
+from agent_service.tools import api_tool
 
 from agent_service.api.agents_routes import (
     AgentDefinitionIn,
@@ -37,14 +41,41 @@ CONFIG = {
 }
 
 
-class FakeResponse:
-    def __init__(self, status_code=200, payload=None):
-        self.status_code = status_code
-        self.text = str(payload)
-        self._payload = payload
+class RedeFalsa:
+    """Substitui o cliente das tools de API por um com `MockTransport`.
 
-    def json(self):
-        return self._payload
+    Guarda as requisições enviadas, então o teste continua conseguindo afirmar
+    para onde a tool falou e com o quê — agora olhando a `httpx.Request` real,
+    em vez dos argumentos de uma chamada mockada.
+    """
+
+    def __init__(self, payload=None, status_code=200):
+        self.requests: list[httpx.Request] = []
+        self._payload = payload
+        self._status = status_code
+
+    def _handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return httpx.Response(self._status, json=self._payload)
+
+    def __enter__(self):
+        client = httpx.AsyncClient(transport=httpx.MockTransport(self._handler), follow_redirects=False)
+        self._patch = patch.object(api_tool, "_client", client)
+        self._patch.start()
+        return self
+
+    def __exit__(self, *exc_info):
+        self._patch.stop()
+        return False
+
+    @property
+    def nao_chamou(self) -> bool:
+        return not self.requests
+
+
+def invocar(tool_name, body):
+    """`POST /tools/{nome}/invoke` é `async` desde que o entrypoint virou corrotina."""
+    return asyncio.run(invoke_tool(tool_name, body))
 
 
 @pytest.fixture
@@ -95,36 +126,36 @@ def test_parameter_cannot_hijack_the_api_key_header():
 
 
 def test_dependency_value_reaches_the_api_without_passing_through_the_model(ficha_tool):
-    with patch("agent_service.tools.api_tool.httpx.request", return_value=FakeResponse(200, {"ok": True})) as request:
-        result = invoke_tool(
+    with RedeFalsa({"ok": True}) as rede:
+        result = invocar(
             ficha_tool, ToolInvokeIn(arguments={"assunto": "fatura"}, dependencies={"cpf": "12345678900"})
         )
     assert result["ok"] is True
-    _, url = request.call_args.args
-    assert url == "https://exemplo.test/clientes/12345678900"
-    assert request.call_args.kwargs["params"] == {"assunto": "fatura", "origem": "agente"}
+    enviada = rede.requests[-1]
+    assert str(enviada.url).startswith("https://exemplo.test/clientes/12345678900")
+    assert dict(enviada.url.params) == {"assunto": "fatura", "origem": "agente"}
 
 
 def test_missing_dependency_explains_instead_of_calling_the_api(ficha_tool):
-    with patch("agent_service.tools.api_tool.httpx.request") as request:
-        result = invoke_tool(ficha_tool, ToolInvokeIn(arguments={"assunto": "fatura"}))
-    request.assert_not_called()
+    with RedeFalsa() as rede:
+        result = invocar(ficha_tool, ToolInvokeIn(arguments={"assunto": "fatura"}))
+    assert rede.nao_chamou
     assert "dependencies.cpf" in result["result"]
 
 
 def test_missing_required_model_parameter_is_charged_before_the_call(ficha_tool):
-    with patch("agent_service.tools.api_tool.httpx.request") as request:
-        result = invoke_tool(ficha_tool, ToolInvokeIn(dependencies={"cpf": "1"}))
-    request.assert_not_called()
+    with RedeFalsa() as rede:
+        result = invocar(ficha_tool, ToolInvokeIn(dependencies={"cpf": "1"}))
+    assert rede.nao_chamou
     assert "assunto" in result["result"]
 
 
 def test_dependencies_do_not_leak_between_calls(ficha_tool):
     with dependencies_scope({"cpf": "1"}):
         pass
-    with patch("agent_service.tools.api_tool.httpx.request") as request:
-        result = invoke_tool(ficha_tool, ToolInvokeIn(arguments={"assunto": "x"}))
-    request.assert_not_called()
+    with RedeFalsa() as rede:
+        result = invocar(ficha_tool, ToolInvokeIn(arguments={"assunto": "x"}))
+    assert rede.nao_chamou
     assert "dependencies.cpf" in result["result"]
 
 

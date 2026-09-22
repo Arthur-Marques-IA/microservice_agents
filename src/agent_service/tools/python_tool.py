@@ -12,16 +12,36 @@ determinado (um sandbox de verdade precisaria de processo/container
 isolado, fora do escopo deste serviço). Por isso:
 
 - desligado por padrão (`CUSTOM_PYTHON_TOOLS_ENABLED=false`);
-- só ligue se toda genta com acesso à API/console já for confiável — hoje
+- só ligue se toda gente com acesso à API/console já for confiável — hoje
   o serviço não tem autenticação (ver README, seção Auth);
-- código pode importar `httpx`: tools Python alcançam a rede de propósito.
+- código pode importar `httpx`: tools Python alcançam a rede de propósito,
+  mas pelo `httpx` guardado deste módulo, que passa todo destino pelo mesmo
+  controle de `tools/egress.py` usado pelas tools `kind="api"`. Sem isso,
+  uma tool Python seria o desvio óbvio daquela trava.
+
+Limites que a barreira **não** cobre, e por que ficam documentados em vez de
+remendados (isolamento de verdade é um projeto à parte — ver ROADMAP §8):
+
+- **O timeout não cancela nada.** Python não interrompe uma thread de fora.
+  Passado o limite, quem chamou recebe `TimeoutError`, mas um `while True:`
+  segue rodando até o processo reiniciar. Por isso cada chamada roda na sua
+  própria thread daemon e há um teto de execuções simultâneas: uma tool
+  travada não impede as outras de rodarem, que era o que acontecia quando
+  todas dividiam um pool de 8 workers.
+- **Sem limite de memória ou de CPU.** `[0] * 10**10` derruba o container.
+- **`str.format` alcança atributos** (`"{0.__class__}".format(x)`), o que a
+  checagem estática não vê porque o caminho está dentro de uma string. Isso
+  vaza informação sobre os objetos, mas só produz texto — não chama nada.
 """
 
 import ast
-import concurrent.futures
+import contextvars
 import functools
 import inspect
+import threading
 from typing import Any, Callable
+
+from agent_service.tools.egress import guard_request
 
 _ALLOWED_MODULES = {
     "base64",
@@ -77,7 +97,8 @@ _DEFAULT_TIMEOUT_SECONDS = 10.0
 _MAX_TIMEOUT_SECONDS = 30.0
 _MAX_CODE_CHARS = 20_000
 
-_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="python-tool")
+_MAX_CONCURRENT_RUNS = 32
+_slots = threading.BoundedSemaphore(_MAX_CONCURRENT_RUNS)
 
 
 class PythonToolConfigError(ValueError):
@@ -154,11 +175,71 @@ def _is_literal(node: ast.AST | None) -> bool:
         return False
 
 
+_guarded_httpx_client: Any = None
+
+
+def _guarded_httpx() -> Any:
+    """O `httpx` que a tool recebe: as funções de módulo, passando todo destino
+    por `tools/egress.py`.
+
+    `Client`/`AsyncClient` ficam de fora de propósito. Dar o cliente real
+    devolveria um objeto cujo `event_hooks` a própria tool poderia limpar numa
+    linha, e aí a trava seria enfeite. Com só as funções de módulo, o caminho
+    para a rede é um que este módulo controla inteiro.
+    """
+    import types
+
+    import httpx
+
+    def _blocked(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError(
+            "httpx.Client/AsyncClient não estão disponíveis em tools Python — use httpx.get, "
+            "httpx.post, httpx.request etc., que passam pelo controle de destino do serviço."
+        )
+
+    def _proxy(method_name: str) -> Callable[..., Any]:
+        # Resolve o cliente na hora da chamada, não aqui: o shim é montado quando
+        # a tool executa `import httpx`, e prender o cliente agora deixaria a tool
+        # presa a uma instância que pode ter sido fechada ou trocada depois.
+        def call(*args: Any, **kwargs: Any) -> Any:
+            return getattr(_http_client(), method_name)(*args, **kwargs)
+
+        call.__name__ = method_name
+        return call
+
+    return types.SimpleNamespace(
+        **{name: _proxy(name) for name in ("request", "get", "post", "put", "patch", "delete", "head")},
+        Client=_blocked,
+        AsyncClient=_blocked,
+        # O autor da tool precisa conseguir tratar as falhas que pode causar.
+        Response=httpx.Response,
+        HTTPError=httpx.HTTPError,
+        RequestError=httpx.RequestError,
+        TimeoutException=httpx.TimeoutException,
+        HTTPStatusError=httpx.HTTPStatusError,
+    )
+
+
+def _http_client() -> Any:
+    """Cliente único das tools Python, com o controle de destino no event hook."""
+    import httpx
+
+    global _guarded_httpx_client
+    if _guarded_httpx_client is None:
+        # O hook roda a cada envio, inclusive em cada salto de redirect.
+        _guarded_httpx_client = httpx.Client(
+            follow_redirects=False, event_hooks={"request": [guard_request]}, timeout=10.0
+        )
+    return _guarded_httpx_client
+
+
 def _safe_import(name: str, *args: Any, **kwargs: Any) -> Any:
     import importlib
 
     if _root_module(name) not in _ALLOWED_MODULES:
         raise ImportError(f"import não permitido em tool Python: {name!r}")
+    if _root_module(name) == "httpx":
+        return _guarded_httpx()
     return importlib.import_module(name)
 
 
@@ -180,11 +261,39 @@ def _safe_builtins() -> dict[str, Any]:
 
 
 def _run_with_timeout(fn: Callable[..., Any], timeout: float, *args: Any, **kwargs: Any) -> Any:
-    future = _EXECUTOR.submit(fn, *args, **kwargs)
-    try:
-        return future.result(timeout=timeout)
-    except concurrent.futures.TimeoutError:
-        raise TimeoutError(f"A tool excedeu o limite de {timeout:.0f}s.") from None
+    """Roda numa thread própria e desiste depois de `timeout`.
+
+    Uma thread por chamada, não um pool: como o timeout não interrompe o código
+    (ver o docstring do módulo), uma tool travada num pool compartilhado ia
+    consumindo workers até nenhuma outra tool Python conseguir rodar. Assim ela
+    só queima um slot do teto, e as demais seguem. O contexto é copiado para a
+    thread porque `ContextVar` não é herdado automaticamente — é o que mantém
+    as `dependencies` da requisição visíveis lá dentro.
+    """
+    if not _slots.acquire(blocking=False):
+        raise RuntimeError(
+            f"{_MAX_CONCURRENT_RUNS} tools Python já estão em execução — pode haver alguma travada "
+            "(o timeout não interrompe o código). Tente de novo ou reinicie o serviço."
+        )
+    context = contextvars.copy_context()
+    box: dict[str, Any] = {}
+
+    def target() -> None:
+        try:
+            box["value"] = context.run(fn, *args, **kwargs)
+        except BaseException as exc:  # noqa: BLE001 - repropagado no chamador
+            box["error"] = exc
+        finally:
+            _slots.release()
+
+    thread = threading.Thread(target=target, daemon=True, name="python-tool")
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise TimeoutError(f"A tool excedeu o limite de {timeout:.0f}s.")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
 
 
 def compile_python_tool(*, tool_name: str, config: dict[str, Any], enabled: bool) -> Callable[..., Any]:

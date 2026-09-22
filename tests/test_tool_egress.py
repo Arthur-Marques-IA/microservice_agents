@@ -1,0 +1,204 @@
+"""Para onde uma tool consegue falar.
+
+Sem esta trava, uma tool configurada pela API alcança o que o container alcança:
+o Postgres, o Redis e o metadata da nuvem. Os testes cobrem os dois caminhos que
+saem para a rede — `kind="api"` e o `httpx` das tools `kind="python"` — porque
+proteger só um deixaria o outro como desvio.
+"""
+
+import asyncio
+import socket
+
+import httpx
+import pytest
+from fastapi import HTTPException
+
+from agent_service.api.tools_routes import ToolIn, ToolInvokeIn, create_tool, delete_tool, invoke_tool
+from agent_service.config import get_settings
+from agent_service.tools import api_tool, egress
+from agent_service.tools.egress import EgressBlockedError, EgressUnresolvedError, check_url, check_url_template
+from agent_service.tools.python_tool import compile_python_tool
+
+
+def resolve_para(monkeypatch, *ips: str) -> None:
+    """Faz todo host resolver para estes endereços (o conftest já resolve para um público)."""
+
+    def fake(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port)) for ip in ips]
+
+    monkeypatch.setattr(egress.socket, "getaddrinfo", fake)
+
+
+# -- classificação de endereços ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "ip, motivo",
+    [
+        ("127.0.0.1", "loopback"),
+        ("::1", "loopback"),
+        ("10.1.2.3", "rede privada"),
+        ("192.168.0.10", "rede privada"),
+        ("172.16.5.4", "rede privada"),
+        ("169.254.169.254", "link-local"),  # metadata da nuvem
+        ("::ffff:169.254.169.254", "link-local"),  # o mesmo, escrito em IPv6
+        ("0.0.0.0", "não especificado"),
+        ("224.0.0.1", "multicast"),
+    ],
+)
+def test_destinos_internos_sao_bloqueados(monkeypatch, ip, motivo):
+    resolve_para(monkeypatch, ip)
+    with pytest.raises(EgressBlockedError) as exc:
+        check_url("https://algum-host/x")
+    assert motivo in str(exc.value)
+
+
+def test_destino_publico_passa(monkeypatch):
+    resolve_para(monkeypatch, "93.184.216.34")
+    check_url("https://exemplo.com/x")  # não levanta
+
+
+def test_um_registro_interno_no_meio_ja_bloqueia(monkeypatch):
+    """DNS round-robin com um IP interno seria o jeito mais fácil de passar batido."""
+    resolve_para(monkeypatch, "93.184.216.34", "10.0.0.7")
+    with pytest.raises(EgressBlockedError):
+        check_url("https://misto.exemplo/x")
+
+
+def test_ip_literal_nao_precisa_de_dns():
+    with pytest.raises(EgressBlockedError):
+        check_url("http://127.0.0.1:5432/")
+
+
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://exemplo.com/x", "gopher://exemplo.com"])
+def test_esquemas_fora_de_http_sao_recusados(url):
+    with pytest.raises(EgressBlockedError) as exc:
+        check_url(url)
+    assert "esquema" in str(exc.value)
+
+
+def test_allowlist_libera_host_interno(monkeypatch):
+    resolve_para(monkeypatch, "10.0.0.5")
+    monkeypatch.setattr(get_settings(), "tool_egress_allowlist", "faturamento.interno")
+    check_url("http://faturamento.interno/cobranca")  # liberado de propósito
+    with pytest.raises(EgressBlockedError):
+        check_url("http://outro.interno/x")  # o resto continua bloqueado
+
+
+# -- na hora de salvar a tool -----------------------------------------------------
+
+
+def test_host_que_nao_resolve_nao_impede_salvar(monkeypatch):
+    """DNS fora do ar não pode virar recusa de cadastro — quem cobra é a chamada."""
+
+    def falha(*args, **kwargs):
+        raise socket.gaierror("sem DNS")
+
+    monkeypatch.setattr(egress.socket, "getaddrinfo", falha)
+    check_url_template("https://ainda-nao-existe.interno/x")  # não levanta
+    with pytest.raises(EgressUnresolvedError):
+        check_url("https://ainda-nao-existe.interno/x")
+
+
+def test_host_como_placeholder_so_e_checado_na_chamada(monkeypatch):
+    resolve_para(monkeypatch, "10.0.0.5")
+    check_url_template("https://{host}/x")  # não dá para checar agora
+    with pytest.raises(EgressBlockedError):
+        check_url("https://postgres/x")
+
+
+def test_criar_tool_apontando_para_dentro_falha_com_422(monkeypatch):
+    resolve_para(monkeypatch, "127.0.0.1")
+    with pytest.raises(HTTPException) as exc:
+        create_tool(
+            ToolIn(
+                tool_name="vizinho_interno",
+                kind="api",
+                label="Serviço interno",
+                config={"method": "GET", "url": "http://postgres:5432/", "parameters": []},
+            )
+        )
+    assert exc.value.status_code == 422
+    assert "bloqueado" in str(exc.value.detail)
+
+
+# -- na chamada da tool -----------------------------------------------------------
+
+
+def test_parametro_de_path_nao_consegue_escolher_um_host_interno(monkeypatch):
+    """A URL pode ser montada com um parâmetro que o modelo preenche: por isso a
+    checagem acontece com a URL pronta, não só com o template salvo."""
+    tool = create_tool(
+        ToolIn(
+            tool_name="host_variavel",
+            kind="api",
+            label="Host pelo modelo",
+            config={
+                "method": "GET",
+                "url": "https://{host}/dados",
+                "parameters": [{"name": "host", "type": "string", "location": "path", "required": True}],
+            },
+        )
+    )
+    assert tool["tool_name"] == "host_variavel"
+    try:
+        resolve_para(monkeypatch, "169.254.169.254")
+        result = asyncio.run(invoke_tool("host_variavel", ToolInvokeIn(arguments={"host": "metadata.google.internal"})))
+        assert result["ok"] is True  # a tool responde, mas com a recusa no texto
+        assert "recusada" in result["result"] and "link-local" in result["result"]
+    finally:
+        delete_tool("host_variavel")
+
+
+def test_o_cliente_das_tools_nao_segue_redirect():
+    """Seguir um 302 levaria a um destino que ninguém checou."""
+    assert api_tool.get_client().follow_redirects is False
+
+
+# -- o mesmo vale para as tools Python --------------------------------------------
+
+
+def _tool_python(code: str, monkeypatch):
+    monkeypatch.setattr(get_settings(), "custom_python_tools_enabled", True)
+    return compile_python_tool(
+        tool_name="py_rede", config={"code": code, "entrypoint": "handler", "timeout_seconds": 5.0}, enabled=True
+    )
+
+
+def test_tool_python_nao_alcanca_a_rede_interna(monkeypatch):
+    """Sem isto, `import httpx` numa tool Python seria o desvio da trava."""
+    fn = _tool_python(
+        "import httpx\n"
+        "def handler() -> str:\n"
+        "    return httpx.get('http://169.254.169.254/latest/meta-data/').text\n",
+        monkeypatch,
+    )
+    resolve_para(monkeypatch, "169.254.169.254")
+    with pytest.raises(EgressBlockedError):
+        fn()
+
+
+def test_tool_python_nao_recebe_o_cliente_cru_do_httpx(monkeypatch):
+    """`httpx.Client` teria `event_hooks` que a própria tool poderia limpar."""
+    fn = _tool_python(
+        "import httpx\ndef handler() -> str:\n    return str(httpx.Client())\n",
+        monkeypatch,
+    )
+    with pytest.raises(RuntimeError) as exc:
+        fn()
+    assert "httpx.get" in str(exc.value)
+
+
+def test_tool_python_alcanca_a_rede_publica(monkeypatch):
+    fn = _tool_python(
+        "import httpx\ndef handler() -> str:\n    return httpx.get('https://exemplo.com/x').text\n",
+        monkeypatch,
+    )
+    resolve_para(monkeypatch, "93.184.216.34")
+    transporte = httpx.MockTransport(lambda request: httpx.Response(200, text="conteudo publico"))
+    monkeypatch.setattr(
+        __import__("agent_service.tools.python_tool", fromlist=["x"]),
+        "_guarded_httpx_client",
+        httpx.Client(transport=transporte, event_hooks={"request": [egress.guard_request]}),
+    )
+    assert fn() == "conteudo publico"

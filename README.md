@@ -197,7 +197,27 @@ uv run kuro agents set suporte tools='["cep"]'          # liga ao agente
 Segredos (token, senha) voltam mascarados nas leituras, e editar sem mexer no
 campo mascarado preserva o valor salvo. Uma tool em uso por algum agente não
 pode ser excluída. O seed cria `calculator`, `hackernews` e `cat_fact`.
-A builtin `web_search` precisa do extra `tools` (`uv sync --extra tools`).
+A builtin `web_search` precisa do extra `tools` (`uv sync --extra tools`); as
+demais do catálogo (`calculator`, `hackernews`, `reasoning`, `email`, `files`,
+`pubmed`, `openweather`, `file_generation`, `sleep`) funcionam sem instalar nada.
+
+**Para onde uma tool pode falar.** Dentro do container, `http://postgres:5432`,
+o Redis e o metadata da nuvem (`http://169.254.169.254/`) estão a um pulo de
+distância — e parte da URL pode vir do modelo, quando um parâmetro é
+`location: "path"`. Por isso o destino de toda tool é resolvido e conferido
+antes de cada chamada: só endereços públicos passam. Vale também para o
+`httpx` das tools `kind="python"`, que sem isso seria o desvio óbvio.
+
+```bash
+# um serviço interno legítimo se libera por host
+TOOL_EGRESS_ALLOWLIST=faturamento.interno,10.0.0.5
+```
+
+Salvar uma tool apontando para um destino interno falha com 422, e uma chamada
+recusada devolve o motivo ao modelo em vez de estourar. Toolkits do Agno que
+buscam uma URL escolhida na hora (`CustomApiTools`, `WebsiteTools`) ficam fora
+do catálogo de propósito: elas têm cliente HTTP próprio e passariam por cima
+dessa trava — quem cobre esse caso são as tools `kind="api"`.
 
 ### Base de conhecimento (RAG)
 
@@ -498,6 +518,7 @@ Tailwind, Docker Compose.
 | `DATABASE_URL` / `REDIS_URL` | localhost | sobrescritos dentro do compose |
 | `MAX_ATTACHMENT_MB` | `20` | limite por anexo |
 | `CUSTOM_PYTHON_TOOLS_ENABLED` | `false` | liga a execução de tools `python` |
+| `TOOL_EGRESS_ALLOWLIST` | — | hosts internos que as tools podem alcançar (vazio = só endereços públicos) |
 | `MEM0_ENABLED` / `MEM0_API_KEY` | `false` / — | habilita agentes com `memory_backend: "mem0"` |
 | `LANGFUSE_ENABLED` | `true` | liga o tracing |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` | valores de dev | conexão com o Langfuse |

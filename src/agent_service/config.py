@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     """Limite por anexo, checado antes de decodificar o base64 — evita gastar
     memória decodificando algo gigante antes de rejeitar."""
 
+    # Tools — para onde elas podem falar (ver agent_service/tools/egress.py)
+    tool_egress_allowlist: str = ""
+    """Hosts internos que as tools podem alcançar mesmo resolvendo para IP privado,
+    separados por vírgula (`faturamento.interno,10.0.0.5`). Vazio = só endereços
+    públicos, que é o padrão: sem isso uma tool alcança o Postgres, o Redis e o
+    metadata da nuvem a partir de dentro do container."""
+
     # Tools — kind="python" (ver agent_service/tools/python_tool.py)
     custom_python_tools_enabled: bool = False
     """Desligado por padrão: tools Python rodam num namespace restrito, mas

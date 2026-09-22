@@ -21,3 +21,26 @@ init_collection_store()
 seed_default_collection()
 seed_default_tools()
 seed_default_agents()
+
+import socket  # noqa: E402
+
+import pytest  # noqa: E402
+
+from agent_service.tools import egress  # noqa: E402
+
+_IP_PUBLICO = "93.184.216.34"
+
+
+@pytest.fixture(autouse=True)
+def dns_deterministico(monkeypatch):
+    """Nenhum teste consulta DNS de verdade.
+
+    O controle de egress (`tools/egress.py`) resolve o host antes de deixar uma
+    tool sair para a rede. Sem isto, os testes de tool dependeriam de rede e de
+    hosts reais — e `exemplo.test` nem resolve. Todo host passa a ser público;
+    o teste que quer ver o bloqueio acontecendo substitui isto por conta dele.
+    """
+    def resolve(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_IP_PUBLICO, port))]
+
+    monkeypatch.setattr(egress.socket, "getaddrinfo", resolve)

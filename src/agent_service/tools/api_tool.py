@@ -18,6 +18,19 @@ tool devolve um erro explicando o que faltou em vez de chamar a API pela metade.
 `entrypoint(**argumentos)` diretamente, sem inspecionar uma assinatura Python
 real (`skip_entrypoint_processing=True`), que é o mecanismo que permite uma
 tool inteiramente definida por dados.
+
+O entrypoint é `async` de propósito. No caminho assíncrono do Agno
+(`Function.aexecute`), um entrypoint síncrono é chamado direto, sem thread —
+e o `/chat` é `async` de ponta a ponta. Um `httpx.request` síncrono ali dentro
+travaria o event loop inteiro durante toda a chamada HTTP (até
+`timeout_seconds`), parando todas as outras requisições do worker. O cliente é
+único e reaproveitado, então a conexão (e o handshake TLS) é reusada entre
+chamadas em vez de refeita a cada uma.
+
+Todo destino passa por `tools/egress.py` antes do envio: uma tool só alcança
+endereços públicos, exceto o que estiver em `TOOL_EGRESS_ALLOWLIST`. A
+checagem é feita com a URL já montada porque um parâmetro `location="path"`
+pode compor o host (`https://{host}/x`), e aí o destino seria escolha do modelo.
 """
 
 from typing import Any, Literal
@@ -26,6 +39,7 @@ import httpx
 from agno.tools.function import Function
 
 from agent_service.tools.context import get_dependencies
+from agent_service.tools.egress import EgressBlockedError, check_url, check_url_template
 
 Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 ParamLocation = Literal["query", "path", "header", "body"]
@@ -47,6 +61,22 @@ _MAX_RESPONSE_CHARS = 8000
 _DEFAULT_TIMEOUT_SECONDS = 15.0
 _MAX_TIMEOUT_SECONDS = 60.0
 
+_client: httpx.AsyncClient | None = None
+
+
+def get_client() -> httpx.AsyncClient:
+    """Cliente único das tools de API — o pool de conexões vive aqui.
+
+    Criado na primeira chamada, não no import: o `AsyncClient` se prende ao
+    event loop em uso, e no import ainda não há loop nenhum. `follow_redirects`
+    fica desligado (o padrão do httpx) de propósito: seguir um 302 levaria a
+    um destino que ninguém checou, e o modelo lida bem com um 3xx na resposta.
+    """
+    global _client
+    if _client is None:
+        _client = httpx.AsyncClient(follow_redirects=False)
+    return _client
+
 
 class ApiToolConfigError(ValueError):
     """`config` inválido — reportado como 422 na criação/edição da tool."""
@@ -62,6 +92,12 @@ def validate_api_config(config: dict[str, Any]) -> dict[str, Any]:
     url = config.get("url")
     if not isinstance(url, str) or not url.startswith(("http://", "https://")):
         raise ApiToolConfigError("url deve ser http(s)://...")
+    # Falhar aqui evita descobrir só na primeira chamada do modelo que o destino
+    # é interno. Quando o host é um placeholder, quem cobra é a checagem da chamada.
+    try:
+        check_url_template(url)
+    except EgressBlockedError as exc:
+        raise ApiToolConfigError(str(exc)) from exc
 
     parameters = config.get("parameters", [])
     if not isinstance(parameters, list):
@@ -207,7 +243,7 @@ def _resolve_arguments(
     return resolved, None
 
 
-def _apply_auth(headers: dict[str, str], params: dict[str, Any], auth: dict[str, Any]) -> None:
+def _apply_auth(headers: dict[str, str], auth: dict[str, Any]) -> None:
     auth_type = auth.get("type", "none")
     if auth_type == "bearer":
         headers["Authorization"] = f"Bearer {auth['token']}"
@@ -217,7 +253,7 @@ def _apply_auth(headers: dict[str, str], params: dict[str, Any], auth: dict[str,
         pass  # aplicado via httpx.BasicAuth na chamada, não num header manual
 
 
-def _call_api(config: dict[str, Any], model_arguments: dict[str, Any]) -> str:
+async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any]) -> str:
     arguments, error = _resolve_arguments(config["parameters"], model_arguments, get_dependencies())
     if error is not None:
         return error
@@ -249,12 +285,18 @@ def _call_api(config: dict[str, Any], model_arguments: dict[str, Any]) -> str:
     except KeyError as exc:
         return f"Erro ao montar a URL: parâmetro de path ausente {exc}"
 
+    # Com a URL já montada: um parâmetro de path pode ter composto o host.
+    try:
+        check_url(url)
+    except EgressBlockedError as exc:
+        return f"Chamada recusada: {exc}"
+
     auth = config.get("auth") or {"type": "none"}
-    _apply_auth(headers, query, auth)
+    _apply_auth(headers, auth)
     basic_auth = httpx.BasicAuth(auth["username"], auth["password"]) if auth.get("type") == "basic" else None
 
     try:
-        response = httpx.request(
+        response = await get_client().request(
             method,
             url,
             params=query or None,
@@ -281,8 +323,8 @@ def _call_api(config: dict[str, Any], model_arguments: dict[str, Any]) -> str:
 def build_api_function(*, tool_name: str, description: str | None, config: dict[str, Any]) -> Function:
     validated = validate_api_config(config)
 
-    def entrypoint(**arguments: Any) -> str:
-        return _call_api(validated, arguments)
+    async def entrypoint(**arguments: Any) -> str:
+        return await _call_api(validated, arguments)
 
     return Function(
         name=tool_name,

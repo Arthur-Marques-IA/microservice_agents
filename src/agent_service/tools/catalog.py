@@ -8,6 +8,14 @@ qualquer coisa do Agno com kwargs livres). Para adicionar uma nova entrada:
 importe a toolkit dentro da própria `factory` (import tardio: algumas pedem
 um pacote opcional, só necessário se a tool for de fato usada — ver extra
 `tools` no `pyproject.toml`) e descreva os parâmetros em `params`.
+
+**O que fica de fora de propósito.** Toolkits que buscam uma URL escolhida na
+hora — `CustomApiTools`, `WebsiteTools`, `WebTools` — não entram no catálogo.
+Elas têm cliente HTTP próprio e não passariam por `tools/egress.py`, então
+seriam o caminho mais curto para um agente alcançar `http://postgres:5432` ou
+o metadata da nuvem, anulando aquela trava. Chamar uma API externa é o que as
+tools `kind="api"` fazem, com destino declarado na config e checado a cada
+chamada; é por lá que esse caso deve passar.
 """
 
 import tempfile
@@ -106,6 +114,36 @@ def _sleep(_params: dict[str, Any], _tool_name: str) -> Any:
     return SleepTools()
 
 
+def _pubmed(params: dict[str, Any], _tool_name: str) -> Any:
+    from agno.tools.pubmed import PubmedTools
+
+    return PubmedTools(
+        email=params.get("email") or "agent-service@example.com",
+        max_results=params.get("max_results") or None,
+        results_expanded=params.get("results_expanded", False),
+    )
+
+
+def _openweather(params: dict[str, Any], _tool_name: str) -> Any:
+    from agno.tools.openweather import OpenWeatherTools
+
+    return OpenWeatherTools(api_key=params.get("api_key") or None, units=params.get("units") or "metric")
+
+
+def _file_generation(params: dict[str, Any], tool_name: str) -> Any:
+    from agno.tools.file_generation import FileGenerationTools
+
+    # PDF e DOCX ficam desligados: o Agno só os gera com pacotes que este
+    # serviço não instala, e a tool falharia na hora da chamada, não aqui.
+    return FileGenerationTools(
+        output_directory=str(_tools_base_dir(tool_name)),
+        save_files=True,
+        enable_pdf_generation=False,
+        enable_docx_generation=False,
+        enable_code_generation=params.get("enable_code_generation", False),
+    )
+
+
 BUILTIN_CATALOG: dict[str, BuiltinToolSpec] = {
     spec.builtin_id: spec
     for spec in [
@@ -157,6 +195,42 @@ BUILTIN_CATALOG: dict[str, BuiltinToolSpec] = {
             "(nunca o código do serviço nem um caminho escolhido pelo usuário).",
             params=[ParamSpec("enable_delete_file", "boolean", "Permitir excluir arquivos", default=False)],
             factory=_files,
+        ),
+        BuiltinToolSpec(
+            builtin_id="pubmed",
+            label="PubMed (artigos científicos)",
+            description="Busca artigos e resumos na base do PubMed/NCBI. API pública, sem chave.",
+            params=[
+                ParamSpec(
+                    "email", "string", "E-mail de contato",
+                    description="O NCBI pede um e-mail para identificar quem consulta a API.",
+                ),
+                ParamSpec("max_results", "integer", "Máx. de artigos por busca", default=None),
+                ParamSpec("results_expanded", "boolean", "Trazer o resumo completo", default=False),
+            ],
+            factory=_pubmed,
+        ),
+        BuiltinToolSpec(
+            builtin_id="openweather",
+            label="Clima (OpenWeather)",
+            description="Clima atual, previsão e qualidade do ar. Precisa de uma chave do OpenWeatherMap.",
+            params=[
+                ParamSpec("api_key", "string", "Chave do OpenWeatherMap", required=True, secret=True),
+                ParamSpec("units", "string", "Unidades (metric, imperial, standard)", default="metric"),
+            ],
+            factory=_openweather,
+        ),
+        BuiltinToolSpec(
+            builtin_id="file_generation",
+            label="Gerar arquivos (JSON, CSV, TXT, HTML)",
+            description="Deixa o agente montar um arquivo com o resultado do trabalho, no diretório "
+            "isolado da tool. PDF e DOCX ficam de fora: exigem pacotes que o serviço não instala.",
+            params=[
+                ParamSpec(
+                    "enable_code_generation", "boolean", "Permitir gerar arquivos de código", default=False
+                )
+            ],
+            factory=_file_generation,
         ),
         BuiltinToolSpec(
             builtin_id="sleep",

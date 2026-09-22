@@ -3,9 +3,12 @@ Python sandboxed (kind="python"), o registry que as resolve pro Agno e o CRUD
 exposto em `api/tools_routes.py`.
 """
 
+import asyncio
 import json
 import time
 from unittest.mock import MagicMock, patch
+
+import httpx
 
 import pytest
 from fastapi import HTTPException
@@ -13,7 +16,7 @@ from pydantic import ValidationError
 
 from agent_service.agents.store import create_definition, delete_definition
 from agent_service.config import get_settings
-from agent_service.tools import registry, store
+from agent_service.tools import api_tool, registry, store
 from agent_service.tools.api_tool import ApiToolConfigError, build_api_function, validate_api_config
 from agent_service.tools.catalog import BuiltinConfigError, get_builtin_spec, list_builtin_catalog, validate_builtin_config
 from agent_service.tools.python_tool import (
@@ -44,6 +47,26 @@ from agent_service.api.tools_routes import (
 def test_builtin_catalog_has_the_curated_entries():
     ids = {spec.builtin_id for spec in list_builtin_catalog()}
     assert {"calculator", "hackernews", "reasoning", "email", "files", "sleep", "web_search"} <= ids
+    assert {"pubmed", "openweather", "file_generation"} <= ids
+
+
+@pytest.mark.parametrize("builtin_id, params", [
+    ("pubmed", {}),
+    ("openweather", {"api_key": "chave-de-teste"}),
+    ("file_generation", {}),
+])
+def test_novas_builtins_constroem_sem_dependencia_extra(builtin_id, params):
+    """O catálogo é curado: uma entrada que só constrói com um pacote a mais
+    apareceria pronta e falharia na hora de usar."""
+    built = get_builtin_spec(builtin_id).factory(params, builtin_id)
+    assert getattr(built, "functions", {})
+
+
+def test_catalogo_nao_oferece_toolkit_que_busca_url_arbitraria():
+    """Elas têm cliente HTTP próprio e não passam por `tools/egress.py` — seriam
+    o caminho curto para o agente alcançar a rede interna."""
+    ids = {spec.builtin_id for spec in list_builtin_catalog()}
+    assert not ids & {"custom_api", "website", "webtools"}
 
 
 def test_validate_builtin_config_rejects_unknown_id():
@@ -109,16 +132,34 @@ def test_validate_api_config_rejects_timeout_out_of_range():
         validate_api_config({"method": "GET", "url": "https://x.com", "timeout_seconds": 999})
 
 
-class FakeResponse:
-    def __init__(self, status_code=200, json_data=None, text=""):
-        self.status_code = status_code
-        self._json = json_data
-        self.text = text if json_data is None else json.dumps(json_data)
+def rede_falsa(status_code=200, json_data=None, text="", erro=None):
+    """Troca o cliente das tools de API por um com `MockTransport`.
 
-    def json(self):
-        if self._json is None:
-            raise ValueError("no json body")
-        return self._json
+    O entrypoint de uma tool `kind="api"` é assíncrono e usa um cliente
+    compartilhado (ver `tools/api_tool.py`), então o teste intercepta no
+    transporte em vez de mockar uma função de módulo.
+    """
+    enviadas: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        enviadas.append(request)
+        if erro is not None:
+            raise erro
+        if json_data is not None:
+            return httpx.Response(status_code, json=json_data)
+        return httpx.Response(status_code, text=text)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False)
+    return patch.object(api_tool, "_client", client), enviadas
+
+
+def chamar(fn, **kwargs):
+    """O entrypoint virou corrotina — ver `tools/api_tool.py`."""
+    return asyncio.run(fn.entrypoint(**kwargs))
+
+
+def invocar(tool_name, body):
+    return asyncio.run(invoke_tool(tool_name, body))
 
 
 def test_api_function_substitutes_path_sends_query_and_bearer_auth():
@@ -133,14 +174,16 @@ def test_api_function_substitutes_path_sends_query_and_bearer_auth():
     }
     fn = build_api_function(tool_name="items_api", description=None, config=config)
 
-    with patch("agent_service.tools.api_tool.httpx.request", return_value=FakeResponse(200, {"ok": True})) as mocked:
-        result = fn.entrypoint(item_id="42", q="hello")
+    mock, enviadas = rede_falsa(200, {"ok": True})
+    with mock:
+        result = chamar(fn, item_id="42", q="hello")
 
     assert "HTTP 200" in result and '"ok": true' in result
-    call = mocked.call_args
-    assert call.args == ("GET", "https://api.example.com/items/42")
-    assert call.kwargs["params"] == {"q": "hello"}
-    assert call.kwargs["headers"]["Authorization"] == "Bearer s3cr3t"
+    enviada = enviadas[-1]
+    assert enviada.method == "GET"
+    assert str(enviada.url).startswith("https://api.example.com/items/42")
+    assert dict(enviada.url.params) == {"q": "hello"}
+    assert enviada.headers["Authorization"] == "Bearer s3cr3t"
 
 
 def test_api_function_sends_body_params_as_json():
@@ -151,31 +194,32 @@ def test_api_function_sends_body_params_as_json():
     }
     fn = build_api_function(tool_name="create_item", description=None, config=config)
 
-    with patch("agent_service.tools.api_tool.httpx.request", return_value=FakeResponse(201, {"id": 1})) as mocked:
-        fn.entrypoint(name="Maria")
+    mock, enviadas = rede_falsa(201, {"id": 1})
+    with mock:
+        chamar(fn, name="Maria")
 
-    assert mocked.call_args.kwargs["json"] == {"name": "Maria"}
+    assert json.loads(enviadas[-1].content) == {"name": "Maria"}
 
 
 def test_api_function_truncates_huge_text_response():
     config = {"method": "GET", "url": "https://api.example.com/big", "parameters": []}
     fn = build_api_function(tool_name="big", description=None, config=config)
 
-    with patch("agent_service.tools.api_tool.httpx.request", return_value=FakeResponse(200, text="x" * 20_000)):
-        result = fn.entrypoint()
+    mock, _ = rede_falsa(200, text="x" * 20_000)
+    with mock:
+        result = chamar(fn)
 
     assert "truncado" in result
     assert len(result) < 8500
 
 
 def test_api_function_reports_http_errors_without_raising():
-    import httpx
-
     config = {"method": "GET", "url": "https://api.example.com/down", "parameters": []}
     fn = build_api_function(tool_name="down", description=None, config=config)
 
-    with patch("agent_service.tools.api_tool.httpx.request", side_effect=httpx.ConnectTimeout("timed out")):
-        result = fn.entrypoint()
+    mock, _ = rede_falsa(erro=httpx.ConnectTimeout("timed out"))
+    with mock:
+        result = chamar(fn)
 
     assert "Falha ao chamar a API" in result
 
@@ -334,7 +378,7 @@ def test_create_python_tool_allowed_even_while_disabled_but_invoke_is_not():
     assert created["tool_name"] == "py_tool_disabled"
 
     with pytest.raises(HTTPException) as exc:
-        invoke_tool("py_tool_disabled", ToolInvokeIn(arguments={"x": 1}))
+        invocar("py_tool_disabled", ToolInvokeIn(arguments={"x": 1}))
     assert exc.value.status_code == 403
 
 
@@ -350,25 +394,26 @@ def test_invoke_python_tool_when_enabled(monkeypatch):
             config={"code": "def handler(x: int) -> int:\n    return x + 1\n", "entrypoint": "handler"},
         )
     )
-    result = invoke_tool("py_tool_enabled", ToolInvokeIn(arguments={"x": 41}))
+    result = invocar("py_tool_enabled", ToolInvokeIn(arguments={"x": 41}))
     assert result["ok"] is True
     assert result["result"] == 42
 
 
 def test_invoke_api_tool_mocking_http():
-    with patch("agent_service.tools.api_tool.httpx.request", return_value=FakeResponse(200, {"fact": "meow"})):
-        result = invoke_tool("cat_fact", ToolInvokeIn())
+    mock, _ = rede_falsa(200, {"fact": "meow"})
+    with mock:
+        result = invocar("cat_fact", ToolInvokeIn())
     assert result["ok"] is True
     assert "meow" in result["result"]
 
 
 def test_invoke_builtin_tool_requires_function_name_then_succeeds():
     with pytest.raises(HTTPException) as exc:
-        invoke_tool("calculator", ToolInvokeIn())
+        invocar("calculator", ToolInvokeIn())
     assert exc.value.status_code == 422
     assert "add" in exc.value.detail
 
-    result = invoke_tool("calculator", ToolInvokeIn(function_name="add", arguments={"a": 2, "b": 3}))
+    result = invocar("calculator", ToolInvokeIn(function_name="add", arguments={"a": 2, "b": 3}))
     assert result["ok"] is True
 
 
@@ -381,7 +426,7 @@ def test_invoke_tool_that_fails_to_build_reports_error_not_500():
             config={"builtin_id": "web_search", "params": {}},  # ddgs não está instalado neste ambiente de teste
         )
     )
-    result = invoke_tool("broken_builtin", ToolInvokeIn())
+    result = invocar("broken_builtin", ToolInvokeIn())
     assert result["ok"] is False
     assert result["error"]
 
@@ -459,3 +504,45 @@ def test_agent_create_accepts_known_tool_name():
     )
     assert created["tools"] == ["calculator"]
     delete_definition("tool-checker-2")
+
+
+def test_tool_python_travada_nao_impede_as_outras():
+    """Antes todas as tools Python dividiam um pool de 8 workers e o timeout não
+    interrompe o código: oito tools travadas e nenhuma outra rodava mais. Agora
+    cada chamada tem a sua thread, então uma travada só queima um slot do teto."""
+    travada = compile_python_tool(
+        tool_name="trava",
+        config=validate_python_config(
+            {"code": "import time\ndef handler() -> int:\n    time.sleep(2)\n    return 1\n",
+             "entrypoint": "handler", "timeout_seconds": 0.1}
+        ),
+        enabled=True,
+    )
+    for _ in range(10):
+        with pytest.raises(TimeoutError):
+            travada()
+
+    rapida = compile_python_tool(
+        tool_name="rapida",
+        config=validate_python_config({"code": "def handler() -> int:\n    return 7\n", "entrypoint": "handler"}),
+        enabled=True,
+    )
+    assert rapida() == 7
+
+
+def test_tool_python_enxerga_as_dependencies_da_requisicao():
+    """A thread da tool recebe uma cópia do contexto — `ContextVar` não é herdado."""
+    from agent_service.tools.context import dependencies_scope, get_dependencies
+
+    config = validate_python_config({"code": "def handler() -> int:\n    return 1\n", "entrypoint": "handler"})
+    visto = {}
+
+    def espia() -> int:
+        visto.update(get_dependencies())
+        return 1
+
+    with dependencies_scope({"cpf": "123"}):
+        from agent_service.tools.python_tool import _run_with_timeout
+
+        _run_with_timeout(espia, 5.0)
+    assert visto == {"cpf": "123"}

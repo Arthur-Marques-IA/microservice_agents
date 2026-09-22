@@ -21,7 +21,7 @@
 | Lacuna | Evidência | Por que importa |
 |---|---|---|
 | Nenhuma autenticação | nenhuma rota exige credencial; README: "sem autenticação no MVP" | Em um microserviço dentro de uma plataforma, qualquer vizinho de rede consegue editar prompts e ler traces |
-| SSRF nas tools de API | `tools/api_tool.py` aceita qualquer `http(s)://` | Uma tool pode apontar para `http://postgres:5432`, para o metadata da nuvem, etc. |
+| ~~SSRF nas tools de API~~ | **feito** — `tools/egress.py` resolve o destino e recusa loopback/privado/link-local antes de cada chamada, nos dois caminhos de rede (`kind="api"` e o `httpx` das tools Python), com `TOOL_EGRESS_ALLOWLIST` para o host interno legítimo |
 | Sem migrações | `agents/store.py::_add_missing_columns` faz `ALTER TABLE` à mão, já com 4 casos | Vai quebrar na primeira mudança de tipo ou de constraint |
 | Sem CI | não existe `.github/`, apesar dos 19 arquivos de teste | Os testes só rodam quando alguém lembra |
 | Versionamento parcial | só `instructions` gera versão; mudar modelo, tools ou a nota de feedback não gera | O trace grava `prompt-v{N}`, então uma regressão causada por troca de modelo ou pela nota fica invisível |
@@ -57,8 +57,12 @@ falta o ciclo que as une: *mudei o agente → provo que não piorou → publico*
 3. **Alembic.** Uma migração inicial que reflete o schema atual e o fim de `_add_missing_columns`.
 4. **CI (GitHub Actions):** `uv run pytest`, `ruff`, `npm run lint && npm run build` e build das duas imagens.
    Entre todos os itens, é o de maior valor para o esforço.
-5. **Proteção de egress nas tools de API:** bloquear IPs privados, loopback e link-local depois de
-   resolver o DNS, com allowlist opcional por tenant (`TOOL_EGRESS_ALLOWLIST`).
+5. ~~**Proteção de egress nas tools de API.**~~ **Feito** (`tools/egress.py`): resolve o DNS e recusa
+   loopback, privado, link-local, multicast e reservado, com `TOOL_EGRESS_ALLOWLIST` por host. A
+   checagem roda com a URL já montada, porque um parâmetro `location="path"` pode compor o host. O
+   `httpx` das tools Python passa pelo mesmo controle — sem isso a trava seria enfeite. Falta a parte
+   por tenant, que depende do item 2. Limite conhecido: DNS rebinding (checamos e o httpx resolve de
+   novo ao conectar); fechar isso é papel de um egress firewall no ambiente.
 6. **Tirar I/O síncrono do event loop.** `api/routes.py::chat` é `async`, mas `_resolve` faz
    consultas síncronas no Postgres: `get_definition`, `get_feedback_note` (duas vezes: no stamp e no
    build) e um `get_tool` por tool, ou seja N+2 round-trips bloqueantes por mensagem. Opções, da mais
@@ -260,6 +264,7 @@ da §4.1.
 | AgentOS no boot | Agentes e collections criados depois do boot não aparecem nas rotas do AgentOS | Se o playground do os.agno.com não for essencial, deixe o AgentOS só para ingestão, ou remova (ver §8) |
 | Seleção de modelo | Ainda não há fallback (o README já prevê) | Com vários provedores já cadastrados, dá para ligar `fallback_models` por agente agora |
 | Streaming | O `/chat` síncrono agrega o stream em memória | Timeout por run + cancelamento quando o cliente desconecta, e `max_tool_calls` por agente contra loops de tool |
+| ~~Tool de API travando o event loop~~ | **corrigido**: o entrypoint era síncrono e o Agno chama entrypoint síncrono direto no caminho `async` (`Function.aexecute`), então uma chamada de 15s parava todas as requisições do worker | Entrypoint `async` com `httpx.AsyncClient` único — o pool também evita refazer o handshake TLS a cada chamada |
 | Escala | Cache por processo | Com o `LISTEN/NOTIFY` do H0 dá para rodar com `--workers N` ou várias réplicas sem cache velho |
 
 ## 8. O que cortar ou não fazer
@@ -273,6 +278,17 @@ da §4.1.
   restrito não é uma sandbox. As tools de API cobrem a maior parte dos casos. Se forem mantidas,
   precisam rodar em um container efêmero, sem rede e com limite de CPU/memória, e isso é um projeto à
   parte. Prefira esconder do produto até lá.
+
+  Revisadas em 2026-09-22, sem mudar essa conclusão. Foram corrigidos os dois problemas com efeito
+  operacional, e o resto virou documentação honesta no docstring do módulo:
+  - o `httpx` das tools Python agora passa pelo controle de egress (era o desvio da trava nova);
+  - o timeout não interrompe o código (Python não mata thread de fora) e todas as tools dividiam um
+    pool de 8 workers, então **oito tools travadas paravam todas as tools Python do serviço**. Agora
+    cada chamada roda na própria thread daemon, com teto de 32 simultâneas: a travada queima um slot,
+    não a fila inteira.
+  - continuam em aberto, e só o isolamento de verdade resolve: sem limite de memória/CPU
+    (`[0] * 10**10` derruba o container) e `str.format` alcançando atributos (`"{0.__class__}"`),
+    que vaza informação mas só produz texto.
 - **Agente "orquestrador" genérico.** O procedural resolve o caso de uso concreto (fluxos guiados) com
   muito menos risco. Faça o orquestrador só quando existir um roteamento real entre agentes que o
   procedural não resolva.

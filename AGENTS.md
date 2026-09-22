@@ -113,6 +113,12 @@ Cada parâmetro de uma tool `kind="api"` declara um `source`:
 - `"const"`: valor fixo em `value`.
 
 `required` é cobrado antes da chamada HTTP; faltando um, a tool devolve o que faltou.
+
+Toda tool só alcança endereços **públicos**: o destino é resolvido e conferido antes de cada
+chamada (com a URL já montada, porque um parâmetro `location="path"` pode compor o host). Salvar
+uma tool apontando para dentro falha com 422; uma chamada recusada devolve o motivo ao modelo.
+Para um serviço interno legítimo, libere o host em `TOOL_EGRESS_ALLOWLIST`. O mesmo vale para o
+`httpx` das tools `kind="python"`.
 Para testar sem montar agente: `kuro tools invoke <tool> --args-json '{"x": 1}'`
 (a rota aceita também `dependencies`, via `POST /tools/{nome}/invoke`).
 

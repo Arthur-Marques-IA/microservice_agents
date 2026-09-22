@@ -17,6 +17,7 @@ Depois de criada, uma tool entra na lista de um agente pelo nome
 """
 
 import copy
+import inspect
 import re
 from datetime import datetime
 from typing import Any, Literal
@@ -326,7 +327,10 @@ def delete_tool(tool_name: str) -> None:
 
 
 @router.post("/{tool_name}/invoke", response_model=ToolInvokeOut)
-def invoke_tool(tool_name: str, body: ToolInvokeIn) -> dict[str, Any]:
+async def invoke_tool(tool_name: str, body: ToolInvokeIn) -> dict[str, Any]:
+    """Testa a tool isoladamente. `async` porque o entrypoint de uma tool
+    `kind="api"` é uma corrotina (ver `tools/api_tool.py`) — chamá-lo de uma
+    rota síncrona devolveria a corrotina sem executá-la."""
     row = store.get_tool(tool_name)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Tool {tool_name!r} não encontrada")
@@ -343,7 +347,7 @@ def invoke_tool(tool_name: str, body: ToolInvokeIn) -> dict[str, Any]:
     try:
         with dependencies_scope(body.dependencies):
             if row["kind"] == "api":
-                result = built.entrypoint(**body.arguments)
+                result = await built.entrypoint(**body.arguments)
             elif row["kind"] == "python":
                 result = built(**body.arguments)
             else:  # builtin
@@ -359,6 +363,8 @@ def invoke_tool(tool_name: str, body: ToolInvokeIn) -> dict[str, Any]:
                         status_code=404, detail=f"Função {body.function_name!r} não existe em {tool_name!r}"
                     )
                 result = fn.entrypoint(**body.arguments)
+                if inspect.isawaitable(result):  # algumas toolkits do Agno são async
+                    result = await result
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001 - erro de execução da tool, não do endpoint
