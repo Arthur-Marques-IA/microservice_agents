@@ -128,8 +128,8 @@ EOF
 uv run kuro analyze extrator-contrato -a contrato.pdf    # → valor: 1200.0, prazo_dias: 30
 ```
 
-O `analyze` é **sobre texto**: `document` é uma string comum, então `-f
-qualquer.json`, `-f doc.txt` ou stdin já servem — o histórico de uma conversa
+O `analyze` é **sobre texto**: `document` é uma string comum, então `-m "texto"`,
+`-f qualquer.json`, `-f doc.txt` ou stdin já servem — o histórico de uma conversa
 em JSON, por exemplo. O `--attach` é o caminho opcional, para mandar um PDF ou
 uma imagem direto ao modelo sem extrair o texto antes.
 

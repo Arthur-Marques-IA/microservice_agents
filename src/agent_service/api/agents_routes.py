@@ -242,19 +242,31 @@ def _validate_kind(kind: str, response_schema: list[dict[str, Any]]) -> None:
         )
 
 
-def _validate_inert_fields(kind: str, body: BaseModel) -> None:
-    """Recusa campo inerte que veio *explicitamente* na requisição.
+def _default_de(campo: str) -> Any:
+    return AgentDefinitionIn.model_fields[campo].default
 
-    O critério é `model_fields_set`, não o valor: um agente já salvo carrega
-    `num_history_runs=10` por default, e cobrar isso faria um `PUT kind=analysis`
-    falhar por um campo que ninguém escreveu."""
+
+def _validate_inert_fields(kind: str, body: BaseModel) -> None:
+    """Recusa campo inerte que veio com valor diferente do padrão.
+
+    Dois critérios juntos, e os dois são necessários. `model_fields_set` porque
+    um agente salvo carrega `num_history_runs=10` por default e cobrar isso faria
+    um `PUT` de instructions falhar por um campo que ninguém escreveu. E o valor
+    ter de diferir do padrão porque `kuro agents get --editable` devolve *todos*
+    os campos editáveis — o fluxo documentado `get --editable > f.json && apply
+    -f f.json` reenviaria os defaults e quebraria em todo agente analista.
+
+    O que sobra é o que interessa: alguém configurou de fato algo que não vai
+    surtir efeito."""
     if kind != "analysis":
         return
-    enviados = [c for c in body.model_fields_set if c in _INERTES_EM_ANALYSIS]
-    # `memory_backend="common"` é o próprio default: não configura nada, não incomoda.
-    enviados = [c for c in enviados if not (c == "memory_backend" and getattr(body, c) == "common")]
-    if enviados:
-        detalhe = "; ".join(f"{campo} ({_INERTES_EM_ANALYSIS[campo]})" for campo in sorted(enviados))
+    configurados = [
+        campo
+        for campo in body.model_fields_set
+        if campo in _INERTES_EM_ANALYSIS and getattr(body, campo) != _default_de(campo)
+    ]
+    if configurados:
+        detalhe = "; ".join(f"{campo} ({_INERTES_EM_ANALYSIS[campo]})" for campo in sorted(configurados))
         raise HTTPException(
             status_code=422,
             detail=f"Estes campos não têm efeito em kind='analysis' — tire-os da requisição: {detalhe}",

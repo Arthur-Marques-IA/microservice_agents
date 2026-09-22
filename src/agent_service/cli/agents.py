@@ -46,9 +46,18 @@ EDITABLE_FIELDS = (
 )
 
 
+# Num agente `analysis` estes campos não têm efeito (ele é one-shot, sem sessão
+# nem memória) e a API recusa configurá-los — oferecê-los no JSON editável seria
+# convidar a mexer num campo que só devolve 422.
+INERTES_EM_ANALYSIS = ("num_history_runs", "memory_backend")
+
+
 def editable(definition: dict[str, Any]) -> dict[str, Any]:
     """Só os campos aceitos por `apply`/`PUT` — a saída de `get --editable`."""
-    return {"agent_type": definition["agent_type"], **{k: definition.get(k) for k in EDITABLE_FIELDS}}
+    campos = EDITABLE_FIELDS
+    if definition.get("kind") == "analysis":
+        campos = tuple(c for c in campos if c not in INERTES_EM_ANALYSIS)
+    return {"agent_type": definition["agent_type"], **{k: definition.get(k) for k in campos}}
 
 
 # -- renderização ------------------------------------------------------------------

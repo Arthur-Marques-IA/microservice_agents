@@ -63,6 +63,7 @@ kuro --json agents apply -f - <<'EOF'
                                                {"name": "valor", "type": "number", "required": true}]}}]}
 EOF
 kuro --json analyze extrator-contrato -f contrato.txt        # ou stdin; devolve {result: {...}}
+kuro --json analyze classificador -m '{"mensagens": [...]}'  # texto direto, sem arquivo temporário
 cat conversa.json | kuro --json analyze classificador        # texto/JSON por stdin
 # Em kind="analysis": `num_history_runs` e `memory_backend` dão 422 (não fazem nada num
 # agente one-shot) e a nota de feedback não se aplica — ajuste as instructions.

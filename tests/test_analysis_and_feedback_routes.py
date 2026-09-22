@@ -271,3 +271,71 @@ def test_analysis_com_collection_mantem_a_busca(monkeypatch):
     assert agente.db is None  # continua sem persistir sessão
     assert agente.knowledge is colecao
     assert agente.search_knowledge is True
+
+
+# -- o fluxo documentado: get --editable > f.json && apply -f f.json --------------
+
+SCHEMA_ANINHADO = [
+    {"name": "valor", "type": "number", "required": True},
+    {"name": "cliente", "type": "object", "fields": [{"name": "nome", "type": "string", "required": True}]},
+    {
+        "name": "parcelas",
+        "type": "array",
+        "items": {"type": "object", "fields": [{"name": "numero", "type": "integer", "required": True}]},
+    },
+]
+
+
+def test_editable_volta_por_apply_sem_perder_o_schema_aninhado():
+    """O fluxo do AGENTS.md. Um `object`/`array` precisa sobreviver à ida e volta
+    pelo JSON editável, com `fields` e `items` intactos."""
+    from agent_service.cli.agents import editable
+
+    original = create_agent(
+        AgentDefinitionIn(
+            agent_type="rt_schema", name="RT", instructions=["Extraia."],
+            kind="analysis", response_schema=SCHEMA_ANINHADO,
+        )
+    )
+    saida = editable(original)
+    delete_agent("rt_schema")
+
+    recriado = create_agent(AgentDefinitionIn(**saida))
+    try:
+        assert recriado["response_schema"] == original["response_schema"]
+    finally:
+        delete_agent("rt_schema")
+
+
+def test_editable_de_analysis_nao_oferece_campo_inerte():
+    """Oferecer `num_history_runs` num analista convidaria a mexer num campo que
+    a API recusa — e faria o próprio round-trip falhar."""
+    from agent_service.cli.agents import editable
+
+    definicao = create_agent(
+        AgentDefinitionIn(
+            agent_type="rt_inerte", name="RT", instructions=["a"],
+            kind="analysis", response_schema=[{"name": "v", "type": "number"}],
+        )
+    )
+    try:
+        saida = editable(definicao)
+        assert "num_history_runs" not in saida and "memory_backend" not in saida
+    finally:
+        delete_agent("rt_inerte")
+
+
+def test_reenviar_os_defaults_nao_e_erro():
+    """`GET /agents/x` seguido de `POST /agents` manda todo campo, inclusive os
+    inertes com o valor padrão. Isso não configurou nada, então não é 422."""
+    criado = create_agent(
+        AgentDefinitionIn(
+            agent_type="rt_default", name="RT", instructions=["a"], kind="analysis",
+            num_history_runs=10, memory_backend="common",
+            response_schema=[{"name": "v", "type": "number"}],
+        )
+    )
+    try:
+        assert criado["agent_type"] == "rt_default"
+    finally:
+        delete_agent("rt_default")

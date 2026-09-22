@@ -611,3 +611,38 @@ def test_runs_tail_exits_one_when_langfuse_goes_away(api, monkeypatch):
     result = _run("--json", "runs", "tail")
     assert result.exit_code == 1
     assert json.loads((result.stderr or "").strip().splitlines()[-1])["status"] == 503
+
+
+# -- analyze aceita texto direto, não só arquivo --------------------------------
+
+ANALYST_NESTED = {
+    **AGENT, "agent_type": "classificador", "kind": "analysis", "dependency_fields": [],
+    "response_schema": [
+        {"name": "mensagens", "type": "array", "label": "Mensagens", "description": "", "required": True,
+         "default": None,
+         "items": {"type": "object", "fields": [
+             {"name": "autor", "type": "string", "label": "Autor", "description": "",
+              "required": True, "default": None}]}}
+    ],
+}
+
+
+def test_analyze_aceita_o_documento_como_texto(api):
+    """Um agente operando a CLI manda o JSON direto; escrever um arquivo temporário
+    só para passar uma string é a fricção que o `-m` do chat já evita."""
+    routes, calls = api
+    routes[("GET", "/agents/classificador")] = httpx.Response(200, json=ANALYST_NESTED)
+    routes[("POST", "/analyze")] = httpx.Response(
+        200, json={"agent_type": "classificador", "result": {"mensagens": []}, "run_id": "r1", "trace_id": None}
+    )
+    result = _run("--json", "analyze", "classificador", "-m", '{"mensagens": []}')
+    assert result.exit_code == 0, result.output
+    assert json.loads(calls[-1].content)["document"] == '{"mensagens": []}'
+
+
+def test_analyze_com_texto_e_arquivo_juntos_e_erro_de_uso(api, tmp_path):
+    routes, _ = api
+    routes[("GET", "/agents/classificador")] = httpx.Response(200, json=ANALYST_NESTED)
+    doc = tmp_path / "d.json"
+    doc.write_text("{}", encoding="utf-8")
+    assert _run("analyze", "classificador", "-m", "{}", "-f", str(doc)).exit_code == 2
