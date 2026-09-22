@@ -370,3 +370,244 @@ def test_credential_edit_sends_only_what_changed(api):
 
 def test_credential_edit_without_changes_is_usage_error(api):
     assert _run("credentials", "edit", "c1").exit_code == 2
+
+
+# -- tools: criar, editar e remover pela CLI (antes só existia na API/UI) -------
+
+TOOL = {
+    "tool_name": "calc", "kind": "api", "label": "Calculadora", "description": None,
+    "config": {"method": "GET", "url": "https://exemplo/x", "parameters": []},
+    "enabled": True, "is_seed": False,
+    "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+}
+
+
+def test_tools_apply_creates_then_updates(api, tmp_path):
+    routes, calls = api
+    spec = tmp_path / "tool.json"
+    spec.write_text(json.dumps({"tool_name": "calc", "kind": "api", "label": "Calculadora"}), encoding="utf-8")
+
+    routes[("GET", "/tools")] = httpx.Response(200, json=[])
+    routes[("POST", "/tools")] = httpx.Response(201, json=TOOL)
+    assert _run("tools", "apply", "-f", str(spec)).exit_code == 0
+    assert calls[-1].method == "POST"
+
+    routes[("GET", "/tools")] = httpx.Response(200, json=[TOOL])
+    routes[("PUT", "/tools/calc")] = httpx.Response(200, json=TOOL)
+    assert _run("tools", "apply", "-f", str(spec)).exit_code == 0
+    # `kind` não é editável: sai do corpo do PUT em vez de virar erro.
+    assert calls[-1].method == "PUT" and json.loads(calls[-1].content) == {"label": "Calculadora"}
+
+
+def test_tools_apply_new_without_kind_is_usage_error(api, tmp_path):
+    routes, _ = api
+    spec = tmp_path / "tool.json"
+    spec.write_text(json.dumps({"tool_name": "calc", "label": "X"}), encoding="utf-8")
+    routes[("GET", "/tools")] = httpx.Response(200, json=[])
+    assert _run("tools", "apply", "-f", str(spec)).exit_code == 2
+
+
+def test_tools_set_sends_only_given_fields(api):
+    routes, calls = api
+    routes[("PUT", "/tools/calc")] = httpx.Response(200, json=TOOL)
+    assert _run("tools", "set", "calc", "enabled=false").exit_code == 0
+    assert json.loads(calls[-1].content) == {"enabled": False}
+
+
+def test_tools_set_rejects_non_editable_field(api):
+    assert _run("tools", "set", "calc", "kind=python").exit_code == 2
+
+
+def test_tools_delete_requires_yes_without_tty(api):
+    assert _run("tools", "delete", "calc").exit_code == 2
+
+
+def test_tools_delete_in_use_reports_api_conflict(api):
+    routes, _ = api
+    routes[("DELETE", "/tools/calc")] = httpx.Response(409, json={"detail": "Tool em uso por: suporte"})
+    result = _run("--json", "tools", "delete", "calc", "--yes")
+    assert result.exit_code == 1
+    assert json.loads(result.stderr)["status"] == 409
+
+
+# -- sessions: conversas guardadas (rotas do AgentOS, sem depender do Langfuse) --
+
+SESSION = {
+    "session_id": "cli-abc", "session_name": "meu wifi caiu", "agent_id": "suporte",
+    "user_id": "cli", "total_tokens": 120,
+    "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:10:00Z",
+}
+
+
+def test_sessions_list_scopes_by_user_and_agent(api):
+    routes, calls = api
+    routes[("GET", "/sessions")] = httpx.Response(200, json={"data": [SESSION], "meta": {"page": 1, "total_pages": 1}})
+    result = _run("--json", "sessions", "list", "--agent", "suporte")
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["data"][0]["session_id"] == "cli-abc"
+    params = calls[-1].url.params
+    # sem user_id a listagem traria as conversas de todo mundo, inclusive as do console
+    assert (params["user_id"], params["component_id"], params["type"]) == ("cli", "suporte", "agent")
+
+
+def test_sessions_list_uses_kuro_user_id_env(api, monkeypatch):
+    routes, calls = api
+    monkeypatch.setenv("KURO_USER_ID", "joana")
+    routes[("GET", "/sessions")] = httpx.Response(200, json={"data": [], "meta": {}})
+    assert _run("--json", "sessions", "list").exit_code == 0
+    assert calls[-1].url.params["user_id"] == "joana"
+
+
+def test_sessions_show_prints_transcript(api):
+    routes, _ = api
+    routes[("GET", "/sessions/cli-abc/runs")] = httpx.Response(
+        200,
+        json=[{"run_id": "r1", "run_input": "meu wifi caiu", "content": "vamos verificar",
+               "metrics": {"total_tokens": 120}}],
+    )
+    result = _run("sessions", "show", "cli-abc")
+    assert result.exit_code == 0
+    assert "vamos verificar" in result.output
+
+
+def test_sessions_delete_requires_yes_without_tty(api):
+    assert _run("sessions", "delete", "cli-abc").exit_code == 2
+
+
+def test_sessions_delete_scopes_by_user(api):
+    routes, calls = api
+    routes[("DELETE", "/sessions/cli-abc")] = httpx.Response(204)
+    assert _run("--json", "sessions", "delete", "cli-abc", "--yes").exit_code == 0
+    assert calls[-1].url.params["user_id"] == "cli"
+
+
+# -- runs stats / tail -----------------------------------------------------------
+
+STATS = {
+    "buckets": [{"date": "2026-01-01", "runs": 3, "errors": 1, "total_tokens": 900, "cost_usd": 0.01}],
+    "status_counts": {"success": 2, "error": 1}, "total_runs": 3, "total_tokens": 900,
+    "total_cost_usd": 0.01, "avg_latency_ms": 1500.0, "scanned": 3,
+}
+
+
+def test_runs_stats_renders_and_filters(api):
+    routes, calls = api
+    routes[("GET", "/observability/stats")] = httpx.Response(200, json=STATS)
+    result = _run("runs", "stats", "--agent", "suporte")
+    assert result.exit_code == 0
+    assert "2026-01-01" in result.output
+    assert calls[-1].url.params["agent_type"] == "suporte"
+
+
+def test_runs_stats_without_langfuse_exits_one(api):
+    routes, _ = api
+    routes[("GET", "/observability/stats")] = httpx.Response(503, json={"detail": "Langfuse não está configurado."})
+    result = _run("--json", "runs", "stats")
+    assert result.exit_code == 1
+    assert json.loads(result.stderr)["status"] == 503
+
+
+def _run_row(run_id: str) -> dict:
+    return {"run_id": run_id, "trace_id": "t", "agent_type": "suporte", "started_at": "2026-01-01T00:00:00Z",
+            "status": "success", "total_tokens": 10, "latency_ms": 1200.0}
+
+
+def _json_objects(text: str) -> list[dict]:
+    """Separa os objetos JSON que o `tail` emite em sequência no stdout."""
+    decoder, objetos, idx = json.JSONDecoder(), [], 0
+    while idx < len(text):
+        if text[idx].isspace():
+            idx += 1
+            continue
+        objeto, idx = decoder.raw_decode(text, idx)
+        objetos.append(objeto)
+    return objetos
+
+
+def test_runs_tail_prints_each_run_once(api, monkeypatch):
+    from agent_service.cli import runs as runs_cli
+
+    pages = iter([{"items": [_run_row("r1")]}, {"items": [_run_row("r2"), _run_row("r1")]}])
+    monkeypatch.setattr(Client, "list_runs", lambda self, **kw: next(pages))
+    consultas = []
+
+    def parar_na_segunda(_seconds):
+        consultas.append(1)
+        if len(consultas) >= 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(runs_cli.time, "sleep", parar_na_segunda)
+    result = _run("--json", "runs", "tail")
+    assert result.exit_code == 0
+    assert [r["run_id"] for r in _json_objects(result.stdout)] == ["r1", "r2"]  # r1 não repete
+
+
+# -- agents rollback --------------------------------------------------------------
+
+VERSIONS = [
+    {"version": 2, "instructions": ["Seja breve."], "created_at": "2026-01-02T00:00:00Z"},
+    {"version": 1, "instructions": ["Texto antigo."], "created_at": "2026-01-01T00:00:00Z"},
+]
+
+
+def test_agents_rollback_reapplies_old_instructions(api):
+    routes, calls = api
+    routes[("GET", "/agents/suporte/versions")] = httpx.Response(200, json=VERSIONS)
+    routes[("GET", "/agents/suporte")] = httpx.Response(200, json=AGENT)
+    routes[("PUT", "/agents/suporte")] = httpx.Response(200, json={**AGENT, "prompt_version": 3})
+    result = _run("--json", "agents", "rollback", "suporte", "1", "--yes")
+    assert result.exit_code == 0
+    assert json.loads(calls[-1].content) == {"instructions": ["Texto antigo."]}
+
+
+def test_agents_rollback_to_current_text_does_not_create_a_version(api):
+    routes, calls = api
+    routes[("GET", "/agents/suporte/versions")] = httpx.Response(200, json=VERSIONS)
+    routes[("GET", "/agents/suporte")] = httpx.Response(200, json=AGENT)
+    result = _run("--json", "agents", "rollback", "suporte", "2", "--yes")
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["unchanged"] is True
+    assert calls[-1].method == "GET"
+
+
+def test_agents_rollback_unknown_version_is_usage_error(api):
+    routes, _ = api
+    routes[("GET", "/agents/suporte/versions")] = httpx.Response(200, json=VERSIONS)
+    assert _run("agents", "rollback", "suporte", "9", "--yes").exit_code == 2
+
+
+def test_agents_rollback_requires_yes_without_tty(api):
+    routes, _ = api
+    routes[("GET", "/agents/suporte/versions")] = httpx.Response(200, json=VERSIONS)
+    routes[("GET", "/agents/suporte")] = httpx.Response(200, json=AGENT)
+    assert _run("agents", "rollback", "suporte", "1").exit_code == 2
+
+
+def test_tools_apply_refuses_to_change_kind(api, tmp_path):
+    """Trocar o kind seria outra tool: falha em vez de ignorar a edição em silêncio."""
+    routes, _ = api
+    spec = tmp_path / "tool.json"
+    spec.write_text(json.dumps({"tool_name": "calc", "kind": "python", "label": "X"}), encoding="utf-8")
+    routes[("GET", "/tools")] = httpx.Response(200, json=[TOOL])
+    result = _run("tools", "apply", "-f", str(spec))
+    assert result.exit_code == 2
+    assert "kind" in result.output + (result.stderr or "")
+
+
+def test_runs_tail_exits_one_when_langfuse_goes_away(api, monkeypatch):
+    from agent_service.cli import runs as runs_cli
+    from agent_service.cli.client import ApiError
+
+    respostas = iter([{"items": [_run_row("r1")]}, ApiError(503, "Langfuse não está configurado.")])
+
+    def list_runs(self, **kw):
+        resposta = next(respostas)
+        if isinstance(resposta, Exception):
+            raise resposta
+        return resposta
+
+    monkeypatch.setattr(Client, "list_runs", list_runs)
+    monkeypatch.setattr(runs_cli.time, "sleep", lambda _s: None)
+    result = _run("--json", "runs", "tail")
+    assert result.exit_code == 1
+    assert json.loads((result.stderr or "").strip().splitlines()[-1])["status"] == 503

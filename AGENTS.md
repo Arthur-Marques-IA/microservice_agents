@@ -29,6 +29,7 @@ kuro --json agents get suporte --editable > suporte.json   # só os campos edit�
 kuro --json agents apply -f suporte.json                  # cria ou atualiza (também aceita -f - para stdin)
 kuro --json agents set suporte num_history_runs=5 tools='["calculator"]'   # altera só esses campos
 kuro --json agents versions suporte
+kuro --json agents rollback suporte 3 --yes                # reaplica as instructions da v3 (vira uma versão nova)
 kuro --json agents delete suporte --yes
 
 # Testar um agente (a sessão fica salva por agente, então mensagens seguidas continuam a conversa)
@@ -62,12 +63,24 @@ kuro --json agents feedback suporte --show                    # nota atual (mark
 # Tools (sem montar agente)
 kuro --json tools list
 kuro --json tools get calculator                # builtins listam as funções disponíveis
+kuro --json tools get cep --editable > cep.json # só os campos editáveis
+kuro --json tools apply -f cep.json             # cria (precisa de tool_name e kind) ou atualiza
+kuro --json tools set cep enabled=false         # altera só esses campos (kind não muda)
+kuro --json tools delete cep --yes              # trava se algum agente usa a tool
 kuro --json tools invoke calculator --fn add -a a=2 -a b=3
 
 # Execuções (Langfuse; um run leva alguns segundos para aparecer)
 kuro --json runs list --agent suporte -n 5
 kuro --json runs show <run_id>                  # mensagem, resposta, spans (LLM/tools), scores
 kuro --json runs score <run_id> 1 --comment "resposta correta"
+kuro --json runs stats --agent suporte          # total, erros, tokens, custo e série diária
+kuro --json runs tail --agent suporte           # acompanha ao vivo; um objeto JSON por execução, Ctrl+C sai
+
+# Conversas guardadas (Postgres — funciona mesmo com o Langfuse desligado)
+# O user_id é o mesmo do chat: `cli` por padrão, ou KURO_USER_ID.
+kuro --json sessions list --agent suporte
+kuro --json sessions show <session_id>          # transcrição: cada mensagem, a resposta e os tokens
+kuro --json sessions delete <session_id> --yes  # apaga a conversa e as execuções dela (não tem volta)
 
 # Integração: como outro módulo chama este agente (endpoint, cURL, dependências obrigatórias)
 kuro --json agents integrate suporte

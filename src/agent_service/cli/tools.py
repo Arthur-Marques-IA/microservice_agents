@@ -10,6 +10,7 @@ from rich.table import Table
 from agent_service.cli.agents import BACK
 from agent_service.cli.common import (
     EXIT_FAILED,
+    EXIT_USAGE,
     State,
     call,
     console,
@@ -18,10 +19,14 @@ from agent_service.cli.common import (
     parse_json_object,
     parse_pairs,
     print_json,
+    read_json_file,
     state,
 )
 
-app = typer.Typer(help="Tools: listar, ver, catálogo de builtins, invocar.")
+app = typer.Typer(help="Tools: listar, ver, criar/editar (apply), invocar, remover.")
+
+# `kind` fica de fora: mudar o tipo de uma tool existente é criar outra tool.
+EDITABLE_FIELDS = ("label", "description", "config", "enabled")
 
 
 def _render_list(tools: list[dict[str, Any]]) -> None:
@@ -72,10 +77,93 @@ def list_tools(ctx: typer.Context) -> None:
 
 
 @app.command("get")
-def get_tool(ctx: typer.Context, tool_name: str) -> None:
+def get_tool(
+    ctx: typer.Context,
+    tool_name: str,
+    as_editable: bool = typer.Option(
+        False, "--editable", help="Só os campos editáveis, em JSON — pronto para `apply -f`."
+    ),
+) -> None:
     """Mostra uma tool (segredos mascarados) e, para builtins, as funções expostas."""
     st = state(ctx)
-    emit(st, call(st, st.client.get_tool, tool_name), _render_tool)
+    detail = call(st, st.client.get_tool, tool_name)
+    if as_editable:
+        # Os segredos saem mascarados; devolvê-los assim no `apply` preserva o
+        # valor guardado (a API restaura quando o campo volta como a máscara).
+        emit(st, {"tool_name": detail["tool_name"], "kind": detail["kind"], **{k: detail.get(k) for k in EDITABLE_FIELDS}})
+    else:
+        emit(st, detail, _render_tool)
+
+
+@app.command("apply")
+def apply_tool(
+    ctx: typer.Context,
+    file: str = typer.Option(..., "--file", "-f", help="JSON da tool (`-` = stdin). Precisa de tool_name e kind."),
+) -> None:
+    """Cria a tool se não existir, senão atualiza só os campos do arquivo."""
+    st = state(ctx)
+    body = read_json_file(st, file)
+    tool_name = body.get("tool_name")
+    if not isinstance(tool_name, str) or not tool_name:
+        fail(st, "o arquivo precisa do campo tool_name", EXIT_USAGE)
+
+    existing = {t["tool_name"]: t for t in call(st, st.client.list_tools)}
+    if tool_name in existing:
+        # `kind` pode vir no arquivo (é o que `get --editable` devolve), mas mudá-lo
+        # seria outra tool: ignorar em silêncio esconderia a edição de quem operou.
+        kind = body.get("kind")
+        if kind is not None and kind != existing[tool_name]["kind"]:
+            fail(
+                st,
+                f"{tool_name} é kind={existing[tool_name]['kind']!r} e o kind de uma tool não muda — "
+                f"crie outra tool para kind={kind!r}",
+                EXIT_USAGE,
+            )
+        changes = {k: v for k, v in body.items() if k not in ("tool_name", "kind")}
+        unknown = sorted(set(changes) - set(EDITABLE_FIELDS))
+        if unknown:
+            fail(st, f"campos não editáveis: {', '.join(unknown)} (use: {', '.join(EDITABLE_FIELDS)})", EXIT_USAGE)
+        result, action = call(st, st.client.update_tool, tool_name, changes), "atualizada"
+    else:
+        if not body.get("kind"):
+            fail(st, "tool nova precisa do campo kind (builtin, api ou python)", EXIT_USAGE)
+        result, action = call(st, st.client.create_tool, body), "criada"
+    emit(st, result, lambda t: console.print(f"[green]✓[/] tool {t['tool_name']} {action} ({t['kind']})"))
+
+
+@app.command("set")
+def set_fields(
+    ctx: typer.Context,
+    tool_name: str,
+    pairs: list[str] = typer.Argument(
+        ..., help='campo=valor (valor em JSON quando possível). Ex.: enabled=false label="Busca"'
+    ),
+) -> None:
+    """Altera só os campos informados de uma tool."""
+    st = state(ctx)
+    changes = parse_pairs(st, pairs, "campo")
+    unknown = sorted(set(changes) - set(EDITABLE_FIELDS))
+    if unknown:
+        fail(st, f"campos não editáveis: {', '.join(unknown)} (use: {', '.join(EDITABLE_FIELDS)})", EXIT_USAGE)
+    result = call(st, st.client.update_tool, tool_name, changes)
+    emit(st, result, lambda t: console.print(f"[green]✓[/] tool {t['tool_name']} atualizada"))
+
+
+@app.command("delete")
+def delete_tool(
+    ctx: typer.Context,
+    tool_name: str,
+    yes: bool = typer.Option(False, "--yes", "-y", help="Não pede confirmação (obrigatório sem TTY)."),
+) -> None:
+    """Remove uma tool (tools seed, ou em uso por algum agente, não saem)."""
+    st = state(ctx)
+    if not yes:
+        if not st.interactive:
+            fail(st, "confirme com --yes para remover sem TTY", EXIT_USAGE)
+        if not typer.confirm(f"Remover a tool {tool_name!r}?"):
+            raise typer.Exit()
+    call(st, st.client.delete_tool, tool_name)
+    emit(st, {"deleted": tool_name}, lambda _: console.print(f"[green]✓[/] tool {tool_name} removida"))
 
 
 @app.command("catalog")

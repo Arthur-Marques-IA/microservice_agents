@@ -119,6 +119,16 @@ class Client:
     def tool_catalog(self) -> list[dict[str, Any]]:
         return self._request("GET", "/tools/catalog")
 
+    def create_tool(self, body: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/tools", json=body)
+
+    def update_tool(self, tool_name: str, changes: dict[str, Any]) -> dict[str, Any]:
+        """PUT parcial: campo ausente (ou `null`) fica como está. `kind` não muda."""
+        return self._request("PUT", f"/tools/{tool_name}", json=changes)
+
+    def delete_tool(self, tool_name: str) -> None:
+        self._request("DELETE", f"/tools/{tool_name}")
+
     def invoke_tool(self, tool_name: str, arguments: dict[str, Any], function_name: str | None) -> dict[str, Any]:
         return self._request(
             "POST", f"/tools/{tool_name}/invoke", json={"arguments": arguments, "function_name": function_name}
@@ -170,8 +180,29 @@ class Client:
     def run_trace(self, run_id: str) -> dict[str, Any]:
         return self._request("GET", f"/observability/runs/{run_id}/trace")
 
+    def run_stats(self, **params: Any) -> dict[str, Any]:
+        return self._request("GET", "/observability/stats", params={k: v for k, v in params.items() if v is not None})
+
     def score(self, body: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/observability/scores", json=body)
+
+    # -- sessões (rotas do AgentOS, no Postgres) -----------------------------
+    #
+    # Não confundir com `/observability/sessions`: aquilo é um agrupamento dos
+    # traces do Langfuse; isto é a conversa em si, e funciona com o Langfuse
+    # desligado — é o que `kuro sessions` precisa.
+
+    def list_sessions(self, **params: Any) -> dict[str, Any]:
+        """`{data: [...], meta: {...}}` — sempre `type=agent`, o único que o serviço cria."""
+        query = {"type": "agent", **{k: v for k, v in params.items() if v is not None}}
+        return self._request("GET", "/sessions", params=query)
+
+    def session_runs(self, session_id: str, user_id: str | None = None) -> list[dict[str, Any]]:
+        params = {"type": "agent", **({"user_id": user_id} if user_id else {})}
+        return self._request("GET", f"/sessions/{session_id}/runs", params=params)
+
+    def delete_session(self, session_id: str, user_id: str | None = None) -> None:
+        self._request("DELETE", f"/sessions/{session_id}", params={"user_id": user_id} if user_id else {})
 
 
 def _detail(response: httpx.Response) -> Any:

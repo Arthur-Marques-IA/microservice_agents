@@ -1,21 +1,23 @@
 """`kuro runs`: execuções registradas no Langfuse (via /observability) e feedback."""
 
+import time
 from typing import Any
 
 import typer
 from rich.table import Table
 from rich.tree import Tree
 
-from agent_service.cli.common import call, console, emit, state
+from agent_service.cli.client import ApiError, ServiceUnavailable
+from agent_service.cli.common import call, console, emit, fail_from, print_json, state
 
-app = typer.Typer(help="Execuções: listar, ver trace, registrar score.")
+app = typer.Typer(help="Execuções: listar, acompanhar ao vivo, ver trace, resumir, registrar score.")
 
 
-def _render_runs(page: dict[str, Any]) -> None:
-    table = Table(show_edge=False, header_style="bold")
+def _runs_table(rows: list[dict[str, Any]], *, header: bool = True) -> Table:
+    table = Table(show_edge=False, header_style="bold", show_header=header)
     for column in ("início", "run_id", "agente", "status", "tokens", "latência"):
         table.add_column(column, no_wrap=True)
-    for r in page["items"]:
+    for r in rows:
         status = "[green]ok[/]" if r["status"] == "success" else f"[red]{r['status']}[/]"
         latency = f"{r['latency_ms'] / 1000:.1f}s" if (r.get("latency_ms") or 0) > 0 else "—"
         table.add_row(
@@ -26,7 +28,11 @@ def _render_runs(page: dict[str, Any]) -> None:
             str(r["total_tokens"]),
             latency,
         )
-    console.print(table)
+    return table
+
+
+def _render_runs(page: dict[str, Any]) -> None:
+    console.print(_runs_table(page["items"]))
     if page.get("next_cursor"):
         console.print("[dim]há mais resultados — o cursor da próxima página vem em `--json` (next_cursor)[/]")
 
@@ -80,6 +86,90 @@ def list_runs(
         cursor=cursor,
     )
     emit(st, page, _render_runs)
+
+
+@app.command("tail")
+def tail_runs(
+    ctx: typer.Context,
+    agent: str | None = typer.Option(None, "--agent", "-a", help="Filtra por agent_type."),
+    status: str | None = typer.Option(None, "--status", help="success | error"),
+    interval: float = typer.Option(5.0, "--interval", min=1.0, help="Segundos entre as consultas."),
+    limit: int = typer.Option(10, "--limit", "-n", min=1, max=100, help="Quantas execuções mostrar de saída."),
+) -> None:
+    """Acompanha as execuções ao vivo, como um `tail -f`. Ctrl+C para sair.
+
+    É uma consulta repetida ao Langfuse, não um stream: um run aparece alguns
+    segundos depois de terminar. Com `--json`, sai um objeto por execução."""
+    st = state(ctx)
+    seen: set[str] = set()
+    first = True
+    try:
+        while True:
+            try:
+                page = st.client.list_runs(agent_type=agent, status=status, limit=limit if first else 100)
+            except (ServiceUnavailable, ApiError) as exc:
+                fail_from(st, exc)
+            novos = [r for r in reversed(page["items"]) if r["run_id"] not in seen]
+            seen.update(r["run_id"] for r in page["items"])
+            if novos:
+                if st.json_mode:
+                    for run in novos:
+                        print_json(run)
+                else:
+                    console.print(_runs_table(novos, header=first))
+            first = False
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        if not st.json_mode:
+            console.print()
+
+
+@app.command("stats")
+def stats(
+    ctx: typer.Context,
+    agent: str | None = typer.Option(None, "--agent", "-a", help="Filtra por agent_type."),
+    prompt_version: int | None = typer.Option(None, "--prompt-version", min=1, help="Só uma versão do prompt."),
+    status: str | None = typer.Option(None, "--status", help="success | error"),
+    user_id: str | None = typer.Option(None, "--user-id"),
+    session_id: str | None = typer.Option(None, "--session-id"),
+) -> None:
+    """Resumo das execuções: total, erros, tokens, custo e latência, com série diária."""
+    st = state(ctx)
+    result = call(
+        st,
+        st.client.run_stats,
+        agent_type=agent,
+        prompt_version=prompt_version,
+        status=status,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    emit(st, result, _render_stats)
+
+
+def _render_stats(s: dict[str, Any]) -> None:
+    custo = f"US$ {s['total_cost_usd']:.4f}" if s.get("total_cost_usd") else "—"
+    latencia = f"{s['avg_latency_ms'] / 1000:.1f}s" if s.get("avg_latency_ms") else "—"
+    por_status = ", ".join(f"{k}={v}" for k, v in sorted((s.get("status_counts") or {}).items())) or "—"
+    console.print(
+        f"[bold]{s['total_runs']}[/] execuções · {s['total_tokens']} tokens · {custo} · latência média {latencia}\n"
+        f"[dim]por status: {por_status}[/]"
+    )
+    if s.get("buckets"):
+        table = Table(show_edge=False, header_style="bold")
+        for column in ("dia", "execuções", "erros", "tokens", "custo"):
+            table.add_column(column, no_wrap=True)
+        for b in s["buckets"]:
+            table.add_row(
+                b["date"],
+                str(b["runs"]),
+                f"[red]{b['errors']}[/]" if b["errors"] else "0",
+                str(b["total_tokens"]),
+                f"{b['cost_usd']:.4f}" if b.get("cost_usd") else "—",
+            )
+        console.print(table)
+    # O agregado não varre o histórico inteiro; dizer isso evita conclusão errada.
+    console.print(f"[dim]agregado sobre as {s['scanned']} execuções mais recentes[/]")
 
 
 @app.command("show")

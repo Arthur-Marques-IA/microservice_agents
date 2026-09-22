@@ -14,7 +14,7 @@ import click
 import typer
 from rich.table import Table
 
-from agent_service.cli import agents, collections, runs, tools
+from agent_service.cli import agents, collections, runs, sessions, tools
 from agent_service.cli.analyze import analyze
 from agent_service.cli.chat import chat
 from agent_service.cli.client import ApiError, Client, ServiceUnavailable
@@ -47,6 +47,7 @@ app.add_typer(agents.app, name="agents")
 app.add_typer(tools.app, name="tools")
 app.add_typer(runs.app, name="runs")
 app.add_typer(collections.app, name="collections")
+app.add_typer(sessions.app, name="sessions")
 app.command("chat")(chat)
 app.command("analyze")(analyze)
 
@@ -298,7 +299,8 @@ _SHELL_HELP = """[bold]Comandos[/] (a `/` é opcional; qualquer comando da CLI f
   /agents integrate <agente>   como chamar o agente de outro módulo
   /tools               escolher uma tool → ver e invocar
   /collections         bases de conhecimento (RAG) dos agentes
-  /runs                execuções recentes   ·  /runs show <run_id>
+  /runs                execuções recentes   ·  /runs show <run_id>  ·  /runs tail
+  /sessions            conversas guardadas  ·  /sessions show <session_id>
   /providers           provedores de modelo ·  /credentials  chaves cadastradas
   /health              diagnóstico
   /help                esta ajuda           ·  <comando> --help  detalhes

@@ -307,12 +307,13 @@ kuro> /agents
     Ver definição
     Editar no editor
     Histórico do prompt
+    Restaurar uma versão do prompt
     Remover
 ```
 
 | No shell | O que faz |
 |---|---|
-| `/agents` | escolhe um agente e abre as ações: testar, ver, editar, versões, remover |
+| `/agents` | escolhe um agente e abre as ações: testar, ver, editar, versões, restaurar, remover |
 | `/chat <agente>` | conversa direto com o agente |
 | `/analyze <agente>` | analisa um documento com um agente `analysis` |
 | `/agents feedback <agente>` | ensina o agente a partir da última conversa |
@@ -320,6 +321,8 @@ kuro> /agents
 | `/tools` | escolhe uma tool para ver e invocar |
 | `/collections` | bases de conhecimento |
 | `/runs` · `/runs show <run_id>` | execuções recentes e o detalhe de uma |
+| `/runs tail` · `/runs stats` | execuções ao vivo e o resumo com custo |
+| `/sessions` · `/sessions show <id>` | conversas guardadas e a transcrição de uma |
 | `/providers` · `/credentials` | provedores e chaves de modelo |
 | `/health` | diagnóstico do serviço |
 | `/help` · `/sair` | ajuda e saída |
@@ -333,6 +336,7 @@ uv run kuro agents apply -f suporte.json        # cria ou atualiza a partir de u
 uv run kuro agents edit suporte                 # abre a definição no seu $EDITOR e salva o que mudar
 uv run kuro agents set suporte num_history_runs=5 tools='["cep"]'   # muda só esses campos
 uv run kuro agents versions suporte             # histórico do prompt
+uv run kuro agents rollback suporte 3           # volta as instructions para as da v3
 ```
 
 **Testar**
@@ -360,13 +364,22 @@ uv run kuro agents feedback suporte --show      # a nota que o agente segue agor
 uv run kuro runs list --agent suporte           # execuções com latência, tokens, custo e status
 uv run kuro runs show <run_id>                  # chamadas ao modelo, tools e avaliações
 uv run kuro runs score <run_id> 1 --comment "resposta correta"
+uv run kuro runs tail --agent suporte           # acompanha as execuções ao vivo (Ctrl+C sai)
+uv run kuro runs stats --agent suporte          # total, erros, tokens, custo e série diária
+uv run kuro sessions list                       # conversas guardadas deste user_id
+uv run kuro sessions show <session_id>          # a transcrição, mensagem a mensagem
 ```
+
+`runs` lê os traces do Langfuse; `sessions` lê a conversa no Postgres, então
+funciona mesmo com o tracing desligado.
 
 **Tools, conhecimento e modelos**
 
 ```bash
 uv run kuro tools                               # escolhe uma tool e invoca
 uv run kuro tools invoke calculator --fn add -a a=2 -a b=3
+uv run kuro tools apply -f cep.json             # cria ou atualiza uma tool
+uv run kuro tools set cep enabled=false         # muda só esses campos
 uv run kuro collections search manuais "prazo de garantia"
 uv run kuro credentials test <credential_id>    # valida a chave sem gastar tokens
 uv run kuro health                              # serviço, Langfuse e provedores

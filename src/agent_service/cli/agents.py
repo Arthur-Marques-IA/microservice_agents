@@ -26,7 +26,7 @@ from agent_service.cli.common import (
     state,
 )
 
-app = typer.Typer(help="Agentes: listar, ver, criar/editar (apply), testar.", no_args_is_help=False)
+app = typer.Typer(help="Agentes: listar, ver, criar/editar (apply), testar, restaurar versão.", no_args_is_help=False)
 
 BACK = "__voltar__"  # value=None faz o questionary devolver o título da opção
 
@@ -215,6 +215,47 @@ def versions(ctx: typer.Context, agent_type: str) -> None:
     emit(st, call(st, st.client.agent_versions, agent_type), _render_versions)
 
 
+@app.command("rollback")
+def rollback(
+    ctx: typer.Context,
+    agent_type: str,
+    version: int = typer.Argument(..., min=1, help="Versão do prompt a restaurar (veja `agents versions`)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Não pede confirmação (obrigatório sem TTY)."),
+) -> None:
+    """Restaura as instructions de uma versão anterior do prompt.
+
+    Não desfaz o histórico: reaplicar a v3 grava uma versão nova com o texto
+    da v3, então dá para voltar atrás do rollback do mesmo jeito."""
+    st = state(ctx)
+    versions_list = call(st, st.client.agent_versions, agent_type)
+    alvo = next((v for v in versions_list if v["version"] == version), None)
+    if alvo is None:
+        disponiveis = ", ".join(f"v{v['version']}" for v in versions_list) or "nenhuma"
+        fail(st, f"{agent_type} não tem a versão v{version} (disponíveis: {disponiveis})", EXIT_USAGE)
+
+    atual = call(st, st.client.get_agent, agent_type)
+    if atual["instructions"] == alvo["instructions"]:
+        emit(
+            st,
+            {"agent_type": agent_type, "unchanged": True, "prompt_version": atual["prompt_version"]},
+            lambda _: console.print(f"[dim]v{version} é igual ao prompt atual (v{atual['prompt_version']}) — nada a fazer[/]"),
+        )
+        return
+
+    if not yes:
+        if not st.interactive:
+            fail(st, "confirme com --yes para restaurar sem TTY", EXIT_USAGE)
+        _render_versions([alvo])
+        if not typer.confirm(f"Restaurar as instructions da v{version} de {agent_type}?"):
+            raise typer.Exit()
+    updated = call(st, st.client.update_agent, agent_type, {"instructions": alvo["instructions"]})
+    emit(
+        st,
+        updated,
+        lambda a: console.print(f"[green]✓[/] {agent_type} voltou ao texto da v{version} (agora prompt v{a['prompt_version']})"),
+    )
+
+
 @app.command("test")
 def test_agent(
     ctx: typer.Context,
@@ -330,6 +371,7 @@ def _agent_menu(st: State, agent_type: str) -> None:
             questionary.Choice("Ver definição", value="view"),
             questionary.Choice("Editar no editor", value="edit"),
             questionary.Choice("Histórico do prompt", value="versions"),
+            questionary.Choice("Restaurar uma versão do prompt", value="rollback"),
         ]
         if not definition["is_seed"]:
             actions.append(questionary.Choice("Remover", value="delete"))
@@ -347,12 +389,37 @@ def _agent_menu(st: State, agent_type: str) -> None:
                 _edit(st, definition)
             elif action == "versions":
                 _render_versions(call(st, st.client.agent_versions, agent_type))
+            elif action == "rollback":
+                _rollback_menu(st, agent_type, definition)
             elif action == "delete" and questionary.confirm(f"Remover {agent_type}?", default=False).ask():
                 call(st, st.client.delete_agent, agent_type)
                 console.print(f"[green]✓[/] {agent_type} removido")
                 return
         except typer.Exit:
             continue  # erro já impresso; segue no menu
+
+
+def _rollback_menu(st: State, agent_type: str, definition: dict[str, Any]) -> None:
+    """Escolhe uma versão antiga do prompt e a reaplica — o `rollback` da UI."""
+    versions_list = call(st, st.client.agent_versions, agent_type)
+    anteriores = [v for v in versions_list if v["instructions"] != definition["instructions"]]
+    if not anteriores:
+        console.print("[dim]não há uma versão diferente da atual para restaurar[/]")
+        return
+    choices = [
+        questionary.Choice(f"v{v['version']}  —  {v['instructions'][0][:60]}", value=v["version"])
+        for v in anteriores
+    ]
+    choices.append(questionary.Choice("← voltar", value=BACK))
+    escolhida = questionary.select("Restaurar qual versão?", choices=choices).ask()
+    if escolhida in (None, BACK):
+        return
+    alvo = next(v for v in anteriores if v["version"] == escolhida)
+    _render_versions([alvo])
+    if not questionary.confirm(f"Restaurar as instructions da v{escolhida}?", default=False).ask():
+        return
+    updated = call(st, st.client.update_agent, agent_type, {"instructions": alvo["instructions"]})
+    console.print(f"[green]✓[/] texto da v{escolhida} restaurado (agora prompt v{updated['prompt_version']})")
 
 
 @app.command("integrate")

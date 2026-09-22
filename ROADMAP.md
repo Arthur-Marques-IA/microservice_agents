@@ -34,8 +34,8 @@
 
 Três superfícies com papéis bem separados: **API** para integrar (contrato estável), **CLI/MCP** para
 operar e corrigir, **UI** opcional para inspecionar. Toda feature nova deveria chegar primeiro na API +
-CLI e só depois na UI. Hoje isso já não vale para tools: dá para criar tool pela API e pela UI, mas não
-pela CLI (ver §6).
+CLI e só depois na UI. A dívida que existia em tools (criar/editar só pela API e pela UI) foi paga;
+o que resta fora da CLI é o upload de arquivo para collection (ver §6).
 
 A palavra que sustenta o produto é **validada**. Você já tem as peças (versões, traces, scores), mas
 falta o ciclo que as une: *mudei o agente → provo que não piorou → publico*. A §5 cuida disso.
@@ -218,12 +218,22 @@ Regras de design:
 
 | Capacidade | API | UI | CLI |
 |---|---|---|---|
-| Criar/editar tools | ✅ | ✅ | ❌ só `list/get/catalog/invoke` → adicionar `tools apply -f` / `set` / `delete` |
-| Sessões (listar, ver transcrição, apagar) | ✅ | ✅ | ❌ → `kuro sessions` |
-| Estatísticas (KPIs, custo por agente) | ✅ | ✅ | ❌ → `kuro runs stats` |
-| Seguir execuções ao vivo | — | — | ❌ → `kuro runs tail -f --agent x` |
-| Restaurar versão | via PUT | ✅ | ❌ → `kuro agents rollback <t> <v>` |
+| Criar/editar tools | ✅ | ✅ | ✅ `tools apply -f` / `set` / `delete` / `get --editable` |
+| Sessões (listar, ver transcrição, apagar) | ✅ | ✅ | ✅ `kuro sessions list/show/delete` |
+| Estatísticas (KPIs, custo por agente) | ✅ | ✅ | ✅ `kuro runs stats` |
+| Seguir execuções ao vivo | — | — | ✅ `kuro runs tail --agent x` (consulta repetida, não um stream) |
+| Restaurar versão | via PUT | ✅ | ✅ `kuro agents rollback <t> <v>` |
 | Upload de arquivo para collection | só na padrão | só na padrão | ❌ → `collections add -f doc.pdf`, liberando qualquer collection |
+
+A paridade fechou, menos o upload de arquivo: esse é o único item que precisa de
+rota nova (multipart + chunking) e esbarra no `/knowledge/content` do AgentOS, que
+hoje só alimenta a collection padrão. Decidir isso é o que falta.
+
+`kuro sessions` usa as rotas de sessão do AgentOS (Postgres), não
+`/observability/sessions`, justamente para continuar funcionando no modo
+só-terminal. Já `runs stats` e `runs tail` leem o Langfuse: sem ele, saem com
+código 1 e a mensagem da API — o que reforça a necessidade do trace store local
+da §4.1.
 
 **Outros pontos:**
 
