@@ -8,6 +8,7 @@ proteger só um deixaria o outro como desvio.
 
 import asyncio
 import socket
+import threading
 
 import httpx
 import pytest
@@ -15,7 +16,7 @@ from fastapi import HTTPException
 
 from agent_service.api.tools_routes import ToolIn, ToolInvokeIn, create_tool, delete_tool, invoke_tool
 from agent_service.config import get_settings
-from agent_service.tools import api_tool, egress
+from agent_service.tools import api_tool, egress, python_tool
 from agent_service.tools.egress import EgressBlockedError, EgressUnresolvedError, check_url, check_url_template
 from agent_service.tools.python_tool import compile_python_tool
 
@@ -85,6 +86,17 @@ def test_allowlist_libera_host_interno(monkeypatch):
         check_url("http://outro.interno/x")  # o resto continua bloqueado
 
 
+def test_a_leitura_do_resolvedor_do_sistema_funciona(resolvedor_real):
+    """O único teste que fala com o resolvedor de verdade.
+
+    Os demais substituem o `getaddrinfo` e provam a classificação dos endereços;
+    este prova que sabemos chamá-lo e ler o que ele devolve. `localhost` resolve
+    para loopback em qualquer máquina, então serve sem depender de rede."""
+    with pytest.raises(EgressBlockedError) as exc:
+        check_url("http://localhost:5432/")
+    assert "loopback" in str(exc.value)
+
+
 # -- na hora de salvar a tool -----------------------------------------------------
 
 
@@ -152,7 +164,36 @@ def test_parametro_de_path_nao_consegue_escolher_um_host_interno(monkeypatch):
 
 def test_o_cliente_das_tools_nao_segue_redirect():
     """Seguir um 302 levaria a um destino que ninguém checou."""
-    assert api_tool.get_client().follow_redirects is False
+
+    async def pegar():
+        return api_tool.get_client()
+
+    assert asyncio.run(pegar()).follow_redirects is False
+
+
+def test_cada_event_loop_tem_o_seu_cliente():
+    """O pool do httpx guarda conexões presas ao loop que as criou: um cliente
+    global estouraria ao ser reusado noutro loop."""
+
+    async def pegar():
+        return api_tool.get_client()
+
+    primeiro, segundo = asyncio.run(pegar()), asyncio.run(pegar())
+    assert primeiro is not segundo
+
+
+def test_resolucao_de_dns_nao_bloqueia_o_event_loop(monkeypatch):
+    """`acheck_url` resolve pelo resolvedor do loop, que joga o `getaddrinfo`
+    numa thread — senão o caminho assíncrono voltaria a travar no DNS lento."""
+    resolvendo_em = {}
+
+    def devagar(host, port, *args, **kwargs):
+        resolvendo_em["thread"] = threading.current_thread()
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr(egress.socket, "getaddrinfo", devagar)
+    asyncio.run(egress.acheck_url("https://exemplo.com/x"))
+    assert resolvendo_em["thread"] is not threading.main_thread()
 
 
 # -- o mesmo vale para as tools Python --------------------------------------------
@@ -197,7 +238,7 @@ def test_tool_python_alcanca_a_rede_publica(monkeypatch):
     resolve_para(monkeypatch, "93.184.216.34")
     transporte = httpx.MockTransport(lambda request: httpx.Response(200, text="conteudo publico"))
     monkeypatch.setattr(
-        __import__("agent_service.tools.python_tool", fromlist=["x"]),
+        python_tool,
         "_guarded_httpx_client",
         httpx.Client(transport=transporte, event_hooks={"request": [egress.guard_request]}),
     )

@@ -33,13 +33,15 @@ checagem é feita com a URL já montada porque um parâmetro `location="path"`
 pode compor o host (`https://{host}/x`), e aí o destino seria escolha do modelo.
 """
 
+import asyncio
+import weakref
 from typing import Any, Literal
 
 import httpx
 from agno.tools.function import Function
 
 from agent_service.tools.context import get_dependencies
-from agent_service.tools.egress import EgressBlockedError, check_url, check_url_template
+from agent_service.tools.egress import EgressBlockedError, acheck_url, check_url_template
 
 Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 ParamLocation = Literal["query", "path", "header", "body"]
@@ -62,20 +64,32 @@ _DEFAULT_TIMEOUT_SECONDS = 15.0
 _MAX_TIMEOUT_SECONDS = 60.0
 
 _client: httpx.AsyncClient | None = None
+"""Substituto explícito — os testes põem aqui um cliente com `MockTransport`."""
+
+_clients_por_loop: "weakref.WeakKeyDictionary[Any, httpx.AsyncClient]" = weakref.WeakKeyDictionary()
 
 
 def get_client() -> httpx.AsyncClient:
-    """Cliente único das tools de API — o pool de conexões vive aqui.
+    """Cliente das tools de API — o pool de conexões vive aqui.
 
-    Criado na primeira chamada, não no import: o `AsyncClient` se prende ao
-    event loop em uso, e no import ainda não há loop nenhum. `follow_redirects`
-    fica desligado (o padrão do httpx) de propósito: seguir um 302 levaria a
-    um destino que ninguém checou, e o modelo lida bem com um 3xx na resposta.
+    Um por event loop, não um global: o pool do `httpx` guarda conexões e locks
+    presos ao loop que as criou, e reusar num loop diferente (um worker que
+    reinicia o loop, um teste com dois `asyncio.run`) estoura em cima de
+    conexões mortas. Em produção há um loop só, então na prática é um cliente
+    só, com a conexão e o handshake TLS reaproveitados entre chamadas.
+
+    `follow_redirects` fica desligado (o padrão do httpx) de propósito: seguir
+    um 302 levaria a um destino que ninguém checou, e o modelo lida bem com um
+    3xx na resposta.
     """
-    global _client
-    if _client is None:
-        _client = httpx.AsyncClient(follow_redirects=False)
-    return _client
+    if _client is not None:
+        return _client
+    loop = asyncio.get_running_loop()
+    client = _clients_por_loop.get(loop)
+    if client is None:
+        client = httpx.AsyncClient(follow_redirects=False)
+        _clients_por_loop[loop] = client
+    return client
 
 
 class ApiToolConfigError(ValueError):
@@ -287,7 +301,7 @@ async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any]) -> 
 
     # Com a URL já montada: um parâmetro de path pode ter composto o host.
     try:
-        check_url(url)
+        await acheck_url(url)
     except EgressBlockedError as exc:
         return f"Chamada recusada: {exc}"
 

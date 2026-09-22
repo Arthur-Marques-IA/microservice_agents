@@ -29,6 +29,18 @@ import pytest  # noqa: E402
 from agent_service.tools import egress  # noqa: E402
 
 _IP_PUBLICO = "93.184.216.34"
+DNS_DO_SISTEMA = socket.getaddrinfo
+"""Guardado antes de qualquer teste trocar o resolvedor — ver `resolvedor_real`."""
+
+
+@pytest.fixture
+def resolvedor_real(monkeypatch):
+    """Desfaz o `dns_deterministico` para o teste que precisa do resolvedor do SO.
+
+    Sem isto nenhum teste exercitaria `getaddrinfo` de verdade, e um erro nos
+    argumentos ou no índice da tupla que ele devolve passaria batido em toda a
+    suíte para só aparecer na primeira chamada real."""
+    monkeypatch.setattr(egress.socket, "getaddrinfo", DNS_DO_SISTEMA)
 
 
 @pytest.fixture(autouse=True)

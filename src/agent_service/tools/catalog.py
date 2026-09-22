@@ -50,7 +50,14 @@ class BuiltinToolSpec:
 
 def _tools_base_dir(tool_name: str) -> Path:
     """Diretório isolado por tool para toolkits que leem/escrevem arquivo —
-    nunca o código-fonte do serviço nem um caminho escolhido pelo usuário."""
+    nunca o código-fonte do serviço nem um caminho escolhido pelo usuário.
+
+    O isolamento é contra travessia de caminho, **não** entre conversas: a chave
+    é o nome da tool, então duas sessões que usam a mesma tool compartilham o
+    diretório e enxergam os arquivos uma da outra. Separar por sessão exigiria
+    construir a toolkit por run, e hoje ela é cacheada por tool
+    (`tools/registry.py`). Até lá, isso precisa estar na cara de quem liga a
+    tool — está na `description` das entradas que usam este diretório."""
     base = Path(tempfile.gettempdir()) / "agent-service-tools" / tool_name
     base.mkdir(parents=True, exist_ok=True)
     return base
@@ -192,7 +199,9 @@ BUILTIN_CATALOG: dict[str, BuiltinToolSpec] = {
             builtin_id="files",
             label="Arquivos (sandbox)",
             description="Lê, lista e grava arquivos num diretório isolado por tool no próprio container "
-            "(nunca o código do serviço nem um caminho escolhido pelo usuário).",
+            "(nunca o código do serviço nem um caminho escolhido pelo usuário). ATENÇÃO: o diretório é "
+            "por tool, não por conversa — o que uma conversa grava fica visível para qualquer outra "
+            "que use esta tool.",
             params=[ParamSpec("enable_delete_file", "boolean", "Permitir excluir arquivos", default=False)],
             factory=_files,
         ),
@@ -223,8 +232,11 @@ BUILTIN_CATALOG: dict[str, BuiltinToolSpec] = {
         BuiltinToolSpec(
             builtin_id="file_generation",
             label="Gerar arquivos (JSON, CSV, TXT, HTML)",
-            description="Deixa o agente montar um arquivo com o resultado do trabalho, no diretório "
-            "isolado da tool. PDF e DOCX ficam de fora: exigem pacotes que o serviço não instala.",
+            description="Deixa o agente montar um arquivo com o resultado do trabalho. ATENÇÃO: o "
+            "diretório é por tool, não por conversa — o que uma conversa gera fica visível para "
+            "qualquer outra que use esta tool (ou a tool 'files' com o mesmo nome). Não use para "
+            "conteúdo de um cliente específico. PDF e DOCX ficam de fora: exigem pacotes que o "
+            "serviço não instala.",
             params=[
                 ParamSpec(
                     "enable_code_generation", "boolean", "Permitir gerar arquivos de código", default=False

@@ -25,6 +25,7 @@ isso seja parte do modelo de ameaça, a resposta certa é uma política de saíd
 no próprio ambiente (egress firewall), não aqui.
 """
 
+import asyncio
 import ipaddress
 import socket
 from urllib.parse import urlsplit
@@ -76,24 +77,20 @@ def _blocked_reason(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str | 
     return None
 
 
-def _addresses(host: str, port: int) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+def _literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """O host já é um IP? Então não há o que resolver."""
     try:
-        return [ipaddress.ip_address(host)]
+        return ipaddress.ip_address(host)
     except ValueError:
-        pass
-    try:
-        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror as exc:
-        raise EgressUnresolvedError(f"não consegui resolver o host {host!r}: {exc}") from exc
+        return None
+
+
+def _from_getaddrinfo(host: str, infos: list) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
     return [ipaddress.ip_address(info[4][0]) for info in infos]
 
 
-def check_url(url: str) -> None:
-    """Recusa o destino se ele não for público. Levanta `EgressBlockedError`.
-
-    Todos os endereços do host precisam ser públicos: um DNS round-robin com um
-    registro interno no meio seria um jeito de passar batido.
-    """
+def _target(url: str) -> tuple[str, int] | None:
+    """Valida o que dá para validar sem DNS. `None` = destino liberado, nada a checar."""
     parts = urlsplit(url)
     scheme = (parts.scheme or "").lower()
     if scheme not in ("http", "https"):
@@ -103,16 +100,62 @@ def check_url(url: str) -> None:
     if not host:
         raise EgressBlockedError(f"url sem host: {url!r}")
     if host.lower() in _allowlist():
-        return
+        return None
+    return host, parts.port or (443 if scheme == "https" else 80)
 
-    port = parts.port or (443 if scheme == "https" else 80)
-    for ip in _addresses(host, port):
+
+def _verify(host: str, addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address]) -> None:
+    """Todos os endereços do host precisam ser públicos: um DNS round-robin com um
+    registro interno no meio seria um jeito de passar batido."""
+    for ip in addresses:
         reason = _blocked_reason(ip)
         if reason is not None:
             raise EgressBlockedError(
                 f"destino bloqueado: {host} resolve para {ip} ({reason}). Uma tool só alcança "
                 f"endereços públicos — libere o host em TOOL_EGRESS_ALLOWLIST se for intencional."
             )
+
+
+def check_url(url: str) -> None:
+    """Recusa o destino se ele não for público. Levanta `EgressBlockedError`.
+
+    Resolve o DNS de forma bloqueante — use `acheck_url` de dentro de código
+    assíncrono."""
+    target = _target(url)
+    if target is None:
+        return
+    host, port = target
+    literal = _literal(host)
+    if literal is not None:
+        _verify(host, [literal])
+        return
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise EgressUnresolvedError(f"não consegui resolver o host {host!r}: {exc}") from exc
+    _verify(host, _from_getaddrinfo(host, infos))
+
+
+async def acheck_url(url: str) -> None:
+    """Igual ao `check_url`, resolvendo pelo resolvedor do event loop.
+
+    `socket.getaddrinfo` bloqueia — poucos milissegundos no caminho feliz, mas
+    segundos com um resolvedor lento ou um host inalcançável, que é justamente o
+    caso adversarial. Fazer isso direto no loop reintroduziria, em menor escala,
+    o travamento que mover a chamada HTTP para `async` foi corrigir."""
+    target = _target(url)
+    if target is None:
+        return
+    host, port = target
+    literal = _literal(host)
+    if literal is not None:
+        _verify(host, [literal])
+        return
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise EgressUnresolvedError(f"não consegui resolver o host {host!r}: {exc}") from exc
+    _verify(host, _from_getaddrinfo(host, infos))
 
 
 def check_url_template(url: str) -> None:
