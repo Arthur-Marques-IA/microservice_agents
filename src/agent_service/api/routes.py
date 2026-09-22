@@ -24,6 +24,7 @@ from agno.run.agent import RunEvent
 from agent_service.agents.attachments import AttachmentError, AttachmentIn, build_media
 from agent_service.agents.dependency_fields import DependencyValidationError, validate_dependencies
 from agent_service.agents.registry import UnknownAgentTypeError, get_agent_with_definition, list_agent_types
+from agent_service.config import get_settings
 from agent_service.observability.tracing import RUN_FAILED, RunContext, get_langfuse, traced_run_events
 from agent_service.tools.registry import ToolBuildError, UnknownToolError
 
@@ -107,8 +108,22 @@ def agent_types() -> dict[str, list[str]]:
     return {"agent_types": list_agent_types()}
 
 
+def _check_input_size(text: str, field: str) -> None:
+    """Texto de entrada tem teto. Sem ele, o documento vai inteiro para o modelo e
+    a falha aparece como um erro do provedor, sem dizer o que foi grande demais.
+    O limite é em caracteres, não em tokens — é o que dá para medir aqui."""
+    limit = get_settings().max_input_chars
+    if len(text) > limit:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field} tem {len(text)} caracteres e o limite é {limit} "
+            f"(MAX_INPUT_CHARS). Resuma o texto, ou mande o conteúdo como anexo.",
+        )
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
+    _check_input_size(request.message, "message")
     agent, run = _resolve(request, "chat")
 
     chunks: list[str] = []
@@ -152,6 +167,7 @@ class AnalyzeResponse(BaseModel):
 async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     """One-shot: sem sessão/histórico — devolve o `document` analisado como
     objeto estruturado (`response_schema` do agente), não texto."""
+    _check_input_size(request.document, "document")
     try:
         agent, definition = get_agent_with_definition(request.agent_type)
     except UnknownAgentTypeError as exc:
@@ -195,7 +211,17 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
                 raise HTTPException(status_code=502, detail=event.content or RUN_FAILED)
 
     if not isinstance(final_content, BaseModel):
-        raise HTTPException(status_code=502, detail="O agente não devolveu uma saída estruturada válida.")
+        # Dizer o que veio no lugar: com response_schema aninhado a saída inválida
+        # fica mais comum, e "não devolveu saída válida" sozinho não ajuda a achar
+        # se o modelo respondeu texto, devolveu vazio ou errou um campo.
+        recebido = repr(final_content)
+        if len(recebido) > 500:
+            recebido = recebido[:500] + "… (truncado)"
+        raise HTTPException(
+            status_code=502,
+            detail=f"O agente não devolveu uma saída estruturada válida "
+            f"(veio {type(final_content).__name__}): {recebido}",
+        )
 
     return AnalyzeResponse(
         agent_type=request.agent_type,

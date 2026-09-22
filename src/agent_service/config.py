@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     """Timeout do exportador de spans. O default do SDK (5s) descarta lotes
     silenciosamente quando o Langfuse está ocupado (ex.: logo após subir)."""
 
+    # Texto de entrada de /chat (`message`) e /analyze (`document`)
+    max_input_chars: int = 200_000
+    """Teto do texto enviado numa chamada, em caracteres (~50 mil tokens). Sem
+    isto, um documento grande — o JSON de um histórico de conversa, por exemplo —
+    segue inteiro para o modelo e estoura contexto e custo com um erro obscuro do
+    provedor. Os anexos têm o seu próprio limite (`max_attachment_mb`)."""
+
     # Anexos multimodais em /chat e /analyze (imagem/áudio/vídeo/arquivo)
     max_attachment_mb: int = 20
     """Limite por anexo, checado antes de decodificar o base64 — evita gastar

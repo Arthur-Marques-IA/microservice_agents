@@ -128,11 +128,36 @@ EOF
 uv run kuro analyze extrator-contrato -a contrato.pdf    # → valor: 1200.0, prazo_dias: 30
 ```
 
+O `analyze` é **sobre texto**: `document` é uma string comum, então `-f
+qualquer.json`, `-f doc.txt` ou stdin já servem — o histórico de uma conversa
+em JSON, por exemplo. O `--attach` é o caminho opcional, para mandar um PDF ou
+uma imagem direto ao modelo sem extrair o texto antes.
+
+**A saída pode ser aninhada.** Além dos campos simples (`string`, `integer`,
+`number`, `boolean`), o `response_schema` aceita `object` (com `fields`) e
+`array` (com `items`) — é o que permite extrair uma lista de itens, e não só
+campos soltos:
+
+```json
+{"name": "parcelas", "type": "array",
+ "items": {"type": "object", "fields": [{"name": "numero", "type": "integer", "required": true},
+                                        {"name": "valor",  "type": "number",  "required": true}]}}
+```
+
+`fields` e `items` são obrigatórios nos seus tipos: sem eles o JSON Schema sai
+como `{"type": "object"}` ou `"items": {}`, que os provedores recusam em saída
+estruturada — seria aceito no cadastro e falharia em toda chamada.
+
 Campos de um agente: `agent_type` (slug), `name`, `instructions`, `tools`,
 `model_provider`, `model_id`, `model_credential_id`, `knowledge_collection`,
 `dependency_fields`, `memory_backend`, `num_history_runs`, `kind` e
 `response_schema`. O agente `conversational` é criado automaticamente no
 primeiro boot.
+
+> Num agente `analysis`, `num_history_runs` e `memory_backend` não fazem nada —
+> ele é one-shot, sem sessão, histórico nem memória — e a nota de feedback não
+> se aplica (ela só orienta agentes conversacionais). Mandar qualquer um deles
+> dá 422, em vez de aceitar calado algo que não teria efeito.
 
 #### Versões e melhoria contínua
 
@@ -517,6 +542,7 @@ Tailwind, Docker Compose.
 | `DEFAULT_MODEL_PROVIDER` / `DEFAULT_MODEL_ID` | `google` / `gemini-2.5-flash` | modelo de quem não define um |
 | `DATABASE_URL` / `REDIS_URL` | localhost | sobrescritos dentro do compose |
 | `MAX_ATTACHMENT_MB` | `20` | limite por anexo |
+| `MAX_INPUT_CHARS` | `200000` | teto do texto de entrada (`message` do `/chat`, `document` do `/analyze`) |
 | `CUSTOM_PYTHON_TOOLS_ENABLED` | `false` | liga a execução de tools `python` |
 | `TOOL_EGRESS_ALLOWLIST` | — | hosts internos que as tools podem alcançar (vazio = só endereços públicos) |
 | `MEM0_ENABLED` / `MEM0_API_KEY` | `false` / — | habilita agentes com `memory_backend: "mem0"` |

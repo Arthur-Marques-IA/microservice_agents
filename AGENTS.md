@@ -48,12 +48,25 @@ kuro --json analyze extrator -a contrato.pdf                                # PD
 # recorrentes prefira `analyze` (sem sessão).
 
 # Agentes analistas (one-shot, sem sessão) — kind="analysis"
+# `document` é texto: -f aceita qualquer arquivo de texto (inclusive .json) e stdin também.
+# O response_schema aceita campos simples (string/integer/number/boolean) e compostos:
+# "object" (exige `fields`) e "array" (exige `items`). Sem fields/items o schema sai inválido
+# para o provedor, então isso é recusado com 422 no cadastro.
 kuro --json agents apply -f - <<'EOF'
 {"agent_type": "extrator-contrato", "name": "Extrator de contrato", "instructions": ["Extraia os campos do contrato."],
  "kind": "analysis", "response_schema": [{"name": "valor", "type": "number", "required": true},
-                                          {"name": "prazo_dias", "type": "integer"}]}
+                                          {"name": "cliente", "type": "object",
+                                           "fields": [{"name": "nome", "type": "string", "required": true}]},
+                                          {"name": "parcelas", "type": "array",
+                                           "items": {"type": "object", "fields": [
+                                               {"name": "numero", "type": "integer", "required": true},
+                                               {"name": "valor", "type": "number", "required": true}]}}]}
 EOF
 kuro --json analyze extrator-contrato -f contrato.txt        # ou stdin; devolve {result: {...}}
+cat conversa.json | kuro --json analyze classificador        # texto/JSON por stdin
+# Em kind="analysis": `num_history_runs` e `memory_backend` dão 422 (não fazem nada num
+# agente one-shot) e a nota de feedback não se aplica — ajuste as instructions.
+# Teto do texto de entrada: MAX_INPUT_CHARS (200000 caracteres), no /chat e no /analyze.
 
 # Feedback de conversa vira instrução (agentes conversacionais)
 kuro --json chat suporte -m "meu wifi caiu"

@@ -20,6 +20,12 @@ from agent_service.agents.dependency_fields import (
     validate_field_specs,
 )
 from agent_service.agents.feedback import merge_feedback
+from agent_service.agents.response_model import (
+    RESPONSE_TYPES,
+    ITEM_TYPES,
+    ResponseSchemaError,
+    validate_response_schema,
+)
 from agent_service.agents.registry import get_agent_with_definition
 from agent_service.agents.store import (
     DefinitionNotFoundError,
@@ -61,6 +67,51 @@ class DependencyFieldOut(BaseModel):
     default: Any
 
 
+ResponseFieldType = Literal["string", "integer", "number", "boolean", "object", "array"]
+ItemType = Literal["string", "integer", "number", "boolean", "object"]
+
+
+class ResponseItemIn(BaseModel):
+    """O elemento de um `array`. `fields` é obrigatório quando `type="object"`."""
+
+    type: ItemType = "string"
+    fields: "list[ResponseFieldIn] | None" = None
+
+
+class ResponseFieldIn(BaseModel):
+    """Campo de `response_schema`. Folha tem a mesma forma de `dependency_fields`;
+    `object` pede `fields` e `array` pede `items` (ver agents/response_model.py)."""
+
+    name: str
+    type: ResponseFieldType = "string"
+    label: str | None = None
+    description: str | None = None
+    required: bool = False
+    default: Any = None
+    fields: "list[ResponseFieldIn] | None" = None
+    items: ResponseItemIn | None = None
+
+
+class ResponseItemOut(BaseModel):
+    type: ItemType
+    fields: "list[ResponseFieldOut] | None" = None
+
+
+class ResponseFieldOut(BaseModel):
+    name: str
+    type: ResponseFieldType
+    label: str
+    description: str
+    required: bool
+    default: Any = None
+    fields: "list[ResponseFieldOut] | None" = None
+    items: ResponseItemOut | None = None
+
+
+for _model in (ResponseItemIn, ResponseFieldIn, ResponseItemOut, ResponseFieldOut):
+    _model.model_rebuild()
+
+
 class AgentDefinitionIn(BaseModel):
     agent_type: str = Field(..., description="Slug estável, usado como agent_id no /chat")
     name: str
@@ -76,9 +127,10 @@ class AgentDefinitionIn(BaseModel):
     memory_backend: Literal["common", "mem0"] = "common"
     num_history_runs: int = 10
     kind: AgentKind = "conversational"
-    response_schema: list[DependencyFieldIn] = Field(
+    response_schema: list[ResponseFieldIn] = Field(
         default=[],
-        description="Só para kind='analysis': campos da saída estruturada (mesma forma de dependency_fields).",
+        description="Só para kind='analysis': campos da saída estruturada. Folhas iguais a "
+        "dependency_fields, mais 'object' (com fields) e 'array' (com items).",
     )
 
     @field_validator("agent_type")
@@ -88,7 +140,7 @@ class AgentDefinitionIn(BaseModel):
             raise ValueError("agent_type deve ser um slug: letras minúsculas, números, '-' ou '_'")
         return v
 
-    @field_validator("dependency_fields", "response_schema")
+    @field_validator("dependency_fields")
     @classmethod
     def _validate_dependency_fields(cls, v: list[DependencyFieldIn]) -> list[DependencyFieldIn]:
         _normalize_dependency_fields(v)
@@ -107,9 +159,9 @@ class AgentDefinitionUpdate(BaseModel):
     memory_backend: Literal["common", "mem0"] | None = None
     num_history_runs: int | None = None
     kind: AgentKind | None = None
-    response_schema: list[DependencyFieldIn] | None = None
+    response_schema: list[ResponseFieldIn] | None = None
 
-    @field_validator("dependency_fields", "response_schema")
+    @field_validator("dependency_fields")
     @classmethod
     def _validate_dependency_fields(cls, v: list[DependencyFieldIn] | None) -> list[DependencyFieldIn] | None:
         if v is not None:
@@ -130,7 +182,7 @@ class AgentDefinitionOut(BaseModel):
     memory_backend: str
     num_history_runs: int
     kind: AgentKind
-    response_schema: list[DependencyFieldOut]
+    response_schema: list[ResponseFieldOut]
     is_seed: bool
     prompt_version: int
     created_at: datetime
@@ -155,10 +207,30 @@ def _normalize_dependency_fields(fields: list[DependencyFieldIn]) -> list[dict[s
         raise ValueError(str(exc)) from exc
 
 
+def _normalize_response_schema(fields: list[ResponseFieldIn]) -> list[dict[str, Any]]:
+    """Valida aqui, e não num `field_validator`: as regras dos tipos compostos
+    (`fields` obrigatório em object, `items` em array, profundidade) rendem
+    mensagens específicas, e 422 com a explicação é mais útil que um erro de
+    schema do pydantic."""
+    try:
+        return validate_response_schema([f.model_dump(exclude_none=True) for f in fields])
+    except ResponseSchemaError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 class PromptVersionOut(BaseModel):
     version: int
     instructions: list[str]
     created_at: datetime
+
+
+# Campos que existem para agentes conversacionais e não fazem nada num agente
+# `analysis`: ele é one-shot, sem sessão, sem histórico e sem memória
+# (`agents/base.py`). Aceitá-los calado deixa quem opera achando que configurou algo.
+_INERTES_EM_ANALYSIS = {
+    "num_history_runs": "analysis é one-shot: não há histórico para reaproveitar",
+    "memory_backend": "analysis não usa memória de longo prazo (nem a do Agno, nem o mem0)",
+}
 
 
 def _validate_kind(kind: str, response_schema: list[dict[str, Any]]) -> None:
@@ -167,6 +239,25 @@ def _validate_kind(kind: str, response_schema: list[dict[str, Any]]) -> None:
     if kind == "conversational" and response_schema:
         raise HTTPException(
             status_code=422, detail="response_schema só se aplica a kind='analysis' (deixe [] para conversational)"
+        )
+
+
+def _validate_inert_fields(kind: str, body: BaseModel) -> None:
+    """Recusa campo inerte que veio *explicitamente* na requisição.
+
+    O critério é `model_fields_set`, não o valor: um agente já salvo carrega
+    `num_history_runs=10` por default, e cobrar isso faria um `PUT kind=analysis`
+    falhar por um campo que ninguém escreveu."""
+    if kind != "analysis":
+        return
+    enviados = [c for c in body.model_fields_set if c in _INERTES_EM_ANALYSIS]
+    # `memory_backend="common"` é o próprio default: não configura nada, não incomoda.
+    enviados = [c for c in enviados if not (c == "memory_backend" and getattr(body, c) == "common")]
+    if enviados:
+        detalhe = "; ".join(f"{campo} ({_INERTES_EM_ANALYSIS[campo]})" for campo in sorted(enviados))
+        raise HTTPException(
+            status_code=422,
+            detail=f"Estes campos não têm efeito em kind='analysis' — tire-os da requisição: {detalhe}",
         )
 
 
@@ -211,10 +302,11 @@ def create_agent(body: AgentDefinitionIn) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=f"Agente {body.agent_type!r} já existe")
     payload = body.model_dump()
     payload["dependency_fields"] = _normalize_dependency_fields(body.dependency_fields)
-    payload["response_schema"] = _normalize_dependency_fields(body.response_schema)
+    payload["response_schema"] = _normalize_response_schema(body.response_schema)
     _validate_tools(body.tools, {f["name"] for f in payload["dependency_fields"]})
     _validate_collection(body.knowledge_collection)
     _validate_kind(body.kind, payload["response_schema"])
+    _validate_inert_fields(body.kind, body)
     return create_definition(**payload)
 
 
@@ -238,7 +330,7 @@ def update_agent(agent_type: str, body: AgentDefinitionUpdate) -> dict[str, Any]
     if body.dependency_fields is not None:
         payload["dependency_fields"] = _normalize_dependency_fields(body.dependency_fields)
     if body.response_schema is not None:
-        payload["response_schema"] = _normalize_dependency_fields(body.response_schema)
+        payload["response_schema"] = _normalize_response_schema(body.response_schema)
     # Valida contra o estado final: tools e dependency_fields podem vir juntos ou só um deles.
     if body.tools is not None or body.dependency_fields is not None:
         campos = payload.get("dependency_fields", current["dependency_fields"] or [])
@@ -251,6 +343,7 @@ def update_agent(agent_type: str, body: AgentDefinitionUpdate) -> dict[str, Any]
             payload.get("kind", current["kind"]),
             payload.get("response_schema", current["response_schema"] or []),
         )
+    _validate_inert_fields(payload.get("kind", current["kind"]), body)
     try:
         updated = update_definition(agent_type, **payload)
     except DefinitionNotFoundError as exc:
@@ -296,8 +389,10 @@ def send_feedback(agent_type: str, body: FeedbackIn) -> dict[str, Any]:
     """Mescla um feedback textual sobre uma conversa numa nota de comportamento
     persistente — `agents/registry.py` concatena essa nota nas instructions do
     agente a partir da próxima chamada (sem virar uma prompt_version nova)."""
-    if get_definition(agent_type) is None:
+    definition = get_definition(agent_type)
+    if definition is None:
         raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
+    _reject_feedback_on_analysis(definition)
     transcript = _transcript(agent_type, body.session_id)
     merge_feedback(agent_type, feedback=body.feedback, transcript=transcript)
     note = get_feedback_note(agent_type)
@@ -305,10 +400,24 @@ def send_feedback(agent_type: str, body: FeedbackIn) -> dict[str, Any]:
     return note
 
 
+def _reject_feedback_on_analysis(definition: dict[str, Any]) -> None:
+    """A nota de feedback só entra nas instructions de agente conversacional
+    (`agents/registry.py`). Aceitar feedback num agente `analysis` gravaria uma
+    nota que nunca seria aplicada — silêncio pior que erro."""
+    if (definition.get("kind") or "conversational") == "analysis":
+        raise HTTPException(
+            status_code=422,
+            detail=f"Agente {definition['agent_type']!r} é kind='analysis' e não usa nota de feedback "
+            "(ela só orienta agentes conversacionais). Ajuste as instructions do agente.",
+        )
+
+
 @router.get("/{agent_type}/feedback", response_model=FeedbackOut)
 def get_feedback(agent_type: str) -> dict[str, Any]:
-    if get_definition(agent_type) is None:
+    definition = get_definition(agent_type)
+    if definition is None:
         raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
+    _reject_feedback_on_analysis(definition)
     note = get_feedback_note(agent_type)
     if note is None:
         raise HTTPException(status_code=404, detail=f"Nenhum feedback registrado ainda para {agent_type!r}.")

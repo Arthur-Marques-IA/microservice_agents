@@ -67,7 +67,12 @@ def build_agent(
         id=agent_id,
         name=name,
         model=get_model(provider=model_provider, model_id=model_id, credential_id=model_credential_id),
-        db=get_db(),
+        # Sem `db` em analysis: ele é one-shot e cada chamada criaria uma linha de
+        # sessão `analyze-<uuid>` no Postgres, com o documento inteiro dentro, que
+        # ninguém lê depois — o trace já registra tudo. O Agno guarda todo acesso a
+        # sessão com `if agent.db is not None`, e a busca na collection não usa
+        # `agent.db` (a collection tem a própria), então o RAG continua valendo.
+        db=None if is_analysis else get_db(),
         memory_manager=memory.manager if memory else None,
         knowledge=knowledge,
         search_knowledge=knowledge is not None,
