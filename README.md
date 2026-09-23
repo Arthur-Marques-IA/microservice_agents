@@ -40,6 +40,32 @@ uv run kuro runs list --agent suporte         # vê o que aconteceu, com tokens 
 - **CLI (`kuro`)** para operar e corrigir, por humanos ou por IAs.
 - **Console web** para inspecionar quando precisar: playground, logs e edição visual.
 
+As três fazem a mesma coisa. Não há operação que só exista numa delas — o que
+se configura pelo console dá para configurar pela CLI, e vice-versa:
+
+| O que | API | CLI | Console |
+|---|---|---|---|
+| Agentes: listar, ver, criar, editar, excluir | `/agents` | `agents list\|get\|apply\|set\|delete` | Agentes |
+| Versões do prompt e rollback | `/agents/{t}/versions` | `agents versions\|rollback` | aba Versões |
+| O que o agente aprendeu (regras de feedback) | `/agents/{t}/feedback` | `agents feedback` | aba Aprendizado |
+| Histórico das regras e rollback | `/agents/{t}/feedback/versions` | `agents feedback --versions\|--rollback` | aba Aprendizado |
+| Contrato de integração | `/agents/{t}/integration` | `agents integrate` | aba Integração |
+| Conversar (com anexos) | `/chat`, `/chat/stream` | `chat`, `chat -a` | Playground |
+| Analisar documento | `/analyze` | `analyze` | Análise |
+| Tools: CRUD, catálogo, invocar | `/tools` | `tools ...` | Tools |
+| Testar tool com `dependencies` | `/tools/{n}/invoke` | `tools invoke -d` | Testar tool |
+| Collections: CRUD e busca | `/collections` | `collections ...` | Conhecimento |
+| Embedder de cada collection | `/collections/embedders` | `collections embedders` | diálogo nova coleção |
+| Indexar texto e arquivo | `/collections/{n}/documents`, `/files` | `collections add`, `add -f` | abas Texto e Arquivo |
+| Provedores e credenciais de modelo | `/model-providers`, `/model-credentials` | `providers`, `credentials` | Chaves de API |
+| Execuções, traces e scores | `/observability/*` | `runs ...` | Logs |
+| Conversas salvas | `/sessions` | `sessions ...` | Conversas |
+
+Duas exceções, e as duas são limitações reais e não esquecimento:
+**indexar por URL** só funciona na coleção padrão (é o pipeline do AgentOS que
+não aceita escolher a coleção), e **`runs tail`**, que acompanha execuções ao
+vivo, existe só na CLI — no console, a lista de Logs atualiza sozinha.
+
 ---
 
 ## Comece em 5 minutos

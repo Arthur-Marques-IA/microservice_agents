@@ -11,7 +11,7 @@ from typing import Any
 import typer
 from rich.table import Table
 
-from agent_service.cli.common import EXIT_USAGE, call, console, emit, fail, state
+from agent_service.cli.common import EXIT_USAGE, call, console, emit, fail, parse_pairs, state
 
 app = typer.Typer(help="Collections de documentos (RAG): listar, criar, alimentar, buscar.")
 
@@ -86,6 +86,32 @@ def create_collection(
         lambda c: console.print(
             f"[green]✓[/] collection {c['name']} criada ({c['embedder_provider']}/{c['embedder_model']})"
         ),
+    )
+
+
+@app.command("get")
+def get_collection(ctx: typer.Context, name: str) -> None:
+    """Mostra uma collection: embedder, descrição e quais agentes a usam."""
+    st = state(ctx)
+    emit(st, call(st, st.client.get_collection, name), lambda c: _render_list([c]))
+
+
+@app.command("set")
+def set_fields(
+    ctx: typer.Context,
+    name: str,
+    pairs: list[str] = typer.Argument(..., help='campo=valor. Editáveis: label, description.'),
+) -> None:
+    """Altera só os campos informados. O embedder não muda (ver `create`)."""
+    st = state(ctx)
+    changes = parse_pairs(st, pairs, "campo")
+    desconhecidos = sorted(set(changes) - {"label", "description"})
+    if desconhecidos:
+        fail(st, f"campos não editáveis: {', '.join(desconhecidos)} (use: label, description)", EXIT_USAGE)
+    emit(
+        st,
+        call(st, st.client.update_collection, name, changes),
+        lambda c: console.print(f"[green]✓[/] collection {c['name']} atualizada"),
     )
 
 

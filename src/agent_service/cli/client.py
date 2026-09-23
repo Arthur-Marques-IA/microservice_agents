@@ -224,6 +224,12 @@ class Client:
     def create_collection(self, body: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/collections", json=body)
 
+    def get_collection(self, name: str) -> dict[str, Any]:
+        return self._request("GET", f"/collections/{name}")
+
+    def update_collection(self, name: str, changes: dict[str, Any]) -> dict[str, Any]:
+        return self._request("PUT", f"/collections/{name}", json=changes)
+
     def delete_collection(self, name: str) -> None:
         self._request("DELETE", f"/collections/{name}")
 

@@ -118,6 +118,8 @@ kuro --json agents integrate suporte
 
 # Bases de conhecimento (RAG) — o agente consulta a que estiver em knowledge_collection
 kuro --json collections list
+kuro --json collections get manuais
+kuro --json collections set manuais label="Manuais v2"
 kuro --json collections embedders                            # provedores de embedding e quais têm credencial
 kuro --json collections create manuais --label "Manuais do produto"
 # O embedder é escolhido na criação e não muda depois (a tabela de vetores é de
