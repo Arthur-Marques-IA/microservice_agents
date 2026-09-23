@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Copy, Ellipsis, MessageSquare, MessagesSquare, Trash } from "lucide-react";
+import { Copy, Ellipsis, FileSearch, MessageSquare, MessagesSquare, Trash } from "lucide-react";
 import { errorMessage, requestJson } from "@/lib/http";
 import { formatNumber } from "@/lib/format";
 import { MEMORY_BACKENDS, modelLabel } from "@/lib/agent-meta";
@@ -123,7 +123,15 @@ export function AgentDetail({
               <CopyButton value={agent.agent_type} label="Copiar slug" className="size-6" />
             </span>
             <Badge variant="outline">{modelLabel(agent.model_id)}</Badge>
-            <Badge variant="outline">Memória {MEMORY_BACKENDS[agent.memory_backend]?.label ?? agent.memory_backend}</Badge>
+            {/* Um analista é one-shot: anunciar a memória dele seria anunciar
+                algo que `agents/base.py` nem monta. */}
+            {agent.kind === "analysis" ? (
+              <Badge variant="outline">Analista</Badge>
+            ) : (
+              <Badge variant="outline">
+                Memória {MEMORY_BACKENDS[agent.memory_backend]?.label ?? agent.memory_backend}
+              </Badge>
+            )}
             <Badge variant="outline">Prompt v{agent.prompt_version}</Badge>
             {agent.is_seed && <Badge variant="secondary">sistema</Badge>}
             <span className="ml-1 text-xs">
@@ -133,10 +141,18 @@ export function AgentDetail({
         }
         actions={
           <>
-            <Link href={`/chat?agent=${slug}`} className={buttonVariants()}>
-              <MessageSquare />
-              <span className="hidden sm:inline">Conversar</span>
-            </Link>
+            {/* Analista não atende no /chat — o lugar de testá-lo é a Análise. */}
+            {agent.kind === "analysis" ? (
+              <Link href="/analyze" className={buttonVariants()}>
+                <FileSearch />
+                <span className="hidden sm:inline">Analisar</span>
+              </Link>
+            ) : (
+              <Link href={`/chat?agent=${slug}`} className={buttonVariants()}>
+                <MessageSquare />
+                <span className="hidden sm:inline">Conversar</span>
+              </Link>
+            )}
             <DropdownMenu
               align="end"
               trigger={(props) => (
@@ -169,9 +185,11 @@ export function AgentDetail({
             </TabsTrigger>
             {agent.kind !== "analysis" && <TabsTrigger value="feedback">Aprendizado</TabsTrigger>}
             <TabsTrigger value="runs">Execuções</TabsTrigger>
-            <TabsTrigger value="conversations" count={agentSessions.length}>
-              Conversas
-            </TabsTrigger>
+            {agent.kind !== "analysis" && (
+              <TabsTrigger value="conversations" count={agentSessions.length}>
+                Conversas
+              </TabsTrigger>
+            )}
             <TabsTrigger value="integration">Integração</TabsTrigger>
           </TabsList>
         }
