@@ -5,28 +5,49 @@ import Link from "next/link";
 import { Activity, ThumbsDown, ThumbsUp } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { errorMessage, requestJson } from "@/lib/http";
+import type { FeedbackNote } from "@/lib/types";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
 
 type Vote = 0 | 1;
 
 /**
- * Avaliação da resposta: o voto vira o score `feedback` do trace no Langfuse
- * (o último voto de cada usuário prevalece) e o link abre o trace da execução
- * no próprio console — prompt enviado, chamadas ao modelo, tools, tokens e custo.
+ * Avaliação da resposta, em duas camadas independentes:
+ *
+ * - o voto vira o score `feedback` do trace no Langfuse, e o link abre o trace
+ *   no console. Isso depende do Langfuse e some quando ele está desligado;
+ * - o polegar para baixo pergunta o que deveria ter sido diferente, e o texto
+ *   vira uma regra de comportamento do agente (`/agents/{tipo}/feedback`).
+ *   Isso vive no Postgres e funciona com o Langfuse desligado.
+ *
+ * Antes o componente inteiro sumia sem Langfuse — e, como ele vem desligado por
+ * padrão, ensinar o agente pela tela simplesmente não existia.
  */
-export function MessageFeedback({ runId, className }: { runId: string; className?: string }) {
+export function MessageFeedback({
+  runId,
+  agentType,
+  sessionId,
+  className,
+}: {
+  runId: string;
+  agentType: string;
+  sessionId: string | null;
+  className?: string;
+}) {
   const { observability, userId } = useWorkspace();
   const toast = useToast();
   const [vote, setVote] = useState<Vote | null>(null);
   const [sending, setSending] = useState(false);
-
-  if (!observability.enabled) return null;
+  const [ensinando, setEnsinando] = useState(false);
+  const [texto, setTexto] = useState("");
 
   async function sendVote(value: Vote) {
+    if (value === 0 && sessionId) setEnsinando(true);
     const previous = vote;
     setVote(value);
+    if (!observability.enabled) return; // sem Langfuse não há score para registrar
     setSending(true);
     try {
       await requestJson("/api/observability/scores", {
@@ -46,38 +67,94 @@ export function MessageFeedback({ runId, className }: { runId: string; className
     }
   }
 
+  async function ensinar() {
+    const feedback = texto.trim();
+    if (!feedback || !sessionId) return;
+    setSending(true);
+    try {
+      const note = await requestJson<FeedbackNote>(`/api/agents/${encodeURIComponent(agentType)}/feedback`, {
+        method: "POST",
+        json: { session_id: sessionId, feedback },
+        fallbackError: "Falha ao ensinar o agente",
+      });
+      const mudou = Object.entries(note.diff ?? {}).flatMap(([tipo, itens]) =>
+        (itens ?? []).map((item) => `${tipo}: ${item}`)
+      );
+      toast({
+        title: `Agente ajustado (v${note.version})`,
+        description: mudou.length > 0 ? mudou.join(" · ") : "Nenhuma regra mudou — o feedback já estava coberto.",
+        variant: "success",
+      });
+      setEnsinando(false);
+      setTexto("");
+    } catch (err) {
+      toast({ title: "Não deu para ensinar", description: errorMessage(err), variant: "error" });
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
-    <div className={cn("flex items-center", className)} data-voted={vote === null ? undefined : true}>
-      {([1, 0] as const).map((value) => {
-        const active = vote === value;
-        const label = value === 1 ? "Resposta útil" : "Resposta ruim";
-        return (
-          <Button
-            key={value}
-            variant="ghost"
-            size="icon-xs"
-            disabled={sending}
-            aria-pressed={active}
-            aria-label={label}
-            title={label}
-            onClick={() => void sendVote(value)}
-            className={cn(
-              "text-muted-foreground hover:text-foreground",
-              active && (value === 1 ? "text-success" : "text-destructive")
-            )}
+    <div className="flex flex-col gap-1.5">
+      <div className={cn("flex items-center", className)} data-voted={vote === null ? undefined : true}>
+        {([1, 0] as const).map((value) => {
+          const active = vote === value;
+          const label = value === 1 ? "Resposta útil" : "Resposta ruim — diga o que mudar";
+          return (
+            <Button
+              key={value}
+              variant="ghost"
+              size="icon-xs"
+              disabled={sending}
+              aria-pressed={active}
+              aria-label={label}
+              title={label}
+              onClick={() => void sendVote(value)}
+              className={cn(
+                "text-muted-foreground hover:text-foreground",
+                active && (value === 1 ? "text-success" : "text-destructive")
+              )}
+            >
+              {value === 1 ? <ThumbsUp /> : <ThumbsDown />}
+            </Button>
+          );
+        })}
+        {observability.enabled && (
+          <Link
+            href={`/runs/${encodeURIComponent(runId)}`}
+            title="Ver o trace desta resposta: spans, tokens, custo e avaliações"
+            className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
-            {value === 1 ? <ThumbsUp /> : <ThumbsDown />}
+            <Activity className="size-3" />
+            Trace
+          </Link>
+        )}
+      </div>
+
+      {ensinando && (
+        <div className="flex items-center gap-2">
+          <Input
+            autoFocus
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+            placeholder="O que deveria ter sido diferente?"
+            className="h-8 max-w-md text-[13px]"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void ensinar();
+              }
+              if (e.key === "Escape") setEnsinando(false);
+            }}
+          />
+          <Button size="sm" disabled={!texto.trim() || sending} onClick={() => void ensinar()}>
+            Ensinar
           </Button>
-        );
-      })}
-      <Link
-        href={`/runs/${encodeURIComponent(runId)}`}
-        title="Ver o trace desta resposta: spans, tokens, custo e avaliações"
-        className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-      >
-        <Activity className="size-3" />
-        Trace
-      </Link>
+          <Button size="sm" variant="ghost" onClick={() => setEnsinando(false)}>
+            Agora não
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

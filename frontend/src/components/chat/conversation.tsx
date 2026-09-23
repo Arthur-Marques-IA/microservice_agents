@@ -244,6 +244,7 @@ export function Conversation({
           messages={messages}
           agentType={agentType}
           agentName={agent?.name}
+          sessionId={activeSessionId}
           onRetry={handleRetry}
           empty={
             <ChatEmptyState
@@ -378,12 +379,14 @@ function MessageList({
   messages,
   agentType,
   agentName,
+  sessionId,
   onRetry,
   empty,
 }: {
   messages: ChatMessage[];
   agentType: string;
   agentName?: string;
+  sessionId: string | null;
   onRetry: (assistantMessageId: string) => void;
   empty: ReactNode;
 }) {
@@ -426,6 +429,7 @@ function MessageList({
                 message={message}
                 agentType={agentType}
                 agentName={agentName}
+                sessionId={sessionId}
                 onRetry={message.id === lastMessageId ? () => onRetry(message.id) : undefined}
               />
             ))}

@@ -21,12 +21,13 @@ import { useToast } from "@/components/ui/toast";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { AgentForm, type AgentFormPayload } from "@/components/agents/agent-form";
 import { VersionHistory } from "@/components/agents/version-history";
+import { FeedbackPanel } from "@/components/agents/feedback-panel";
 import { IntegrationPanel } from "@/components/integration/integration-panel";
 import { AgentRuns } from "@/components/observability/agent-runs";
 import { PageBody, PageHeader } from "@/components/workspace/page-header";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
 
-const TABS = ["config", "versions", "runs", "conversations", "integration"] as const;
+const TABS = ["config", "versions", "feedback", "runs", "conversations", "integration"] as const;
 type TabValue = (typeof TABS)[number];
 
 function isTab(value: string | undefined): value is TabValue {
@@ -166,6 +167,7 @@ export function AgentDetail({
             <TabsTrigger value="versions" count={versions.length}>
               Versões
             </TabsTrigger>
+            {agent.kind !== "analysis" && <TabsTrigger value="feedback">Aprendizado</TabsTrigger>}
             <TabsTrigger value="runs">Execuções</TabsTrigger>
             <TabsTrigger value="conversations" count={agentSessions.length}>
               Conversas
@@ -194,6 +196,17 @@ export function AgentDetail({
             currentInstructions={agent.instructions}
             onRestore={handleRestore}
           />
+        </TabsContent>
+
+        <TabsContent value="feedback">
+          {agent.kind === "analysis" ? (
+            <p className="text-[13px] text-muted-foreground">
+              A nota de feedback só orienta agentes conversacionais — num analista ela nunca seria aplicada. Ajuste as
+              instructions.
+            </p>
+          ) : (
+            <FeedbackPanel agentType={agent.agent_type} />
+          )}
         </TabsContent>
 
         <TabsContent value="runs">

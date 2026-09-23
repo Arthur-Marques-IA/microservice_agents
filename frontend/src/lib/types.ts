@@ -1,9 +1,86 @@
+/** Anexo de `/chat` e `/analyze`: imagem, áudio, vídeo ou arquivo. */
+export interface Attachment {
+  content_base64?: string;
+  url?: string;
+  mime_type?: string | null;
+  filename?: string | null;
+}
+
 export interface ChatRequest {
   agent_type: string;
   user_id: string;
   session_id: string;
   message: string;
   dependencies?: Record<string, unknown>;
+  attachments?: Attachment[];
+}
+
+export interface AnalyzeRequest {
+  agent_type: string;
+  document: string;
+  dependencies?: Record<string, unknown>;
+  attachments?: Attachment[];
+}
+
+export interface AnalyzeResponse {
+  agent_type: string;
+  /** Validado contra o `response_schema` do agente. */
+  result: Record<string, unknown>;
+  run_id: string;
+  trace_id?: string | null;
+}
+
+/** Uma regra da nota de comportamento (`GET /agents/{tipo}/feedback`). */
+export interface FeedbackRule {
+  id: string;
+  texto: string;
+}
+
+export interface FeedbackNote {
+  agent_type: string;
+  /** Markdown derivado das regras — é o que entra nas instructions. */
+  content: string;
+  rules: FeedbackRule[];
+  version: number;
+  updated_at: string;
+  /** Só na resposta do POST: o que o merge mudou. */
+  diff?: Record<string, string[]> | null;
+}
+
+export interface FeedbackVersion {
+  version: number;
+  rules: FeedbackRule[];
+  content: string;
+  origin: string;
+  created_at: string;
+}
+
+/** `GET /agents/{tipo}/integration` — o contrato que quem integra precisa. */
+export interface DependencyContract {
+  name: string;
+  type: string;
+  required: boolean;
+  label: string;
+  description: string;
+  example: unknown;
+  /** Tools do agente que consomem este campo — elas falham sem ele. */
+  required_by_tools: string[];
+}
+
+export interface IntegrationContract {
+  agent_type: string;
+  name: string;
+  kind: AgentKind;
+  prompt_version: number;
+  /** `/chat` num conversacional, `/analyze` num analista. */
+  endpoint: string;
+  chat_url: string;
+  stream_url: string | null;
+  response_schema: SchemaField[];
+  dependencies: DependencyContract[];
+  request_example: Record<string, unknown>;
+  curl: string;
+  warnings: string[];
 }
 
 export interface ChatResponse {
@@ -119,9 +196,39 @@ export interface DependencyFieldInput {
   default?: unknown;
 }
 
+export type AgentKind = "conversational" | "analysis";
+
+/** Vocabulário de campo composto — o mesmo do backend (`field_schema.py`). */
+export type FieldType = "string" | "integer" | "number" | "boolean" | "object" | "array";
+export type ItemType = "string" | "integer" | "number" | "boolean" | "object";
+
+/**
+ * Campo de `response_schema` (agente `kind: "analysis"`) ou parâmetro composto
+ * de tool. `object` exige `fields`, `array` exige `items` — sem isso o provedor
+ * recusa o schema, então o backend responde 422 no cadastro.
+ */
+export interface SchemaField {
+  name: string;
+  type: FieldType;
+  label?: string | null;
+  description?: string | null;
+  required?: boolean;
+  default?: unknown;
+  fields?: SchemaField[] | null;
+  items?: SchemaItem | null;
+}
+
+export interface SchemaItem {
+  type: ItemType;
+  fields?: SchemaField[] | null;
+}
+
 export interface AgentDefinition {
   agent_type: string;
   name: string;
+  kind: AgentKind;
+  /** Só em `kind: "analysis"`: a forma do objeto que o `/analyze` devolve. */
+  response_schema: SchemaField[];
   instructions: string[];
   tools: string[];
   model_provider: string | null;
@@ -142,6 +249,10 @@ export interface AgentDefinition {
 export interface AgentDefinitionInput {
   agent_type: string;
   name: string;
+  /** `num_history_runs` e `memory_backend` dão 422 em `kind: "analysis"`: um
+   * agente one-shot não tem histórico nem memória. */
+  kind?: AgentKind;
+  response_schema?: SchemaField[];
   instructions: string[];
   tools?: string[];
   model_provider?: string | null;
@@ -161,8 +272,24 @@ export interface PromptVersion {
 
 // -- Collections (bases de conhecimento) --------------------------------
 
+/** `GET /collections/embedders` — quem pode gerar os vetores de uma collection. */
+export interface EmbedderOption {
+  provider: string;
+  label: string;
+  default_model_id: string;
+  default_dimensions: number | null;
+  requires_api_key: boolean;
+  description: string;
+  /** A credencial existe agora — sem isso, criar a collection dá 422. */
+  configured: boolean;
+}
+
 export interface Collection {
   name: string;
+  /** Fixo na criação: a tabela de vetores é de um embedder só. */
+  embedder_provider: string;
+  embedder_model: string;
+  embedder_dimensions?: number | null;
   /** Coleção que o pipeline de upload do AgentOS (arquivo/URL) alimenta. */
   is_default: boolean;
   label: string;
@@ -246,6 +373,10 @@ export interface ApiToolParam {
   dependency?: string;
   /** Valor fixo (`source: "const"`). */
   value?: unknown;
+  /** Obrigatório em `type: "object"` com `source: "model"`. */
+  fields?: SchemaField[] | null;
+  /** Obrigatório em `type: "array"` com `source: "model"`. */
+  items?: SchemaItem | null;
 }
 
 export type ApiAuth =
@@ -272,6 +403,8 @@ export interface PythonToolConfig {
 export interface ToolInvokeInput {
   arguments?: Record<string, unknown>;
   function_name?: string | null;
+  /** Simula o `dependencies` do `/chat` para parâmetros `source: "dependency"`. */
+  dependencies?: Record<string, unknown>;
 }
 
 export interface ToolInvokeResult {

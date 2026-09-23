@@ -10,12 +10,15 @@ import { DEFAULT_MODEL, MEMORY_BACKENDS, MODEL_OPTIONS, TOOL_KIND_META, type Mod
 import type {
   AgentDefinition,
   AgentDefinitionInput,
+  AgentKind,
   DependencyField,
   DependencyFieldType,
   MemoryBackend,
   ModelProviderSummary,
+  SchemaField,
   ToolSummary,
 } from "@/lib/types";
+import { SchemaFieldsEditor, emptyField, schemaProblem } from "@/components/schema/schema-fields-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -31,9 +34,24 @@ export type AgentFormPayload = Partial<AgentDefinitionInput>;
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 const DEPENDENCY_FIELD_TYPES: DependencyFieldType[] = ["string", "integer", "number", "boolean"];
 
+const AGENT_KINDS: { kind: AgentKind; label: string; description: string }[] = [
+  {
+    kind: "conversational",
+    label: "Conversacional",
+    description: "Mantém a conversa por session_id e responde texto. Aceita nota de feedback.",
+  },
+  {
+    kind: "analysis",
+    label: "Analista",
+    description: "One-shot no /analyze: recebe um documento e devolve o objeto do response_schema.",
+  },
+];
+
 interface FormValues {
   agentType: string;
   name: string;
+  kind: AgentKind;
+  responseSchema: SchemaField[];
   instructions: string;
   tools: string[];
   modelId: string;
@@ -50,6 +68,8 @@ function valuesFrom(agent?: AgentDefinition, instructions?: string[]): FormValue
   return {
     agentType: agent?.agent_type ?? "",
     name: agent?.name ?? "",
+    kind: agent?.kind ?? "conversational",
+    responseSchema: agent?.response_schema ?? [],
     instructions: (instructions ?? agent?.instructions ?? []).join("\n"),
     tools: agent?.tools ?? [],
     modelId: agent?.model_id ?? DEFAULT_MODEL.id,
@@ -111,8 +131,15 @@ function buildUpdate(values: FormValues, agent: AgentDefinition, models: ModelOp
   if (!sameDependencyFields(values.dependencyFields, agent.dependency_fields)) {
     payload.dependency_fields = values.dependencyFields;
   }
-  if (values.memoryBackend !== agent.memory_backend) payload.memory_backend = values.memoryBackend;
-  if (values.numHistoryRuns !== agent.num_history_runs) payload.num_history_runs = values.numHistoryRuns;
+  if (JSON.stringify(values.responseSchema) !== JSON.stringify(agent.response_schema)) {
+    payload.response_schema = values.responseSchema;
+  }
+  // `num_history_runs` e `memory_backend` não existem num agente analista: o
+  // backend responde 422 se vierem com valor diferente do padrão.
+  if (values.kind !== "analysis") {
+    if (values.memoryBackend !== agent.memory_backend) payload.memory_backend = values.memoryBackend;
+    if (values.numHistoryRuns !== agent.num_history_runs) payload.num_history_runs = values.numHistoryRuns;
+  }
   return payload;
 }
 
@@ -189,6 +216,12 @@ export function AgentForm({
         : "Use letras minúsculas, números, '-' ou '_' (começando por letra ou número).",
     instructions: instructionLines.length > 0 ? null : "Escreva ao menos uma instrução.",
     numHistoryRuns: values.numHistoryRuns >= 0 ? null : "Use um número maior ou igual a zero.",
+    responseSchema:
+      values.kind !== "analysis"
+        ? null
+        : values.responseSchema.length === 0
+          ? "Um agente analista precisa de ao menos um campo na saída."
+          : schemaProblem(values.responseSchema),
   };
   const hasErrors = Object.values(errors).some(Boolean);
 
@@ -230,9 +263,11 @@ export function AgentForm({
         await onSubmit(changes);
       } else {
         const model = models.find((m) => m.id === values.modelId) ?? DEFAULT_MODEL;
+        const analysis = values.kind === "analysis";
         await onSubmit({
           agent_type: values.agentType,
           name: values.name.trim(),
+          kind: values.kind,
           instructions: instructionLines,
           tools: values.tools,
           model_provider: model.provider,
@@ -240,8 +275,12 @@ export function AgentForm({
           model_credential_id: values.credentialId || null,
           knowledge_collection: values.knowledgeCollection || null,
           dependency_fields: values.dependencyFields,
-          memory_backend: values.memoryBackend,
-          num_history_runs: values.numHistoryRuns,
+          response_schema: analysis ? values.responseSchema : [],
+          // Omitidos em analysis: o backend recusa com 422 um campo que não
+          // faz nada num agente one-shot, em vez de aceitá-lo calado.
+          ...(analysis
+            ? {}
+            : { memory_backend: values.memoryBackend, num_history_runs: values.numHistoryRuns }),
         });
       }
       setShowErrors(false);
@@ -303,6 +342,47 @@ export function AgentForm({
 
       <FormSection
         variant={variant}
+        title="Tipo"
+        description="Conversacional mantém sessão e histórico e responde texto. Analista é one-shot: recebe um documento e devolve um objeto estruturado."
+      >
+        <div className="grid gap-2 sm:grid-cols-2">
+          {AGENT_KINDS.map(({ kind, label, description }) => {
+            const selected = values.kind === kind;
+            return (
+              <label
+                key={kind}
+                className={cn(
+                  "flex cursor-pointer gap-3 rounded-lg border p-3 transition-colors",
+                  selected ? "border-primary bg-primary-soft/50 ring-1 ring-primary" : "border-input hover:bg-accent/50",
+                  mode === "edit" && !selected && "cursor-not-allowed opacity-50"
+                )}
+              >
+                <input
+                  type="radio"
+                  name={`${id}-kind`}
+                  value={kind}
+                  checked={selected}
+                  disabled={mode === "edit"}
+                  onChange={() => update("kind", kind)}
+                  className="mt-0.5 accent-primary"
+                />
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-[13px] font-medium">{label}</span>
+                  <span className="text-xs text-muted-foreground">{description}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        {mode === "edit" && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            O tipo não muda depois de criado: ele define o endpoint e o corpo que quem integra usa.
+          </p>
+        )}
+      </FormSection>
+
+      <FormSection
+        variant={variant}
         title="Prompt"
         description="Instruções de sistema, uma por linha. Toda alteração salva vira uma nova versão, com histórico e comparação."
       >
@@ -334,8 +414,12 @@ export function AgentForm({
 
       <FormSection
         variant={variant}
-        title="Modelo e memória"
-        description="Qual LLM responde e como o agente lembra do usuário entre mensagens e sessões."
+        title={values.kind === "analysis" ? "Modelo e base" : "Modelo e memória"}
+        description={
+          values.kind === "analysis"
+            ? "Qual LLM analisa o documento e de qual base ele pode consultar."
+            : "Qual LLM responde e como o agente lembra do usuário entre mensagens e sessões."
+        }
       >
         <div className="flex flex-col gap-5">
           <div className="grid gap-4 sm:grid-cols-2">
@@ -410,21 +494,29 @@ export function AgentForm({
                 ))}
               </Select>
             </Field>
-            <Field
-              label="Execuções no histórico"
-              htmlFor={`${id}-history`}
-              error={fieldError("numHistoryRuns")}
-              hint="Quantas trocas anteriores da sessão entram no contexto."
-            >
-              <Input
-                id={`${id}-history`}
-                type="number"
-                min={0}
-                value={Number.isNaN(values.numHistoryRuns) ? "" : values.numHistoryRuns}
-                onChange={(e) => update("numHistoryRuns", e.target.valueAsNumber)}
-              />
-            </Field>
+            {values.kind !== "analysis" && (
+              <Field
+                label="Execuções no histórico"
+                htmlFor={`${id}-history`}
+                error={fieldError("numHistoryRuns")}
+                hint="Quantas trocas anteriores da sessão entram no contexto."
+              >
+                <Input
+                  id={`${id}-history`}
+                  type="number"
+                  min={0}
+                  value={Number.isNaN(values.numHistoryRuns) ? "" : values.numHistoryRuns}
+                  onChange={(e) => update("numHistoryRuns", e.target.valueAsNumber)}
+                />
+              </Field>
+            )}
           </div>
+          {values.kind === "analysis" ? (
+            <p className="rounded-lg border border-dashed border-border px-4 py-3 text-[13px] text-muted-foreground">
+              Um agente analista é one-shot: sem sessão, sem histórico e sem memória de longo prazo. A base de
+              conhecimento continua valendo.
+            </p>
+          ) : (
           <fieldset className="flex flex-col gap-1.5">
             <legend className="mb-1.5 text-[13px] font-medium">Memória</legend>
             <div className="grid gap-2 sm:grid-cols-2">
@@ -455,8 +547,35 @@ export function AgentForm({
               })}
             </div>
           </fieldset>
+          )}
         </div>
       </FormSection>
+
+      {values.kind === "analysis" && (
+        <FormSection
+          variant={variant}
+          title="Saída (response_schema)"
+          description="A forma do objeto que o /analyze devolve. O modelo é obrigado a preencher exatamente estes campos."
+        >
+          <Field label="Campos" error={fieldError("responseSchema")}>
+            <SchemaFieldsEditor
+              value={values.responseSchema}
+              onChange={(responseSchema) => update("responseSchema", responseSchema)}
+            />
+          </Field>
+          {values.responseSchema.length === 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="mt-2"
+              onClick={() => update("responseSchema", [emptyField()])}
+            >
+              <Plus className="size-4" /> Começar com um campo
+            </Button>
+          )}
+        </FormSection>
+      )}
 
       <FormSection
         variant={variant}

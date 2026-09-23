@@ -1,20 +1,24 @@
 /**
  * Gera exemplos de integração com o contrato estável do agent-service
- * (`POST /chat` e `POST /chat/stream`) — são chamadas diretas ao backend,
- * como outro módulo da plataforma faria, não ao BFF deste frontend.
+ * (`POST /chat`, `POST /chat/stream` e `POST /analyze`) — são chamadas diretas
+ * ao backend, como outro módulo da plataforma faria, não ao BFF deste frontend.
+ *
+ * O corpo vem pronto de `GET /agents/{tipo}/integration`: é o backend que sabe
+ * qual endpoint serve o agente e quais `dependencies` ele declara. Montar isso
+ * aqui foi o que deixou o console mostrando um exemplo de `/chat` para agente
+ * analista, e sem o header de autenticação quando as chaves estão ligadas.
  */
 
 export type SnippetLanguage = "curl" | "javascript" | "python";
-export type ChatEndpoint = "/chat" | "/chat/stream";
+export type ChatEndpoint = "/chat" | "/chat/stream" | "/analyze";
 
 export interface SnippetOptions {
   baseUrl: string;
   endpoint: ChatEndpoint;
-  agentType: string;
-  userId: string;
-  sessionId: string;
-  message: string;
-  dependencies?: Record<string, unknown> | null;
+  /** Corpo da requisição, já montado pelo backend. */
+  payload: Record<string, unknown>;
+  /** O serviço exige chave: o exemplo precisa do header, senão não funciona. */
+  requiresAuth?: boolean;
 }
 
 export const SNIPPET_LANGUAGES: { value: SnippetLanguage; label: string }[] = [
@@ -23,17 +27,10 @@ export const SNIPPET_LANGUAGES: { value: SnippetLanguage; label: string }[] = [
   { value: "python", label: "Python" },
 ];
 
+const AUTH_ENV = "$KURO_RUNTIME_API_KEY";
+
 function buildPayload(opts: SnippetOptions): Record<string, unknown> {
-  const payload: Record<string, unknown> = {
-    agent_type: opts.agentType,
-    user_id: opts.userId,
-    session_id: opts.sessionId,
-    message: opts.message,
-  };
-  if (opts.dependencies && Object.keys(opts.dependencies).length > 0) {
-    payload.dependencies = opts.dependencies;
-  }
-  return payload;
+  return opts.payload;
 }
 
 function indent(text: string, spaces: number): string {
@@ -69,18 +66,29 @@ function toPython(value: unknown, level = 0): string {
 function curl(opts: SnippetOptions): string {
   const body = JSON.stringify(buildPayload(opts), null, 2).replace(/'/g, "'\\''");
   const flags = opts.endpoint === "/chat/stream" ? "-N " : "";
+  const auth = opts.requiresAuth ? `  -H "Authorization: Bearer ${AUTH_ENV}" \\\n` : "";
   return `curl ${flags}-X POST ${opts.baseUrl}${opts.endpoint} \\
   -H "Content-Type: application/json" \\
-  -d '${body}'`;
+${auth}  -d '${body}'`;
 }
 
 function javascript(opts: SnippetOptions): string {
   const body = indent(JSON.stringify(buildPayload(opts), null, 2), 2);
+  const headers = opts.requiresAuth
+    ? `{ "Content-Type": "application/json", Authorization: \`Bearer \${process.env.KURO_RUNTIME_API_KEY}\` }`
+    : `{ "Content-Type": "application/json" }`;
   const request = `const response = await fetch("${opts.baseUrl}${opts.endpoint}", {
   method: "POST",
-  headers: { "Content-Type": "application/json" },
+  headers: ${headers},
   body: JSON.stringify(${body}),
 });`;
+
+  if (opts.endpoint === "/analyze") {
+    return `${request}
+
+const { result } = await response.json();
+console.log(result);`;
+  }
 
   if (opts.endpoint === "/chat") {
     return `${request}
@@ -112,23 +120,37 @@ while (true) {
 
 function python(opts: SnippetOptions): string {
   const payload = toPython(buildPayload(opts));
+  const headersArg = opts.requiresAuth
+    ? `, headers={"Authorization": f"Bearer {os.environ['KURO_RUNTIME_API_KEY']}"}`
+    : "";
+  const osImport = opts.requiresAuth ? "import os\n" : "";
 
-  if (opts.endpoint === "/chat") {
-    return `import requests
+  if (opts.endpoint === "/analyze") {
+    return `${osImport}import requests
 
 payload = ${payload}
 
-response = requests.post("${opts.baseUrl}/chat", json=payload, timeout=120)
+response = requests.post("${opts.baseUrl}/analyze", json=payload, timeout=120${headersArg})
+response.raise_for_status()
+print(response.json()["result"])`;
+  }
+
+  if (opts.endpoint === "/chat") {
+    return `${osImport}import requests
+
+payload = ${payload}
+
+response = requests.post("${opts.baseUrl}/chat", json=payload, timeout=120${headersArg})
 response.raise_for_status()
 print(response.json()["content"])`;
   }
 
   return `import json
-import httpx
+${osImport}import httpx
 
 payload = ${payload}
 
-with httpx.stream("POST", "${opts.baseUrl}/chat/stream", json=payload, timeout=None) as response:
+with httpx.stream("POST", "${opts.baseUrl}/chat/stream", json=payload, timeout=None${headersArg}) as response:
     event = None
     for line in response.iter_lines():
         if line.startswith("event:"):

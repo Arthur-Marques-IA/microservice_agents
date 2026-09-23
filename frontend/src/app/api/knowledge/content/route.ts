@@ -23,11 +23,18 @@ export async function GET(request: Request) {
  */
 export async function POST(request: Request) {
   const formData = await request.formData();
+  // O header vai montado à mão: `withAuth` não serve aqui porque o corpo é
+  // multipart e a chamada não passa por `proxyJson`. Sem isto, o upload era o
+  // único caminho do console que dava 401 com as chaves ligadas.
+  const headers = new Headers();
+  const apiKey = process.env.AGENT_SERVICE_API_KEY;
+  if (apiKey) headers.set("Authorization", `Bearer ${apiKey}`);
   let upstream: Response;
   try {
     upstream = await fetch(backendUrl("/knowledge/content"), {
       method: "POST",
       body: formData,
+      headers,
       cache: "no-store",
     });
   } catch {

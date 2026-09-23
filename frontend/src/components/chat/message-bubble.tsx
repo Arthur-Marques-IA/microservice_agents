@@ -39,11 +39,14 @@ export function MessageBubble({
   message,
   agentType,
   agentName,
+  sessionId,
   onRetry,
 }: {
   message: ChatMessage;
   agentType: string;
   agentName?: string;
+  /** Necessário para ensinar o agente a partir desta conversa. */
+  sessionId?: string | null;
   onRetry?: () => void;
 }) {
   if (message.role === "user") {
@@ -93,7 +96,9 @@ export function MessageBubble({
             {/* Ações aparecem no hover — menos o voto já dado, que fica visível. */}
             <div className="flex items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 has-[[data-voted]]:opacity-100 [@media(hover:none)]:opacity-100">
               {message.content && <CopyButton value={message.content} label="Copiar resposta" />}
-              {message.runId && <MessageFeedback runId={message.runId} />}
+              {message.runId && (
+                <MessageFeedback runId={message.runId} agentType={agentType} sessionId={sessionId ?? null} />
+              )}
             </div>
           </div>
         )}

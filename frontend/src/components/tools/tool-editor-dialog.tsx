@@ -14,6 +14,7 @@ import type {
   ApiToolConfig,
   ApiToolParam,
   BuiltinCatalogEntry,
+  ItemType,
   PythonToolConfig,
   ToolInput,
   ToolKind,
@@ -26,10 +27,12 @@ import { Field, Spinner } from "@/components/ui/primitives";
 import { Select } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { SchemaFieldsEditor, schemaProblem } from "@/components/schema/schema-fields-editor";
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 const API_METHODS: ApiToolConfig["method"][] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 const API_PARAM_TYPES: ApiParamType[] = ["string", "integer", "number", "boolean", "object", "array"];
+const ITEM_TYPES: ItemType[] = ["string", "integer", "number", "boolean", "object"];
 const API_PARAM_LOCATIONS: ApiParamLocation[] = ["query", "path", "header", "body"];
 const PYTHON_TEMPLATE = `def handler(x: int) -> int:\n    """Descreva o que a tool faz — vira a descrição que o modelo vê."""\n    return x * 2\n`;
 
@@ -157,7 +160,31 @@ export function ToolEditorDialog({
     kind === "python" && (!pythonDraft.code.trim() || !pythonDraft.entrypoint.trim())
       ? "Escreva o código e o nome da função de entrada."
       : null;
-  const hasErrors = Boolean(nameError || labelError || builtinError || apiUrlError || pythonError);
+  // Mesma regra do backend: um parâmetro composto que o modelo preenche só vira
+  // schema válido com a forma de dentro declarada.
+  const apiParamsError =
+    kind === "api"
+      ? (apiDraft.parameters
+          .filter((p) => (p.source ?? "model") === "model")
+          .map((p) => {
+            if (p.type === "object") {
+              return p.fields?.length
+                ? schemaProblem(p.fields, 2)
+                : `o parâmetro ${p.name || "(sem nome)"} é object e precisa de ao menos um campo`;
+            }
+            if (p.type === "array") {
+              if (!p.items) return `o parâmetro ${p.name || "(sem nome)"} é array e precisa do tipo do item`;
+              if (p.items.type === "object") {
+                return p.items.fields?.length
+                  ? schemaProblem(p.items.fields, 2)
+                  : `os itens de ${p.name || "(sem nome)"} são object e precisam de ao menos um campo`;
+              }
+            }
+            return null;
+          })
+          .find(Boolean) ?? null)
+      : null;
+  const hasErrors = Boolean(nameError || labelError || builtinError || apiUrlError || pythonError || apiParamsError);
 
   function buildConfig(): Record<string, unknown> {
     if (kind === "builtin") return { builtin_id: builtinId, params: builtinParams };
@@ -278,7 +305,7 @@ export function ToolEditorDialog({
               disabled={isEdit}
             />
           )}
-          {kind === "api" && <ApiFields draft={apiDraft} onChange={setApiDraft} />}
+          {kind === "api" && <ApiFields draft={apiDraft} onChange={setApiDraft} paramsError={apiParamsError} />}
           {kind === "python" && (
             <PythonFields draft={pythonDraft} onChange={setPythonDraft} enabledOnServer={pythonEnabled} />
           )}
@@ -374,7 +401,15 @@ function BuiltinFields({
 
 // -- kind="api" ----------------------------------------------------------
 
-function ApiFields({ draft, onChange }: { draft: ApiDraft; onChange: (draft: ApiDraft) => void }) {
+function ApiFields({
+  draft,
+  onChange,
+  paramsError,
+}: {
+  draft: ApiDraft;
+  onChange: (draft: ApiDraft) => void;
+  paramsError?: string | null;
+}) {
   function update<K extends keyof ApiDraft>(key: K, value: ApiDraft[K]) {
     onChange({ ...draft, [key]: value });
   }
@@ -475,6 +510,7 @@ function ApiFields({ draft, onChange }: { draft: ApiDraft; onChange: (draft: Api
 
       <Field
         label="Parâmetros"
+        error={paramsError}
         hint="'path' precisa aparecer na URL como {nome}; 'body' vira um campo do JSON enviado. A origem diz quem preenche o valor."
         aside={
           <Button
@@ -569,6 +605,52 @@ function ApiFields({ draft, onChange }: { draft: ApiDraft; onChange: (draft: Api
                     />
                   )}
                 </div>
+
+                {/* `object` e `array` só entram no schema do modelo com a forma
+                    de dentro declarada: um {"type":"array"} pelado o provedor
+                    recusa, e o backend devolve 422 ao salvar. Em dependência ou
+                    valor fixo o parâmetro não vai para o schema, então não se aplica. */}
+                {(p.source ?? "model") === "model" && p.type === "object" && (
+                  <div className="border-l-2 border-border pl-3">
+                    <p className="mb-1.5 text-[12px] text-muted-foreground">campos do objeto</p>
+                    <SchemaFieldsEditor
+                      value={p.fields ?? []}
+                      onChange={(fields) => updateParam(i, { fields })}
+                      depth={2}
+                    />
+                  </div>
+                )}
+                {(p.source ?? "model") === "model" && p.type === "array" && (
+                  <div className="border-l-2 border-border pl-3">
+                    <p className="mb-1.5 text-[12px] text-muted-foreground">cada item é</p>
+                    <Select
+                      aria-label="Tipo do item"
+                      value={p.items?.type ?? "string"}
+                      onChange={(e) => {
+                        const type = e.target.value as ItemType;
+                        updateParam(i, {
+                          items: type === "object" ? { type, fields: p.items?.fields ?? [] } : { type },
+                        });
+                      }}
+                      className="h-8 w-32"
+                    >
+                      {ITEM_TYPES.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </Select>
+                    {p.items?.type === "object" && (
+                      <div className="mt-2">
+                        <SchemaFieldsEditor
+                          value={p.items.fields ?? []}
+                          onChange={(fields) => updateParam(i, { items: { type: "object", fields } })}
+                          depth={2}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>

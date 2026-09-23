@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { buildSnippet, SNIPPET_LANGUAGES, type ChatEndpoint, type SnippetLanguage } from "@/lib/snippets";
 import { useLocalStorage } from "@/lib/use-local-storage";
@@ -10,12 +10,19 @@ import { CodeBlock } from "@/components/ui/code-block";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
-
-const EXAMPLE_DEPENDENCIES = { cpf: "000.000.000-00", nome: "Maria", plano: "premium" };
+import { requestJson } from "@/lib/http";
+import { Skeleton } from "@/components/ui/primitives";
+import type { IntegrationContract } from "@/lib/types";
 
 /**
- * Exemplo de chamada ao contrato estável (`/chat`, `/chat/stream`) — no
- * agente, pré-preenchido com o slug; no chat, com a sessão e o contexto reais.
+ * Exemplo de chamada ao contrato estável, montado a partir de
+ * `GET /agents/{tipo}/integration`.
+ *
+ * O exemplo era montado aqui, no cliente, com dependências inventadas e sempre
+ * apontando para `/chat`. Isso dava exemplo errado para agente analista (que é
+ * `/analyze` com `document`) e sem o header de autenticação quando as chaves
+ * estão ligadas — um cURL que não funciona é pior que exemplo nenhum, porque
+ * manda quem integra procurar no lugar errado.
  */
 export function IntegrationPanel({
   agentType,
@@ -32,32 +39,76 @@ export function IntegrationPanel({
 }) {
   const { publicApiUrl } = useWorkspace();
   const hasRealDependencies = Boolean(dependencies && Object.keys(dependencies).length > 0);
-  const [endpoint, setEndpoint] = useState<ChatEndpoint>("/chat/stream");
   const [language, setLanguage] = useLocalStorage<SnippetLanguage>("agent-service:snippet-language", "curl");
-  const [includeDependencies, setIncludeDependencies] = useState(hasRealDependencies);
+  const [includeDependencies, setIncludeDependencies] = useState(true);
   const [baseUrl, setBaseUrl] = useState(publicApiUrl);
+  const [contract, setContract] = useState<IntegrationContract | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
 
-  const code = buildSnippet(language, {
-    baseUrl: baseUrl.replace(/\/+$/, ""),
-    endpoint,
-    agentType,
-    userId,
-    sessionId,
-    message: "Olá! Como você pode me ajudar?",
-    dependencies: includeDependencies ? (hasRealDependencies ? dependencies : EXAMPLE_DEPENDENCIES) : null,
-  });
+  const analysis = contract?.kind === "analysis";
+  const [streaming, setStreaming] = useState(true);
+  const endpoint: ChatEndpoint = analysis ? "/analyze" : streaming ? "/chat/stream" : "/chat";
+
+  useEffect(() => {
+    let vivo = true;
+    requestJson<IntegrationContract>(
+      `/api/agents/${encodeURIComponent(agentType)}/integration?base_url=${encodeURIComponent(baseUrl)}`,
+      { fallbackError: "Falha ao ler o contrato de integração" }
+    )
+      .then((data) => vivo && setContract(data))
+      .catch((err) => vivo && setErro(String(err)));
+    return () => {
+      vivo = false;
+    };
+  }, [agentType, baseUrl]);
+
+  /** O corpo vem do backend; só a sessão real da tela (quando há uma) entra por cima. */
+  const payload = useMemo(() => {
+    if (!contract) return null;
+    const body: Record<string, unknown> = { ...contract.request_example };
+    if (contract.kind !== "analysis") {
+      body.user_id = userId;
+      body.session_id = sessionId;
+    }
+    if (hasRealDependencies) body.dependencies = dependencies;
+    if (!includeDependencies) delete body.dependencies;
+    return body;
+  }, [contract, dependencies, hasRealDependencies, includeDependencies, sessionId, userId]);
+
+  const temDependencies = (contract?.dependencies.length ?? 0) > 0 || hasRealDependencies;
+  const requiresAuth = contract?.curl.includes("Authorization") ?? false;
+
+  const code =
+    contract && payload
+      ? buildSnippet(language, { baseUrl: baseUrl.replace(/\/+$/, ""), endpoint, payload, requiresAuth })
+      : "";
   const languageLabel = SNIPPET_LANGUAGES.find((l) => l.value === language)?.label ?? language;
+
+  if (erro) {
+    return <p className="text-[13px] text-destructive">{erro}</p>;
+  }
+  if (!contract) {
+    return <Skeleton className="h-64" />;
+  }
 
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Tabs value={endpoint} onValueChange={(v) => setEndpoint(v as ChatEndpoint)} variant="pill">
-            <TabsList>
-              <TabsTrigger value="/chat/stream">Streaming (SSE)</TabsTrigger>
-              <TabsTrigger value="/chat">Resposta única</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          {analysis ? (
+            <span className="rounded-full bg-muted px-3 py-1 font-mono text-xs">POST /analyze</span>
+          ) : (
+            <Tabs
+              value={streaming ? "stream" : "single"}
+              onValueChange={(v) => setStreaming(v === "stream")}
+              variant="pill"
+            >
+              <TabsList>
+                <TabsTrigger value="stream">Streaming (SSE)</TabsTrigger>
+                <TabsTrigger value="single">Resposta única</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          )}
           <Tabs value={language} onValueChange={(v) => setLanguage(v as SnippetLanguage)} variant="pill">
             <TabsList>
               {SNIPPET_LANGUAGES.map((l) => (
@@ -78,21 +129,53 @@ export function IntegrationPanel({
               spellCheck={false}
             />
           </label>
-          <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={includeDependencies}
-              onChange={(e) => setIncludeDependencies(e.target.checked)}
-              className="accent-primary"
-            />
-            Incluir <code className="font-mono text-xs text-foreground">dependencies</code>
-            {!hasRealDependencies && " (exemplo)"}
-          </label>
+          {temDependencies && (
+            <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={includeDependencies}
+                onChange={(e) => setIncludeDependencies(e.target.checked)}
+                className="accent-primary"
+              />
+              Incluir <code className="font-mono text-xs text-foreground">dependencies</code>
+              {!hasRealDependencies && " (exemplo)"}
+            </label>
+          )}
         </div>
         <CodeBlock code={code} title={`POST ${endpoint} · ${languageLabel}`} />
       </div>
 
-      {showReference && <ApiReference baseUrl={baseUrl.replace(/\/+$/, "")} />}
+      {contract.warnings.length > 0 && (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-[13px] text-destructive">
+          {contract.warnings.map((w) => (
+            <p key={w}>{w}</p>
+          ))}
+        </div>
+      )}
+
+      {contract.dependencies.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <h3 className="text-sm font-semibold">Campos que este agente espera</h3>
+          <div className="overflow-hidden rounded-lg border border-border">
+            <table className="w-full text-[13px]">
+              <tbody className="divide-y divide-border">
+                {contract.dependencies.map((d) => (
+                  <tr key={d.name}>
+                    <td className="px-3 py-2 font-mono text-xs">{d.name}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{d.type}</td>
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {d.required ? "obrigatório" : "opcional"}
+                      {d.required_by_tools.length > 0 && ` · usado por ${d.required_by_tools.join(", ")}`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {showReference && !analysis && <ApiReference baseUrl={baseUrl.replace(/\/+$/, "")} />}
     </div>
   );
 }
