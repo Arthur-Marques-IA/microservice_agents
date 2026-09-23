@@ -124,6 +124,19 @@ class Client:
     def get_feedback(self, agent_type: str) -> dict[str, Any]:
         return self._request("GET", f"/agents/{agent_type}/feedback")
 
+    def replace_feedback(self, agent_type: str, rules: list[dict[str, Any]]) -> dict[str, Any]:
+        """Substitui as regras à mão, sem passar pelo modelo."""
+        return self._request("PUT", f"/agents/{agent_type}/feedback", json={"rules": rules})
+
+    def clear_feedback(self, agent_type: str) -> None:
+        self._request("DELETE", f"/agents/{agent_type}/feedback")
+
+    def feedback_versions(self, agent_type: str) -> list[dict[str, Any]]:
+        return self._request("GET", f"/agents/{agent_type}/feedback/versions")
+
+    def rollback_feedback(self, agent_type: str, version: int) -> dict[str, Any]:
+        return self._request("POST", f"/agents/{agent_type}/feedback/rollback/{version}")
+
     # -- chat ----------------------------------------------------------------
 
     def chat_stream(self, body: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:

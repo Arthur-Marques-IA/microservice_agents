@@ -48,10 +48,11 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-local-agent-service}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-local-agent-service}
       LANGFUSE_PROJECT_ID: ${LANGFUSE_PROJECT_ID:-agent-service}
-      # Desligado por padrão: com o profile `observability` fora do ar, o
-      # exportador continuaria instrumentando e cada run tentaria falar com um
-      # host que não existe (timeout de 20s por run). `kuro up --observability`
-      # e o comando completo abaixo ligam junto com os containers.
+      # Desligado por padrão — o mesmo default do `.env.example` e do `config.py`.
+      # Com o profile `observability` fora do ar, o exportador continuaria
+      # instrumentando e cada run tentaria falar com um host que não existe
+      # (timeout de 20s por run). Ligue junto com o profile:
+      # `LANGFUSE_ENABLED=true docker compose --profile observability up -d`
       LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
       # Sem as duas, o serviço fica aberto a quem alcança a porta (ver
       # agent_service/api/auth.py). Obrigatórias em qualquer ambiente compartilhado.

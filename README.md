@@ -633,7 +633,7 @@ Tailwind, Docker Compose.
 | `CUSTOM_PYTHON_TOOLS_ENABLED` | `false` | liga a execução de tools `python` |
 | `TOOL_EGRESS_ALLOWLIST` | — | hosts internos que as tools podem alcançar (vazio = só endereços públicos) |
 | `MEM0_ENABLED` / `MEM0_API_KEY` | `false` / — | habilita agentes com `memory_backend: "mem0"` |
-| `LANGFUSE_ENABLED` | `true` | liga o tracing |
+| `LANGFUSE_ENABLED` | `false` | liga o tracing — suba junto o profile `observability` |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` | valores de dev | conexão com o Langfuse |
 | `LANGFUSE_TIMEOUT_SECONDS` | `20` | timeout do envio de traces |
 | `AGENT_SERVICE_URL` (frontend) | — | endereço interno da API, só no servidor Next.js |

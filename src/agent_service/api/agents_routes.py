@@ -8,6 +8,7 @@ módulos da plataforma consomem. Tools têm CRUD próprio em `tools_routes.py`
 """
 
 import re
+import uuid
 from datetime import datetime
 from typing import Any, Literal
 
@@ -19,22 +20,26 @@ from agent_service.agents.dependency_fields import (
     FieldType,
     validate_field_specs,
 )
-from agent_service.agents.feedback import merge_feedback
+from agent_service.agents.feedback import FeedbackMergeError, merge_feedback
 from agent_service.agents.response_model import ResponseSchemaError, validate_response_schema
 from agent_service.agents.registry import get_agent_with_definition
 from agent_service.agents.store import (
     DefinitionNotFoundError,
+    clear_feedback_note,
     create_definition,
     delete_definition,
     get_definition,
     get_feedback_note,
+    get_feedback_version,
     list_definitions,
+    list_feedback_versions,
     list_prompt_versions,
+    save_feedback_note,
     update_definition,
 )
 from agent_service.documents.collections import collection_exists
 from agent_service.tools.api_tool import required_dependencies
-from agent_service.tools.registry import tool_exists
+from agent_service.tools.registry import ToolBuildError, UnknownToolError, tool_exists
 from agent_service.tools.store import get_tool
 
 AgentKind = Literal["conversational", "analysis"]
@@ -189,10 +194,33 @@ class FeedbackIn(BaseModel):
     feedback: str
 
 
+class FeedbackRule(BaseModel):
+    id: str = ""
+    """Vazio numa regra nova; o servidor gera."""
+    texto: str = Field(..., min_length=1, max_length=500)
+
+
+class FeedbackRulesIn(BaseModel):
+    rules: list[FeedbackRule] = Field(..., max_length=100)
+
+
 class FeedbackOut(BaseModel):
     agent_type: str
     content: str
+    """Markdown derivado das regras — é o que entra nas instructions."""
+    rules: list[FeedbackRule] = []
+    version: int = 1
     updated_at: datetime
+    diff: dict[str, list[str]] | None = None
+    """Só no POST: o que o merge mudou (adicionadas, editadas, removidas, fundidas)."""
+
+
+class FeedbackVersionOut(BaseModel):
+    version: int
+    rules: list[FeedbackRule]
+    content: str
+    origin: str
+    created_at: datetime
 
 
 def _normalize_dependency_fields(fields: list[DependencyFieldIn]) -> list[dict[str, Any]]:
@@ -378,7 +406,11 @@ def get_prompt_versions(agent_type: str) -> list[dict[str, Any]]:
 def _transcript(agent_type: str, session_id: str) -> str:
     """Últimas mensagens da sessão, direto do storage do próprio agente
     (`Agent.get_chat_history` do Agno) — sem reimplementar leitura de sessão."""
-    agent, _ = get_agent_with_definition(agent_type)
+    try:
+        agent, _ = get_agent_with_definition(agent_type)
+    except (ToolBuildError, UnknownToolError) as exc:
+        # Agente com tool quebrada: configuração do serviço, não da chamada.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     try:
         messages = agent.get_chat_history(session_id=session_id, last_n_runs=10)
     except Exception:  # noqa: BLE001 - o Agno levanta Exception("Session not found") pra sessão inexistente
@@ -393,18 +425,75 @@ def _transcript(agent_type: str, session_id: str) -> str:
 
 @router.post("/{agent_type}/feedback", response_model=FeedbackOut)
 def send_feedback(agent_type: str, body: FeedbackIn) -> dict[str, Any]:
-    """Mescla um feedback textual sobre uma conversa numa nota de comportamento
-    persistente — `agents/registry.py` concatena essa nota nas instructions do
-    agente a partir da próxima chamada (sem virar uma prompt_version nova)."""
+    """Mescla um feedback textual sobre uma conversa nas regras de comportamento
+    do agente — `agents/registry.py` as concatena nas instructions a partir da
+    próxima chamada (sem virar uma prompt_version nova).
+
+    A resposta traz o `diff`: o merge mexe em regras que ninguém releu, então
+    dizer o que mudou é parte do resultado, não enfeite."""
+    definition = _feedback_target(agent_type)
+    transcript = _transcript(agent_type, body.session_id)
+    try:
+        note, diff = merge_feedback(
+            agent_type,
+            feedback=body.feedback,
+            transcript=transcript,
+            model_provider=definition["model_provider"],
+            model_id=definition["model_id"],
+            credential_id=definition.get("model_credential_id"),
+        )
+    except FeedbackMergeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {**note, "diff": diff}
+
+
+@router.put("/{agent_type}/feedback", response_model=FeedbackOut)
+def replace_feedback(agent_type: str, body: FeedbackRulesIn) -> dict[str, Any]:
+    """Substitui as regras à mão, sem passar pelo modelo — é a saída quando um
+    merge sai errado, e o que a UI usa para editar ou apagar uma regra só."""
+    _feedback_target(agent_type)
+    regras = [
+        {"id": r.id or uuid.uuid4().hex[:8], "texto": r.texto.strip()}
+        for r in body.rules
+        if r.texto.strip()
+    ]
+    if not regras:
+        raise HTTPException(
+            status_code=422, detail="Sem regras. Para zerar a nota use DELETE /agents/{tipo}/feedback."
+        )
+    return save_feedback_note(agent_type, regras, origin="manual")
+
+
+@router.delete("/{agent_type}/feedback", status_code=204)
+def clear_feedback(agent_type: str) -> None:
+    """Apaga a nota e o histórico dela: o agente volta a valer só pelas instructions."""
+    _feedback_target(agent_type)
+    clear_feedback_note(agent_type)
+
+
+@router.get("/{agent_type}/feedback/versions", response_model=list[FeedbackVersionOut])
+def get_feedback_versions(agent_type: str) -> list[dict[str, Any]]:
+    _feedback_target(agent_type)
+    return list_feedback_versions(agent_type)
+
+
+@router.post("/{agent_type}/feedback/rollback/{version}", response_model=FeedbackOut)
+def rollback_feedback(agent_type: str, version: int) -> dict[str, Any]:
+    """Reaplica as regras de uma versão anterior (como uma versão nova, para o
+    histórico não perder o caminho de volta)."""
+    _feedback_target(agent_type)
+    anterior = get_feedback_version(agent_type, version)
+    if anterior is None:
+        raise HTTPException(status_code=404, detail=f"Versão {version} não existe para {agent_type!r}")
+    return save_feedback_note(agent_type, anterior["rules"], origin="rollback")
+
+
+def _feedback_target(agent_type: str) -> dict[str, Any]:
     definition = get_definition(agent_type)
     if definition is None:
         raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
     _reject_feedback_on_analysis(definition)
-    transcript = _transcript(agent_type, body.session_id)
-    merge_feedback(agent_type, feedback=body.feedback, transcript=transcript)
-    note = get_feedback_note(agent_type)
-    assert note is not None
-    return note
+    return definition
 
 
 def _reject_feedback_on_analysis(definition: dict[str, Any]) -> None:

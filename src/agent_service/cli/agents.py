@@ -288,18 +288,51 @@ def feedback(
     session_id: str | None = typer.Option(
         None, "--session-id", help="Sessão específica; por padrão usa a sessão salva da última `kuro chat`."
     ),
-    show: bool = typer.Option(False, "--show", help="Só mostra a nota atual, sem enviar feedback novo."),
+    show: bool = typer.Option(False, "--show", help="Só mostra as regras atuais, sem enviar feedback novo."),
+    remove: list[str] = typer.Option([], "--remove", help="Apaga a regra com este id (repetível)."),
+    clear: bool = typer.Option(False, "--clear", help="Zera a nota e o histórico dela."),
+    versions: bool = typer.Option(False, "--versions", help="Histórico de versões da nota."),
+    rollback: int | None = typer.Option(None, "--rollback", min=1, help="Reaplica as regras de uma versão."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Não pede confirmação (obrigatório sem TTY)."),
 ) -> None:
-    """Ensina o agente a partir de uma conversa: mescla o feedback numa nota
-    que passa a orientar as respostas dele dali pra frente."""
+    """Ensina o agente a partir de uma conversa: mescla o feedback nas regras de
+    comportamento que passam a orientar as respostas dele dali pra frente.
+
+    A nota é uma lista de regras com id, não um texto solto: o merge edita e
+    remove regra por id, e a resposta diz o que mudou. `--show` lista os ids,
+    `--remove` apaga uma, `--rollback` volta para uma versão anterior."""
     st = state(ctx)
     if show:
-        note = call(st, st.client.get_feedback, agent_type)
-        emit(st, note, lambda n: console.print(n["content"] or "[dim](sem notas ainda)[/]"))
+        emit(st, call(st, st.client.get_feedback, agent_type), _render_note)
+        return
+    if versions:
+        emit(st, call(st, st.client.feedback_versions, agent_type), _render_note_versions)
+        return
+    if rollback is not None:
+        emit(
+            st,
+            call(st, st.client.rollback_feedback, agent_type, rollback),
+            lambda n: console.print(f"[green]✓[/] nota de {agent_type} voltou à v{rollback} (agora v{n['version']})"),
+        )
+        return
+    if clear:
+        if not _confirmado(st, yes, f"Zerar a nota de feedback de {agent_type!r} (e o histórico)?"):
+            return
+        call(st, st.client.clear_feedback, agent_type)
+        emit(st, {"cleared": agent_type}, lambda _: console.print(f"[green]✓[/] nota de {agent_type} zerada"))
+        return
+    if remove:
+        atual = call(st, st.client.get_feedback, agent_type)
+        ficam = [r for r in atual["rules"] if r["id"] not in set(remove)]
+        if len(ficam) == len(atual["rules"]):
+            fail(st, f"nenhuma regra com id em {', '.join(remove)} (veja `--show`)", EXIT_USAGE)
+        if not ficam:
+            fail(st, "isso apagaria todas as regras — use --clear", EXIT_USAGE)
+        emit(st, call(st, st.client.replace_feedback, agent_type, ficam), _render_note)
         return
 
     if not message:
-        fail(st, "use -m/--message com o que ajustar, ou --show para ver a nota atual", EXIT_USAGE)
+        fail(st, "use -m/--message com o que ajustar, ou --show para ver as regras atuais", EXIT_USAGE)
     session = session_id or session_for_existing(agent_type)
     if not session:
         fail(
@@ -309,7 +342,42 @@ def feedback(
             EXIT_USAGE,
         )
     updated = call(st, st.client.send_feedback, agent_type, session, message)
-    emit(st, updated, lambda n: console.print(f"[green]✓[/] nota de {agent_type} atualizada"))
+    emit(st, updated, _render_merge)
+
+
+def _confirmado(st: State, yes: bool, pergunta: str) -> bool:
+    if yes:
+        return True
+    if not st.interactive:
+        fail(st, "confirme com --yes sem TTY", EXIT_USAGE)
+    return bool(typer.confirm(pergunta))
+
+
+def _render_note(note: dict[str, Any]) -> None:
+    if not note.get("rules"):
+        console.print("[dim](sem regras ainda)[/]")
+        return
+    console.print(f"[dim]v{note['version']}[/]")
+    for regra in note["rules"]:
+        console.print(f"[dim]{regra['id']}[/] {regra['texto']}", highlight=False)
+
+
+def _render_merge(note: dict[str, Any]) -> None:
+    """Mostrar o diff é o ponto: o merge mexe em regras que ninguém releu."""
+    _render_note(note)
+    rotulos = {"adicionadas": "green", "editadas": "yellow", "removidas": "red", "fundidas": "dim", "ignoradas": "dim"}
+    for chave, cor in rotulos.items():
+        for item in (note.get("diff") or {}).get(chave, []):
+            console.print(f"[{cor}]{chave[:-1]}:[/] {item}", highlight=False)
+
+
+def _render_note_versions(rows: list[dict[str, Any]]) -> None:
+    table = Table(show_edge=False, header_style="bold")
+    for column in ("versão", "origem", "regras", "quando"):
+        table.add_column(column)
+    for v in rows:
+        table.add_row(str(v["version"]), v["origin"], str(len(v["rules"])), str(v["created_at"])[:19].replace("T", " "))
+    console.print(table)
 
 
 # -- modo interativo -------------------------------------------------------------------

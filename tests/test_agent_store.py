@@ -1,12 +1,16 @@
 from agent_service.agents.store import (
+    agent_feedback_notes,
     create_definition,
     delete_definition,
     get_definition,
     get_feedback_note,
+    get_feedback_version,
+    list_feedback_versions,
     list_prompt_versions,
+    save_feedback_note,
     update_definition,
-    upsert_feedback_note,
 )
+from agent_service.db import get_db
 
 
 def test_create_definition_round_trip():
@@ -58,19 +62,47 @@ def test_create_analysis_definition_with_response_schema():
     delete_definition("teste-e")
 
 
-def test_upsert_feedback_note_inserts_then_updates():
+def test_save_feedback_note_versiona_cada_gravacao():
+    """O histórico é o que permite desfazer um merge ruim sem abrir o banco."""
     assert get_feedback_note("teste-f") is None
-    first = upsert_feedback_note("teste-f", "- confirme o CPF antes de responder")
+    first = save_feedback_note("teste-f", [{"id": "r1", "texto": "confirme o CPF antes de responder"}])
     assert first["content"] == "- confirme o CPF antes de responder"
+    assert first["version"] == 1
 
-    second = upsert_feedback_note("teste-f", "- confirme o CPF antes de responder\n- seja breve")
-    assert second["content"] == "- confirme o CPF antes de responder\n- seja breve"
-    assert get_feedback_note("teste-f")["content"] == second["content"]
+    second = save_feedback_note(
+        "teste-f",
+        [{"id": "r1", "texto": "confirme o CPF antes de responder"}, {"id": "r2", "texto": "seja breve"}],
+    )
+    assert second["version"] == 2
+    assert second["content"].splitlines() == ["- confirme o CPF antes de responder", "- seja breve"]
+    assert [v["version"] for v in list_feedback_versions("teste-f")] == [2, 1]
+    assert get_feedback_version("teste-f", 1)["rules"] == [
+        {"id": "r1", "texto": "confirme o CPF antes de responder"}
+    ]
     delete_definition("teste-f")
+
+
+def test_nota_antiga_em_markdown_vira_regras_na_leitura():
+    """Notas gravadas antes da coluna `rules`: sem isto, o primeiro merge sobre
+    uma delas recomeçaria do zero e perderia tudo que já estava escrito."""
+    create_definition(agent_type="teste-legado", name="Legado", instructions=["v1"])
+    with get_db().db_engine.begin() as conn:
+        conn.execute(
+            agent_feedback_notes.insert().values(
+                agent_type="teste-legado",
+                content="*   confirme o CPF\n- seja breve",
+                rules=[],
+                version=1,
+            )
+        )
+    note = get_feedback_note("teste-legado")
+    assert [r["texto"] for r in note["rules"]] == ["confirme o CPF", "seja breve"]
+    delete_definition("teste-legado")
 
 
 def test_delete_definition_removes_feedback_note():
     create_definition(agent_type="teste-g", name="Teste G", instructions=["v1"])
-    upsert_feedback_note("teste-g", "- seja breve")
+    save_feedback_note("teste-g", [{"id": "r1", "texto": "seja breve"}])
     delete_definition("teste-g")
     assert get_feedback_note("teste-g") is None
+    assert list_feedback_versions("teste-g") == []

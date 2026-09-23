@@ -13,6 +13,8 @@ Sem Alembic/migração: `init_store()` roda `create_all(checkfirst=True)` no
 startup, no mesmo espírito do `PostgresDb(create_schema=True)` do Agno.
 """
 
+import re
+import uuid
 from typing import Any
 
 from sqlalchemy import (
@@ -98,11 +100,20 @@ agent_prompt_versions = Table(
 # Nota de comportamento por agente, gerada pelo agente de merge de feedback
 # (`agents/feedback.py`) — concatenada nas `instructions` em runtime por
 # `registry.py`, sem virar uma `prompt_version` nova a cada ajuste.
+#
+# `rules` é a fonte da verdade: uma lista de `{"id", "texto"}`. `content` é o
+# markdown derivado dela, que vai para o prompt e continua no corpo da resposta.
+# A nota nasceu como markdown solto e o merge reescrevia o texto inteiro a cada
+# feedback — daí vinham regra duplicada e regra que sumia sem ninguém ver. Com
+# regras identificadas, o merge vira operação sobre id e a duplicata é
+# detectável fora do modelo.
 agent_feedback_notes = Table(
     "agent_feedback_notes",
     metadata,
     Column("agent_type", String, primary_key=True),
     Column("content", Text, nullable=False, default=""),
+    Column("rules", JSON, nullable=False, default=list),
+    Column("version", Integer, nullable=False, default=1),
     Column(
         "updated_at",
         DateTime(timezone=True),
@@ -110,6 +121,21 @@ agent_feedback_notes = Table(
         onupdate=func.now(),
         nullable=False,
     ),
+)
+
+# Histórico append-only da nota, no mesmo espírito de `agent_prompt_versions`:
+# um merge ruim precisa ter volta sem passar por dentro do banco.
+agent_feedback_versions = Table(
+    "agent_feedback_versions",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("agent_type", String, nullable=False, index=True),
+    Column("version", Integer, nullable=False),
+    Column("rules", JSON, nullable=False),
+    Column("content", Text, nullable=False),
+    # merge (veio de um feedback), manual (editada à mão) ou rollback.
+    Column("origin", String, nullable=False, default="merge"),
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
 
 
@@ -132,6 +158,15 @@ def _add_missing_columns() -> None:
     if "response_schema" not in existing:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE agent_definitions ADD COLUMN response_schema JSON NOT NULL DEFAULT '[]'::json"))
+
+    if inspector.has_table("agent_feedback_notes"):
+        colunas = {c["name"] for c in inspector.get_columns("agent_feedback_notes")}
+        if "rules" not in colunas:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE agent_feedback_notes ADD COLUMN rules JSON NOT NULL DEFAULT '[]'::json"))
+        if "version" not in colunas:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE agent_feedback_notes ADD COLUMN version INTEGER NOT NULL DEFAULT 1"))
 
 
 def init_store() -> None:
@@ -294,6 +329,7 @@ def delete_definition(agent_type: str) -> None:
         conn.execute(delete(agent_definitions).where(agent_definitions.c.agent_type == agent_type))
         conn.execute(delete(agent_prompt_versions).where(agent_prompt_versions.c.agent_type == agent_type))
         conn.execute(delete(agent_feedback_notes).where(agent_feedback_notes.c.agent_type == agent_type))
+        conn.execute(delete(agent_feedback_versions).where(agent_feedback_versions.c.agent_type == agent_type))
 
 
 def list_prompt_versions(agent_type: str) -> list[dict[str, Any]]:
@@ -311,22 +347,92 @@ def get_feedback_note(agent_type: str) -> dict[str, Any] | None:
         row = conn.execute(
             select(agent_feedback_notes).where(agent_feedback_notes.c.agent_type == agent_type)
         ).first()
-        return _row_to_dict(row) if row else None
+    if row is None:
+        return None
+    note = _row_to_dict(row)
+    # Nota anterior à coluna `rules`: o markdown solto vira regras na leitura,
+    # senão o primeiro merge sobre ela recomeçaria do zero.
+    if not note.get("rules") and note["content"]:
+        note["rules"] = rules_from_markdown(note["content"])
+    return note
 
 
-def upsert_feedback_note(agent_type: str, content: str) -> dict[str, Any]:
+_BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+
+
+def rules_from_markdown(content: str) -> list[dict[str, str]]:
+    """Quebra um markdown de bullets em regras com id — a migração das notas
+    que existiam antes de `rules`."""
+    regras = []
+    for linha in content.splitlines():
+        texto = _BULLET.sub("", linha).strip()
+        if texto:
+            regras.append({"id": uuid.uuid4().hex[:8], "texto": texto})
+    return regras
+
+
+def rules_to_markdown(rules: list[dict[str, Any]]) -> str:
+    return "\n".join(f"- {r['texto']}" for r in rules)
+
+
+def save_feedback_note(agent_type: str, rules: list[dict[str, Any]], *, origin: str = "merge") -> dict[str, Any]:
+    """Grava as regras, renderiza o markdown e guarda a versão anterior.
+
+    Uma versão por gravação, inclusive a primeira: é o histórico que permite
+    desfazer um merge ruim sem abrir o banco."""
     engine = get_db().db_engine
+    content = rules_to_markdown(rules)
     with engine.begin() as conn:
-        if conn.execute(
-            select(agent_feedback_notes.c.agent_type).where(agent_feedback_notes.c.agent_type == agent_type)
-        ).first():
+        atual = conn.execute(
+            select(agent_feedback_notes.c.version).where(agent_feedback_notes.c.agent_type == agent_type)
+        ).first()
+        version = (atual[0] + 1) if atual else 1
+        if atual:
             conn.execute(
                 update(agent_feedback_notes)
                 .where(agent_feedback_notes.c.agent_type == agent_type)
-                .values(content=content)
+                .values(content=content, rules=rules, version=version)
             )
         else:
-            conn.execute(insert(agent_feedback_notes).values(agent_type=agent_type, content=content))
+            conn.execute(
+                insert(agent_feedback_notes).values(
+                    agent_type=agent_type, content=content, rules=rules, version=version
+                )
+            )
+        conn.execute(
+            insert(agent_feedback_versions).values(
+                agent_type=agent_type, version=version, rules=rules, content=content, origin=origin
+            )
+        )
     note = get_feedback_note(agent_type)
     assert note is not None
     return note
+
+
+def clear_feedback_note(agent_type: str) -> None:
+    """Apaga a nota e o histórico dela — `registry.py` volta a usar só as
+    instructions do agente na próxima chamada."""
+    with get_db().db_engine.begin() as conn:
+        conn.execute(delete(agent_feedback_notes).where(agent_feedback_notes.c.agent_type == agent_type))
+        conn.execute(delete(agent_feedback_versions).where(agent_feedback_versions.c.agent_type == agent_type))
+
+
+def list_feedback_versions(agent_type: str) -> list[dict[str, Any]]:
+    with get_db().db_engine.connect() as conn:
+        rows = conn.execute(
+            select(agent_feedback_versions)
+            .where(agent_feedback_versions.c.agent_type == agent_type)
+            .order_by(agent_feedback_versions.c.version.desc())
+        ).all()
+    return [_row_to_dict(r) for r in rows]
+
+
+def get_feedback_version(agent_type: str, version: int) -> dict[str, Any] | None:
+    with get_db().db_engine.connect() as conn:
+        row = conn.execute(
+            select(agent_feedback_versions).where(
+                agent_feedback_versions.c.agent_type == agent_type,
+                agent_feedback_versions.c.version == version,
+            )
+        ).first()
+    return _row_to_dict(row) if row else None

@@ -48,7 +48,12 @@ class Settings(BaseSettings):
     mem0_enabled: bool = False
 
     # Observabilidade — Langfuse (sem as duas chaves, o tracing vira no-op)
-    langfuse_enabled: bool = True
+    langfuse_enabled: bool = False
+    """Desligado por padrão, o mesmo valor do `.env.example` e do `docker-compose.yml`
+    — os três precisam concordar, senão o comportamento depende de como o serviço
+    subiu. Ligar com o Langfuse fora do ar custa o timeout do exportador por run
+    (`langfuse_timeout_seconds`), então quem liga isto sobe também o profile
+    `observability`."""
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_base_url: str = "http://localhost:3100"

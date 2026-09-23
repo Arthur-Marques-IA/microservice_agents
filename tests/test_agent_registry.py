@@ -1,7 +1,7 @@
 import pytest
 
 from agent_service.agents.registry import UnknownAgentTypeError, get_agent, get_agent_with_definition, list_agent_types
-from agent_service.agents.store import create_definition, delete_definition, upsert_feedback_note
+from agent_service.agents.store import create_definition, delete_definition, save_feedback_note
 
 
 def test_list_agent_types_includes_conversational():
@@ -41,7 +41,7 @@ def test_feedback_note_change_invalidates_cache():
     create_definition(agent_type="teste-feedback", name="Teste feedback", instructions=["Seja breve."])
     try:
         agent_before, _ = get_agent_with_definition("teste-feedback")
-        upsert_feedback_note("teste-feedback", "- sempre cumprimente o cliente pelo nome")
+        save_feedback_note("teste-feedback", [{"id": "r1", "texto": "sempre cumprimente o cliente pelo nome"}])
         agent_after, _ = get_agent_with_definition("teste-feedback")
         assert agent_before is not agent_after
         assert any("sempre cumprimente" in i for i in agent_after.instructions)
