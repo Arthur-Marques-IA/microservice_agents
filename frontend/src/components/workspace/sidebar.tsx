@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Activity,
+  FileSearch,
   Bot,
   Check,
   Copy,
@@ -47,6 +48,7 @@ import { useWorkspace } from "@/components/workspace/workspace-provider";
 
 const NAV_ITEMS = [
   { href: "/chat", label: "Playground", icon: MessageSquare },
+  { href: "/analyze", label: "Análise", icon: FileSearch },
   { href: "/agents", label: "Agentes", icon: Bot },
   { href: "/tools", label: "Tools", icon: Wrench },
   { href: "/models", label: "Chaves de API", icon: Cpu },

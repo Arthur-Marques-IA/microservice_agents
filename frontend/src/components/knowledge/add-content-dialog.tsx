@@ -65,7 +65,10 @@ function AddContentForm({
   const [mode, setMode] = useState<Mode>("text");
   // Ver o comentário em handleSubmit: o upload do AgentOS não escolhe coleção,
   // então arquivo/URL só valem na que ele alimenta (o backend diz qual é).
-  const uploadsAllowed = Boolean(collections.find((c) => c.name === collection)?.is_default);
+  // URL continua presa ao pipeline do AgentOS, que só escreve na coleção padrão.
+  // Arquivo não: `POST /collections/{nome}/files` indexa em qualquer coleção,
+  // com o embedder dela.
+  const urlAllowed = Boolean(collections.find((c) => c.name === collection)?.is_default);
   const [name, setName] = useState("");
   const [text, setText] = useState("");
   const [url, setUrl] = useState("");
@@ -88,18 +91,25 @@ function AddContentForm({
           json: { text, name: name.trim() || undefined },
           fallbackError: "Falha ao enviar o texto",
         });
-      } else {
-        // Arquivo/URL passam pelo pipeline do AgentOS (`/knowledge/content`), que
-        // escreve na coleção padrão — ele não aceita escolher a coleção. Por isso
-        // essas abas só aparecem quando a coleção selecionada é a padrão.
+      } else if (mode === "file" && file) {
         const form = new FormData();
-        if (mode === "file" && file) form.set("file", file);
-        if (mode === "url") form.set("url", url.trim());
+        form.set("file", file);
+        if (name.trim()) form.set("name", name.trim());
+        await requestJson(`/api/collections/${encodeURIComponent(collection)}/files`, {
+          method: "POST",
+          body: form,
+          fallbackError: "Falha no upload do arquivo",
+        });
+      } else {
+        // URL ainda passa pelo pipeline do AgentOS (`/knowledge/content`), que
+        // escreve na coleção padrão — ele não aceita escolher a coleção.
+        const form = new FormData();
+        form.set("url", url.trim());
         if (name.trim()) form.set("name", name.trim());
         await requestJson("/api/knowledge/content", {
           method: "POST",
           body: form,
-          fallbackError: mode === "file" ? "Falha no upload do arquivo" : "Falha ao enviar a URL",
+          fallbackError: "Falha ao enviar a URL",
         });
       }
       toast({
@@ -123,20 +133,20 @@ function AddContentForm({
         <DialogDescription>
           Vai para a coleção <span className="font-mono text-foreground">{collection}</span> e é indexado com
           embeddings para busca semântica.
-          {!uploadsAllowed && " Arquivo e URL ainda só funcionam na coleção padrão — aqui, cole o texto."}
+          {!urlAllowed && " URL ainda só funciona na coleção padrão; arquivo e texto valem em qualquer uma."}
         </DialogDescription>
       </DialogHeader>
 
       <DialogBody className="flex flex-col gap-5">
         <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)} variant="pill">
-          <TabsList className={cn("grid w-full", uploadsAllowed ? "grid-cols-3" : "grid-cols-1")}>
+          <TabsList className={cn("grid w-full", urlAllowed ? "grid-cols-3" : "grid-cols-2")}>
             <TabsTrigger value="text">
               <FileText /> Texto
             </TabsTrigger>
-            <TabsTrigger value="file" disabled={!uploadsAllowed}>
+            <TabsTrigger value="file">
               <FileUp /> Arquivo
             </TabsTrigger>
-            <TabsTrigger value="url" disabled={!uploadsAllowed}>
+            <TabsTrigger value="url" disabled={!urlAllowed}>
               <Globe /> URL
             </TabsTrigger>
           </TabsList>

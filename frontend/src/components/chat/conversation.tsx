@@ -26,7 +26,7 @@ import { MEMORY_BACKENDS, modelLabel, parseDependencies } from "@/lib/agent-meta
 import { sessionTitle } from "@/lib/sessions";
 import { useChat } from "@/lib/use-chat";
 import { useLocalStorage } from "@/lib/use-local-storage";
-import type { ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogBody, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -116,24 +116,24 @@ export function Conversation({
         ? `O agente "${agentType}" não existe mais.`
         : null;
 
-  async function runSend(text: string) {
+  async function runSend(text: string, attachments: Attachment[]) {
     const id = activeSessionId ?? createId();
     if (!activeSessionId) onSessionCreated?.(id);
-    const executed = await send({ text, sessionId: id, dependencies: dependencies.value });
+    const executed = await send({ text, sessionId: id, dependencies: dependencies.value, attachments });
     if (!executed) return;
     if (sessionId) void refreshSessions();
     else setCompletedSessionId(id);
   }
 
   /** Validação síncrona para o composer saber se limpa o campo. */
-  function handleSend(text: string): boolean {
+  function handleSend(text: string, attachments: Attachment[] = []): boolean {
     if (isStreaming || blockedReason) return false;
     if (dependencies.error) {
       toast({ title: "Contexto inválido", description: dependencies.error, variant: "error" });
       openInspector(true);
       return false;
     }
-    void runSend(text);
+    void runSend(text, attachments);
     return true;
   }
 
@@ -259,6 +259,7 @@ export function Conversation({
           <div className="mx-auto w-full max-w-3xl">
             <Composer
               onSend={handleSend}
+              onAttachError={(description) => toast({ title: "Anexo recusado", description, variant: "error" })}
               onStop={stop}
               isStreaming={isStreaming}
               disabled={Boolean(blockedReason)}
@@ -317,6 +318,9 @@ function AgentPicker({
   const { agents, getAgent } = useWorkspace();
   const agent = getAgent(value);
   const label = agent?.name ?? value;
+  // Um analista não atende no /chat: ele é one-shot e devolve objeto, não texto.
+  // Oferecê-lo aqui seria oferecer uma conversa que não acontece.
+  const conversacionais = agents.filter((a) => a.kind !== "analysis");
 
   if (locked || !onChange) {
     return (
@@ -350,7 +354,7 @@ function AgentPicker({
       )}
     >
       <DropdownMenuLabel>Conversar com</DropdownMenuLabel>
-      {agents.map((a) => (
+      {conversacionais.map((a) => (
         <DropdownMenuItem key={a.agent_type} onSelect={() => onChange(a.agent_type)} className="py-2">
           <span className="flex items-center gap-2.5">
             <AgentAvatar agentType={a.agent_type} name={a.name} size="sm" />

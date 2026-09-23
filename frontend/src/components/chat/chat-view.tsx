@@ -35,9 +35,12 @@ function NewConversation({ requestedAgent }: { requestedAgent?: string }) {
   const [picked, setPicked] = useState<string | null>(null);
   const [createdSessionId, setCreatedSessionId] = useState<string | null>(null);
 
-  const exists = (slug?: string | null) => Boolean(slug) && agents.some((a) => a.agent_type === slug);
+  // Analista não conversa: nem como escolha guardada, nem como padrão da tela.
+  const conversacionais = agents.filter((a) => a.kind !== "analysis");
+  const exists = (slug?: string | null) =>
+    Boolean(slug) && conversacionais.some((a) => a.agent_type === slug);
   const agentType =
-    [picked, requestedAgent, lastAgent].find(exists) ?? agents[0]?.agent_type ?? "conversational";
+    [picked, requestedAgent, lastAgent].find(exists) ?? conversacionais[0]?.agent_type ?? "conversational";
 
   return (
     <Conversation
@@ -150,7 +153,11 @@ function ExistingConversation({ sessionId }: { sessionId: string }) {
   }
 
   const session = sessions.find((s) => s.session_id === sessionId);
-  const agentType = state.agentType ?? session?.agent_id ?? agents[0]?.agent_type ?? "conversational";
+  const agentType =
+    state.agentType ??
+    session?.agent_id ??
+    agents.find((a) => a.kind !== "analysis")?.agent_type ??
+    "conversational";
 
   return <Conversation sessionId={sessionId} agentType={agentType} initialMessages={state.messages} />;
 }

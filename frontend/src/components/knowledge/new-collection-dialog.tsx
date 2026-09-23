@@ -1,8 +1,8 @@
 "use client";
 
-import { FormEvent, useId, useState } from "react";
+import { FormEvent, useEffect, useId, useState } from "react";
 import { errorMessage, requestJson } from "@/lib/http";
-import type { Collection } from "@/lib/types";
+import type { Collection, EmbedderOption } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Field, Spinner } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
@@ -55,6 +56,20 @@ function NewCollectionForm({ onClose, onCreated }: { onClose: () => void; onCrea
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [embedders, setEmbedders] = useState<EmbedderOption[] | null>(null);
+  const [embedder, setEmbedder] = useState("google");
+
+  useEffect(() => {
+    let vivo = true;
+    requestJson<EmbedderOption[]>("/api/collections/embedders", { fallbackError: "" })
+      .then((data) => vivo && setEmbedders(data))
+      .catch(() => vivo && setEmbedders([]));
+    return () => {
+      vivo = false;
+    };
+  }, []);
+
+  const escolhido = embedders?.find((e) => e.provider === embedder);
 
   const slug = nameTouched ? name : slugify(label);
   const slugError = slug && !SLUG_PATTERN.test(slug) ? "Use minúsculas, números, '-' ou '_'." : null;
@@ -68,7 +83,12 @@ function NewCollectionForm({ onClose, onCreated }: { onClose: () => void; onCrea
       const created = await requestJson<Collection>("/api/collections", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: slug, label: label.trim(), description: description.trim() || null }),
+        body: JSON.stringify({
+          name: slug,
+          label: label.trim(),
+          description: description.trim() || null,
+          embedder_provider: embedder,
+        }),
         fallbackError: "Falha ao criar coleção",
       });
       toast({ title: "Coleção criada", description: "Agora adicione documentos e ligue-a a um agente.", variant: "success" });
@@ -117,6 +137,26 @@ function NewCollectionForm({ onClose, onCreated }: { onClose: () => void; onCrea
             placeholder="manuais"
             className="font-mono"
           />
+        </Field>
+
+        <Field
+          label="Quem gera os vetores"
+          htmlFor={`${id}-embedder`}
+          hint={
+            escolhido
+              ? `${escolhido.description} Não muda depois: a tabela de vetores é de um embedder só.`
+              : "Não muda depois: a tabela de vetores é de um embedder só."
+          }
+          error={escolhido && !escolhido.configured ? "Este provedor ainda não tem credencial cadastrada." : null}
+        >
+          <Select id={`${id}-embedder`} value={embedder} onChange={(e) => setEmbedder(e.target.value)}>
+            {(embedders ?? []).map((e) => (
+              <option key={e.provider} value={e.provider}>
+                {e.label} · {e.default_model_id}
+                {e.configured ? "" : " (sem credencial)"}
+              </option>
+            ))}
+          </Select>
         </Field>
 
         <Field label="Descrição" htmlFor={`${id}-description`} hint="Opcional.">

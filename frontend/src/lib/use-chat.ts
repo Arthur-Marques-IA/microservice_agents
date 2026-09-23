@@ -4,12 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { parseSseStream } from "@/lib/sse";
 import { readErrorMessage } from "@/lib/http";
 import { createId } from "@/lib/id";
-import type { ChatMessage, UsageMetrics } from "@/lib/types";
+import type { Attachment, ChatMessage, UsageMetrics } from "@/lib/types";
 
 interface SendOptions {
   text: string;
   sessionId: string;
   dependencies?: Record<string, unknown> | null;
+  /** Imagem, áudio, vídeo ou arquivo — o modelo do agente precisa suportar o tipo. */
+  attachments?: Attachment[];
 }
 
 /**
@@ -39,9 +41,9 @@ export function useChat({
   }, []);
 
   const send = useCallback(
-    async ({ text, sessionId, dependencies }: SendOptions): Promise<boolean> => {
+    async ({ text, sessionId, dependencies, attachments }: SendOptions): Promise<boolean> => {
       const message = text.trim();
-      if (!message || streamingRef.current) return false;
+      if ((!message && !attachments?.length) || streamingRef.current) return false;
 
       streamingRef.current = true;
       setIsStreaming(true);
@@ -67,6 +69,7 @@ export function useChat({
             session_id: sessionId,
             message,
             dependencies: dependencies ?? undefined,
+            attachments: attachments?.length ? attachments : undefined,
           }),
           signal: controller.signal,
         });

@@ -1,12 +1,16 @@
 "use client";
 
 import { FormEvent, useId, useRef, useState } from "react";
-import { ArrowUp, Braces, Square } from "lucide-react";
+import { ArrowUp, Braces, Paperclip, Square, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { readAttachment } from "@/lib/attachments";
+import type { Attachment } from "@/lib/types";
 
 export function Composer({
   onSend,
+  onAttachError,
   onStop,
   isStreaming,
   disabled,
@@ -16,7 +20,9 @@ export function Composer({
   onOpenContext,
 }: {
   /** Retorna `false` se a mensagem não foi aceita (o texto fica no campo). */
-  onSend: (text: string) => boolean;
+  onSend: (text: string, attachments: Attachment[]) => boolean;
+  /** Erro ao ler um arquivo — mostrado por quem hospeda o composer. */
+  onAttachError?: (message: string) => void;
   onStop: () => void;
   isStreaming: boolean;
   disabled?: boolean;
@@ -27,8 +33,22 @@ export function Composer({
 }) {
   const id = useId();
   const [value, setValue] = useState("");
+  const [anexos, setAnexos] = useState<{ attachment: Attachment; name: string }[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const canSend = Boolean(value.trim()) && !isStreaming && !disabled;
+  // Só anexo já é uma mensagem válida ("o que tem nessa foto?" pode vir depois).
+  const canSend = (Boolean(value.trim()) || anexos.length > 0) && !isStreaming && !disabled;
+
+  async function anexar(files: FileList | null) {
+    if (!files) return;
+    for (const file of Array.from(files)) {
+      try {
+        const attachment = await readAttachment(file);
+        setAnexos((prev) => [...prev, { attachment, name: file.name }]);
+      } catch (err) {
+        onAttachError?.(err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
 
   function autoResize(el: HTMLTextAreaElement) {
     el.style.height = "auto";
@@ -38,8 +58,9 @@ export function Composer({
   function submit(e?: FormEvent) {
     e?.preventDefault();
     if (!canSend) return;
-    if (onSend(value)) {
+    if (onSend(value, anexos.map((a) => a.attachment))) {
       setValue("");
+      setAnexos([]);
       if (textareaRef.current) textareaRef.current.style.height = "auto";
     }
   }
@@ -76,7 +97,31 @@ export function Composer({
         }}
         className="scrollbar-thin block max-h-60 min-h-[52px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-sm leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
       />
+      {anexos.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-3 pb-1">
+          {anexos.map((a, i) => (
+            <Badge key={i} variant="secondary" className="gap-1">
+              {a.name}
+              <button
+                type="button"
+                aria-label={`Remover ${a.name}`}
+                onClick={() => setAnexos((prev) => prev.filter((_, idx) => idx !== i))}
+              >
+                <X className="size-3" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
       <div className="flex items-center gap-2 px-2.5 pb-2.5">
+        <label
+          title="Anexar imagem, áudio, vídeo ou arquivo — o modelo do agente precisa suportar o tipo"
+          className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <Paperclip className="size-3.5" />
+          <span className="sr-only">Anexar arquivo</span>
+          <input type="file" multiple className="hidden" disabled={disabled} onChange={(e) => void anexar(e.target.files)} />
+        </label>
         <button
           type="button"
           onClick={onOpenContext}

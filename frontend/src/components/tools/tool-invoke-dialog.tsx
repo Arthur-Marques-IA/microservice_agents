@@ -18,6 +18,7 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
   const [loadError, setLoadError] = useState<string | null>(null);
   const [functionName, setFunctionName] = useState("");
   const [argumentsText, setArgumentsText] = useState("{}");
+  const [dependenciesText, setDependenciesText] = useState("{}");
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<ToolInvokeResult | null>(null);
 
@@ -36,9 +37,16 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
   }, [tool.tool_name]);
 
   const argumentsCheck = parseDependencies(argumentsText === "{}" ? "" : argumentsText);
+  const dependenciesCheck = parseDependencies(dependenciesText === "{}" ? "" : dependenciesText);
+  // Parâmetro `source="dependency"` não vem dos argumentos: no /chat quem o
+  // preenche é o servidor, a partir do `dependencies` da requisição. Sem poder
+  // simular isso aqui, uma tool com esse tipo de parâmetro não era testável.
+  const usaDependencies = ((detail?.config as { parameters?: { source?: string }[] } | undefined)?.parameters ?? []).some(
+    (p) => p.source === "dependency"
+  );
 
   async function run() {
-    if (argumentsCheck.error) return;
+    if (argumentsCheck.error || dependenciesCheck.error) return;
     setRunning(true);
     setResult(null);
     try {
@@ -47,6 +55,7 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
         json: {
           arguments: argumentsCheck.value ?? {},
           function_name: tool.kind === "builtin" ? functionName || null : null,
+          dependencies: dependenciesCheck.value ?? {},
         },
         fallbackError: "Falha ao testar a tool",
       });
@@ -89,6 +98,24 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
           </Field>
         )}
 
+        {usaDependencies && (
+          <Field
+            label="Dependencies (JSON)"
+            htmlFor="invoke-deps"
+            error={dependenciesCheck.error}
+            hint="Simula o dependencies do /chat — é daqui que saem os parâmetros com origem 'dependência'."
+          >
+            <Textarea
+              id="invoke-deps"
+              value={dependenciesText}
+              onChange={(e) => setDependenciesText(e.target.value)}
+              rows={3}
+              className="font-mono text-[13px]"
+              spellCheck={false}
+            />
+          </Field>
+        )}
+
         <Field label="Argumentos (JSON)" htmlFor="invoke-args" error={argumentsCheck.error}>
           <Textarea
             id="invoke-args"
@@ -116,7 +143,7 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
         <Button variant="outline" onClick={() => onOpenChange(false)}>
           Fechar
         </Button>
-        <Button onClick={() => void run()} disabled={running || !detail || Boolean(argumentsCheck.error)}>
+        <Button onClick={() => void run()} disabled={running || !detail || Boolean(argumentsCheck.error) || Boolean(dependenciesCheck.error)}>
           {running ? <Spinner /> : <Play />}
           Rodar
         </Button>
