@@ -2,6 +2,7 @@
 (`knowledge_collection`), que é o que dá ao agente uma tool de busca na base.
 """
 
+from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
@@ -172,7 +173,16 @@ def test_collection_sem_embedder_gravado_continua_no_google(manuais):
     assert detail["embedder_model"] == "gemini-embedding-001"
 
 
-def test_create_collection_guarda_o_embedder_escolhido():
+@pytest.fixture
+def ollama_no_ar():
+    """O ollama não tem chave, então a checagem de criação o sonda de verdade."""
+    from agent_service.api import collections_routes
+
+    with patch.object(collections_routes, "check_configured", side_effect=lambda p=None, m=None: None):
+        yield
+
+
+def test_create_collection_guarda_o_embedder_escolhido(ollama_no_ar):
     created = create_collection(
         CollectionIn(name="local", label="Local", embedder_provider="ollama", embedder_model="nomic-embed-text")
     )
@@ -224,3 +234,59 @@ def test_embedder_nao_chuta_dimensao_de_modelo_trocado():
         trocado = embedder.build_embedder("ollama", "mxbai-embed-large")
     assert padrao.dimensions == 768
     assert trocado.dimensions != 768
+
+
+def test_create_collection_recusa_ollama_fora_do_ar():
+    """Sem chave, `ollama` passaria em qualquer checagem baseada só em credencial
+    — e quebraria na primeira ingestão. Daí a sonda no `/api/tags`."""
+    from agent_service.models import catalog
+
+    with patch.dict(
+        catalog.PROVIDERS,
+        {"ollama": replace(catalog.PROVIDERS["ollama"], probe=_probe_fora_do_ar)},
+    ):
+        with pytest.raises(HTTPException) as exc:
+            create_collection(CollectionIn(name="x", label="X", embedder_provider="ollama"))
+    assert exc.value.status_code == 422
+    assert "ollama" in str(exc.value.detail)
+
+
+def _probe_fora_do_ar(*, api_key=None, base_url=None):
+    from agent_service.models.catalog import ProviderProbeError
+
+    raise ProviderProbeError("connection refused")
+
+
+def test_create_collection_exige_dimensoes_com_modelo_trocado(ollama_no_ar):
+    with pytest.raises(HTTPException) as exc:
+        create_collection(
+            CollectionIn(name="x", label="X", embedder_provider="ollama", embedder_model="mxbai-embed-large")
+        )
+    assert exc.value.status_code == 422
+    assert "embedder_dimensions" in str(exc.value.detail)
+
+
+def test_create_collection_recusa_nome_com_vetores_orfaos(ollama_no_ar):
+    """Apagar a collection não apaga `knowledge_<nome>`. Recriar com outro
+    embedder misturaria vetores de dois embedders — e quando as larguras batem,
+    o pgvector aceita calado."""
+    from agent_service.api import collections_routes
+
+    with patch.object(collections_routes, "_reject_orphan_vectors", side_effect=_conflito):
+        with pytest.raises(HTTPException) as exc:
+            create_collection(CollectionIn(name="antiga", label="Antiga"))
+    assert exc.value.status_code == 409
+
+
+def _conflito(name):
+    raise HTTPException(status_code=409, detail=f"knowledge_{name} ainda tem documentos")
+
+
+def test_agente_com_collection_sem_credencial_nao_derruba_o_boot():
+    """`all_agents()` monta todos os agentes no startup. Um deles com o embedder
+    sem credencial derrubava o processo inteiro."""
+    from agent_service.agents import registry
+    from agent_service.documents.embedder import EmbedderNotConfiguredError
+
+    with patch.object(registry, "_build_from_definition", side_effect=EmbedderNotConfiguredError("openai: sem chave")):
+        assert registry.all_agents() == []

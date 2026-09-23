@@ -25,6 +25,7 @@ from agent_service.agents.attachments import AttachmentError, AttachmentIn, buil
 from agent_service.agents.dependency_fields import DependencyValidationError, validate_dependencies
 from agent_service.agents.registry import UnknownAgentTypeError, get_agent_with_definition, list_agent_types
 from agent_service.config import get_settings
+from agent_service.documents.collections import EmbedderError
 from agent_service.observability.tracing import RUN_FAILED, RunContext, get_langfuse, traced_run_events
 from agent_service.tools.registry import ToolBuildError, UnknownToolError
 
@@ -65,6 +66,10 @@ def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
     except (ToolBuildError, UnknownToolError) as exc:
         # Uma das tools do agente não pôde ser montada (config inválida, dependência
         # opcional ausente, tool Python desligada...) — problema nosso, não de quem chama.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except EmbedderError as exc:
+        # A collection do agente perdeu a credencial do embedder: configuração do
+        # serviço, não da chamada.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     try:
@@ -181,7 +186,7 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         agent, definition = get_agent_with_definition(request.agent_type)
     except UnknownAgentTypeError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (ToolBuildError, UnknownToolError) as exc:
+    except (ToolBuildError, UnknownToolError, *EmbedderError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if (definition.get("kind") or "conversational") != "analysis":

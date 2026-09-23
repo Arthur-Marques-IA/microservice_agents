@@ -92,6 +92,31 @@ def _credential(provider: str) -> tuple[str | None, str | None]:
     return store.get_decrypted_api_key(credential["id"]), credential["base_url"]
 
 
+def check_configured(provider: str | None, model_id: str | None = None) -> None:
+    """O provedor responderia agora? Levanta `EmbedderNotConfiguredError` se não.
+
+    Para google/openai basta a chave; o `ollama` não tem chave nenhuma, então
+    montar o embedder sempre "funciona" e a falha só apareceria na primeira
+    ingestão — exatamente o que a checagem na criação existe para evitar. Por
+    isso aqui ele é sondado de verdade, pelo mesmo `/api/tags` que
+    `models/catalog.py` usa para validar uma credencial."""
+    spec = resolve_spec(provider)
+    build_embedder(provider, model_id)
+    if spec.provider != "ollama":
+        return
+
+    from agent_service.models.catalog import ProviderProbeError, PROVIDERS
+
+    _, base_url = _credential("ollama")
+    try:
+        PROVIDERS["ollama"].probe(api_key=None, base_url=base_url)
+    except ProviderProbeError as exc:
+        raise EmbedderNotConfiguredError(
+            f"ollama: {exc}. Cadastre uma credencial `ollama` com o endereço do servidor "
+            "em /model-credentials (o padrão é localhost:11434, que dentro do container é o próprio container)."
+        ) from exc
+
+
 def build_embedder(provider: str | None, model_id: str | None = None, dimensions: int | None = None) -> Any:
     """Instancia o embedder do Agno para o provedor pedido."""
     spec = resolve_spec(provider)

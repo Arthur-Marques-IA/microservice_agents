@@ -15,6 +15,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import inspect, text
+
+from agent_service.db import get_db
 
 from agent_service.agents.store import list_definitions
 from agent_service.documents import store
@@ -24,7 +27,7 @@ from agent_service.documents.embedder import (
     EMBEDDERS,
     EmbedderNotConfiguredError,
     UnknownEmbedderProviderError,
-    build_embedder,
+    check_configured,
     resolve_spec,
 )
 
@@ -114,7 +117,7 @@ def list_embedders() -> list[dict[str, Any]]:
     saida = []
     for spec in EMBEDDERS.values():
         try:
-            build_embedder(spec.provider)
+            check_configured(spec.provider)
             configured = True
         except EmbedderNotConfiguredError:
             configured = False
@@ -127,6 +130,33 @@ def _row_or_404(name: str) -> dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail=f"Coleção desconhecida: {name!r}")
     return row
+
+
+_VECTOR_SCHEMA = "ai"
+
+
+def _reject_orphan_vectors(name: str) -> None:
+    """Recusa recriar uma collection cujos vetores antigos ainda estão lá.
+
+    `delete_collection` só apaga o cadastro — a tabela `knowledge_<nome>` é do
+    Agno e fica. Recriar com outro embedder juntaria vetores de dois embedders
+    na mesma tabela; se as larguras baterem (Gemini e text-embedding-3-small
+    têm ambos 1536), o pgvector não reclama e a busca sai errada em silêncio."""
+    engine = get_db().db_engine
+    tabela = f"knowledge_{name}"
+    # Schema "ai": é o default do `PgVector` do Agno, e `documents/collections.py`
+    # não passa outro. Procurar no schema padrão da conexão não acharia nada.
+    if not inspect(engine).has_table(tabela, schema=_VECTOR_SCHEMA):
+        return
+    with engine.begin() as conn:
+        existentes = conn.execute(text(f'SELECT 1 FROM "{_VECTOR_SCHEMA}"."{tabela}" LIMIT 1')).fetchone()
+    if existentes is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A tabela de vetores {_VECTOR_SCHEMA}.{tabela} de uma collection {name!r} anterior ainda "
+            "tem documentos. Reaproveitá-los só é seguro com o mesmo embedder, e o cadastro que dizia qual era "
+            f'já foi apagado — use outro nome, ou apague a tabela (DROP TABLE "{_VECTOR_SCHEMA}"."{tabela}").',
+        )
 
 
 @router.get("", response_model=list[CollectionOut])
@@ -143,9 +173,19 @@ def create_collection(body: CollectionIn) -> dict[str, Any]:
     # Falhar aqui, e não na primeira ingestão: uma collection criada com um
     # provedor sem chave parece pronta e só quebra quando alguém manda um documento.
     try:
-        build_embedder(body.embedder_provider, body.embedder_model, body.embedder_dimensions)
+        spec = resolve_spec(body.embedder_provider)
+        # Modelo trocado sem a dimensão junto seria chute: a tabela pgvector
+        # nasceria com a largura do modelo padrão e a busca sairia errada calada.
+        if body.embedder_model and body.embedder_model != spec.default_model_id and not body.embedder_dimensions:
+            raise HTTPException(
+                status_code=422,
+                detail=f"embedder_model={body.embedder_model!r} não é o padrão de {spec.provider!r} "
+                "— informe também embedder_dimensions (o tamanho do vetor que esse modelo devolve).",
+            )
+        check_configured(body.embedder_provider, body.embedder_model)
     except (UnknownEmbedderProviderError, EmbedderNotConfiguredError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _reject_orphan_vectors(body.name)
     created = store.create_collection(
         name=body.name,
         label=body.label,

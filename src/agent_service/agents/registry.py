@@ -8,6 +8,7 @@ reconstruir o `Agent` do Agno a cada request; é invalidado comparando
 requisição.
 """
 
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -16,6 +17,7 @@ from agno.agent import Agent
 from agent_service.agents.base import build_agent
 from agent_service.agents.response_model import build_response_model
 from agent_service.agents.store import get_definition, get_feedback_note, list_definitions
+from agent_service.documents.collections import EmbedderError
 from agent_service.tools.store import get_tool as get_tool_row
 from agent_service.tools.registry import resolve_tools_with_stamp
 
@@ -24,6 +26,9 @@ _CacheEntry = tuple[Agent, datetime, tuple[datetime, ...], datetime | None]
 _cache: dict[str, _CacheEntry] = {}
 
 _FEEDBACK_HEADER = "Ajustes aprendidos com feedback de conversas anteriores:\n"
+
+
+logger = logging.getLogger(__name__)
 
 
 class UnknownAgentTypeError(ValueError):
@@ -104,4 +109,17 @@ def all_agents() -> list[Agent]:
     boot funcionam normalmente via `get_agent` (usado por `/chat`), só não
     aparecem no playground do AgentOS até o próximo restart.
     """
-    return [_build_from_definition(d)[0] for d in list_definitions()]
+    montados = []
+    for d in list_definitions():
+        try:
+            montados.append(_build_from_definition(d)[0])
+        except EmbedderError:
+            # Um agente apontando para uma collection cujo embedder perdeu a
+            # credencial não pode impedir o serviço de subir: os outros sobem, e
+            # quem chamar este recebe 502 com o motivo (`api/routes.py`).
+            logger.warning(
+                "Agente %r ficou fora do AgentOS: embedder da collection não configurado",
+                d["agent_type"],
+                exc_info=True,
+            )
+    return montados

@@ -117,8 +117,11 @@ def delete_collection(
 ) -> None:
     """Remove o cadastro da collection.
 
-    Os vetores já indexados continuam na tabela `knowledge_<nome>`: recriar uma
-    collection com o mesmo nome traz os documentos antigos de volta."""
+    Os vetores já indexados continuam na tabela `knowledge_<nome>`, que é do
+    Agno. Por isso recriar uma collection com o mesmo nome é recusado com 409
+    enquanto essa tabela tiver documentos: não dá para saber qual embedder os
+    gerou, e misturar dois embedders na mesma tabela dá busca errada calada.
+    Use outro nome, ou apague a tabela antes."""
     st = state(ctx)
     if not yes:
         if not st.interactive:
