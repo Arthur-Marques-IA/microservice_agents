@@ -84,6 +84,15 @@ def root(
         False, "--insecure", help="Não valida o certificado TLS. Só para teste local — nunca em produção."
     ),
 ) -> None:
+    if insecure:
+        # Uma flag cujo propósito é ser insegura não pode passar despercebida:
+        # sem aviso ela acaba num perfil de shell ou script de CI e ninguém nota.
+        # Vai para o stderr, então não suja a saída de dados do `--json`.
+        err_console.print(
+            "[yellow]aviso:[/] --insecure — o certificado TLS não está sendo validado. "
+            "Só para teste local; em produção use --ca-bundle.",
+            highlight=False,
+        )
     ctx.obj = State(
         client=Client(url, timeout=timeout, api_key=api_key, verify=False if insecure else (ca_bundle or True)),
         json_mode=json_mode,

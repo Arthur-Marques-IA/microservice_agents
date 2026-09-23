@@ -690,3 +690,21 @@ def test_conexao_recusada_continua_sugerindo_o_container(monkeypatch):
     result = _run("--json", "agents", "list")
     assert result.exit_code == 3
     assert "docker compose" in json.loads(result.stderr)["error"]
+
+
+def test_insecure_avisa_no_stderr_sem_sujar_o_json(api):
+    """Flag cujo propósito é ser insegura não pode passar despercebida — mas o
+    aviso não pode entrar no stdout, que é a saída de dados."""
+    routes, _ = api
+    routes[("GET", "/agents")] = httpx.Response(200, json=[AGENT])
+    result = _run("--json", "--insecure", "agents", "list")
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)[0]["agent_type"] == "suporte"
+    assert "--insecure" in (result.stderr or "")
+
+
+def test_sem_insecure_nao_ha_aviso(api):
+    routes, _ = api
+    routes[("GET", "/agents")] = httpx.Response(200, json=[AGENT])
+    result = _run("--json", "agents", "list")
+    assert "--insecure" not in (result.stderr or "")

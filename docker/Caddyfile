@@ -42,6 +42,12 @@
 }
 
 # -- o console (profile `ui`) -------------------------------------------------
+# Só defina KURO_CONSOLE_DOMAIN com um domínio real se você também subir o
+# profile `ui`. Apontar um domínio público para um `frontend` que não existe faz
+# o Caddy pedir certificado para um site que só devolve 502 — e queima cota no
+# Let's Encrypt (5 emissões por semana pelo mesmo domínio), o mesmo risco que o
+# volume de /data evita no restart.
+#
 # Deixe no default se você não vai expor o console: aí ele só responde pelo
 # nome local, com certificado interno, e o Let's Encrypt nem é acionado.
 {$KURO_CONSOLE_DOMAIN:console.localhost} {
