@@ -74,8 +74,21 @@ def root(
         envvar="KURO_API_KEY",
         help="Chave de API do serviço (escopo admin). Normalmente vem de KURO_API_KEY.",
     ),
+    ca_bundle: str | None = typer.Option(
+        None,
+        "--ca-bundle",
+        envvar="KURO_CA_BUNDLE",
+        help="Arquivo .pem da CA que assinou o certificado do serviço (rede interna com CA própria).",
+    ),
+    insecure: bool = typer.Option(
+        False, "--insecure", help="Não valida o certificado TLS. Só para teste local — nunca em produção."
+    ),
 ) -> None:
-    ctx.obj = State(client=Client(url, timeout=timeout, api_key=api_key), json_mode=json_mode, no_input=no_input)
+    ctx.obj = State(
+        client=Client(url, timeout=timeout, api_key=api_key, verify=False if insecure else (ca_bundle or True)),
+        json_mode=json_mode,
+        no_input=no_input,
+    )
     if ctx.invoked_subcommand is None:
         if ctx.obj.interactive:
             shell(ctx)
@@ -350,6 +363,10 @@ def shell(ctx: typer.Context) -> None:
         globals_ = ["--url", root_params["url"], "--timeout", str(root_params["timeout"])]
         if root_params.get("api_key"):
             globals_ += ["--api-key", root_params["api_key"]]
+        if root_params.get("ca_bundle"):
+            globals_ += ["--ca-bundle", root_params["ca_bundle"]]
+        if root_params.get("insecure"):
+            globals_ += ["--insecure"]
         try:
             command.main(args=globals_ + hoist_global_flags(args), prog_name="kuro", standalone_mode=False)
         except click.exceptions.Exit:

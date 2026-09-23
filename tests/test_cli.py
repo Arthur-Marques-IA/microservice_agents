@@ -45,7 +45,11 @@ def api(monkeypatch, tmp_path):
 
     transport = httpx.MockTransport(handler)
     monkeypatch.setattr(
-        cli_main, "Client", lambda url, timeout, api_key=None: Client(url, timeout, transport=transport, api_key=api_key)
+        cli_main,
+        "Client",
+        # `**kw` absorve as opções novas do root (verify, etc.) sem o fixture
+        # precisar ser reescrito a cada uma.
+        lambda url, timeout, api_key=None, **kw: Client(url, timeout, transport=transport, api_key=api_key, **kw),
     )
     return routes, calls
 
@@ -80,7 +84,11 @@ def test_service_unavailable_exit_code(monkeypatch):
 
     transport = httpx.MockTransport(handler)
     monkeypatch.setattr(
-        cli_main, "Client", lambda url, timeout, api_key=None: Client(url, timeout, transport=transport, api_key=api_key)
+        cli_main,
+        "Client",
+        # `**kw` absorve as opções novas do root (verify, etc.) sem o fixture
+        # precisar ser reescrito a cada uma.
+        lambda url, timeout, api_key=None, **kw: Client(url, timeout, transport=transport, api_key=api_key, **kw),
     )
     assert _run("agents", "list").exit_code == 3
 
@@ -650,3 +658,35 @@ def test_analyze_com_texto_e_arquivo_juntos_e_erro_de_uso(api, tmp_path):
     doc = tmp_path / "d.json"
     doc.write_text("{}", encoding="utf-8")
     assert _run("analyze", "classificador", "-m", "{}", "-f", str(doc)).exit_code == 2
+
+
+# -- TLS: erro de certificado não é "o serviço caiu" -----------------------------
+
+
+def test_certificado_recusado_nao_manda_olhar_o_container(monkeypatch):
+    """O serviço está de pé; o que falta é confiar na CA. Sugerir
+    `docker compose up -d` aqui manda quem opera depurar o lugar errado."""
+    def handler(request):
+        raise httpx.ConnectError(
+            "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate",
+            request=request,
+        )
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(cli_main, "Client", lambda url, timeout, **kw: Client(url, timeout, transport=transport))
+    result = _run("--json", "agents", "list")
+    assert result.exit_code == 3
+    erro = json.loads(result.stderr)["error"]
+    assert "certificado" in erro and "KURO_CA_BUNDLE" in erro
+    assert "docker compose" not in erro
+
+
+def test_conexao_recusada_continua_sugerindo_o_container(monkeypatch):
+    def handler(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(cli_main, "Client", lambda url, timeout, **kw: Client(url, timeout, transport=transport))
+    result = _run("--json", "agents", "list")
+    assert result.exit_code == 3
+    assert "docker compose" in json.loads(result.stderr)["error"]

@@ -89,7 +89,10 @@ Redis + worker, ~16 GB recomendados). Quem quer só terminal quer os dois deslig
 
 **Feito.** `frontend` está em `profiles: ["ui"]` e os cinco serviços do Langfuse em
 `profiles: ["observability"]`; `LANGFUSE_ENABLED` passou a ter default `false` no `agent-service`,
-como a ressalva abaixo exigia. `docker compose up -d` sobe três serviços; o comando completo sobe nove.
+como a ressalva abaixo exigia. `docker compose up -d` sobe três serviços; o comando completo sobe nove. Há ainda um profile
+`tls`, que põe um Caddy na frente com certificado do Let's Encrypt e renovação automática — sem
+ele a chave de API trafegaria em texto claro, o que inviabilizava o serviço ser chamado por
+outra plataforma em rede real.
 
 ```bash
 docker compose up -d                                   # núcleo: postgres, redis, agent-service

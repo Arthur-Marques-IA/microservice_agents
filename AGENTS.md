@@ -13,6 +13,11 @@ Se o serviço exigir autenticação, exporte `KURO_API_KEY` (a chave de escopo a
 sem ela os comandos saem com 1 e `{"status": 401}`. Dentro do container ela já está
 configurada: `docker compose exec agent-service kuro health --json`.
 
+Com o serviço atrás de HTTPS, `KURO_API_URL=https://...`. Se o certificado vem de uma CA
+própria, aponte-a com `KURO_CA_BUNDLE=/caminho/ca.pem`; num teste local com certificado
+autoassinado, `--insecure`. Erro de certificado sai com 3 e diz "o certificado de ... não
+foi aceito" — é diferente de serviço fora do ar, não adianta reiniciar container.
+
 ## Convenções
 
 - **Sempre use `--json`** (aceito em qualquer posição: `kuro agents list --json`).

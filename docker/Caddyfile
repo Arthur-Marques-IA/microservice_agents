@@ -1,0 +1,60 @@
+# TLS na frente do agent-service.
+#
+# A chave de API viaja num header. Em HTTP puro ela vai em texto claro no fio —
+# junto com as mensagens do cliente. Para um serviço chamado por outra
+# plataforma, por qualquer rede que você não controla, isso não é aceitável.
+#
+# O Caddy resolve certificado e renovação sozinho: com um domínio público
+# apontando para esta máquina e as portas 80/443 alcançáveis, ele emite pelo
+# Let's Encrypt no primeiro acesso e renova antes de vencer. Com um domínio
+# `localhost`/`.localhost`, ele usa uma CA interna — é como dá para testar a
+# configuração inteira sem domínio nenhum.
+#
+# Sobe com `docker compose --profile tls up -d`. Sem o profile, nada muda.
+
+{
+	# Onde o Let's Encrypt avisa sobre problema de renovação. Com domínio
+	# local isto é ignorado.
+	email {$KURO_TLS_EMAIL:admin@example.com}
+}
+
+# -- a API: é isto que a outra plataforma chama -------------------------------
+{$KURO_API_DOMAIN:localhost} {
+	reverse_proxy agent-service:8000 {
+		# O `/chat/stream` é SSE. Sem desligar o buffer, a resposta do agente
+		# chegaria de uma vez no fim, em vez de token a token — o streaming
+		# continuaria "funcionando" e pareceria apenas lento, que é o tipo de
+		# defeito que ninguém liga ao proxy.
+		flush_interval -1
+	}
+
+	# O Caddy já manda HSTS com certificado público. Estes dois fecham o resto
+	# do básico: nada de adivinhar content-type e nada de embutir em iframe.
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}
+
+# -- o console (profile `ui`) -------------------------------------------------
+# Deixe no default se você não vai expor o console: aí ele só responde pelo
+# nome local, com certificado interno, e o Let's Encrypt nem é acionado.
+{$KURO_CONSOLE_DOMAIN:console.localhost} {
+	reverse_proxy frontend:3000 {
+		flush_interval -1
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

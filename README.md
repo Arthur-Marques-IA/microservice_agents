@@ -77,9 +77,33 @@ LANGFUSE_ENABLED=true docker compose --profile ui --profile observability up -d 
 | Console | http://localhost:3000 | `ui` | playground, agentes, tools, base de conhecimento, logs |
 | Langfuse | http://localhost:3100 | `observability` | traces, tokens e custo por execução |
 
-As portas são publicadas **só em `127.0.0.1`**. Para expor numa rede, mude
-`AGENT_SERVICE_BIND` no `.env` — e nesse caso configure as chaves de API antes
-(ver [Segurança](#segurança-e-limitações-atuais)).
+As portas são publicadas **só em `127.0.0.1`**. Para expor numa rede, não mude
+`AGENT_SERVICE_BIND`: suba o profile `tls`, que põe HTTPS na frente.
+
+### HTTPS (profile `tls`)
+
+A chave de API viaja num header. Em HTTP puro ela vai em texto claro no fio,
+junto com as mensagens do cliente — para um serviço chamado por outra
+plataforma, isso não serve. O profile `tls` sobe um [Caddy](https://caddyserver.com)
+na frente, que resolve certificado e renovação sozinho:
+
+```bash
+# no .env: KURO_API_DOMAIN=kuro.suaempresa.com e KURO_TLS_EMAIL=voce@suaempresa.com
+docker compose --profile tls up -d
+```
+
+Com o domínio apontando para a máquina e as portas 80/443 alcançáveis, o
+certificado é emitido pelo Let's Encrypt no primeiro acesso e renovado antes de
+vencer. A porta 80 precisa ficar aberta: é por onde a validação acontece e por
+onde o `http://` é redirecionado para `https://`.
+
+Deixando `KURO_API_DOMAIN=localhost` (o padrão), o Caddy usa uma CA interna — dá
+para testar a configuração inteira sem domínio nenhum. A CLI, nesse caso, não vai
+confiar no certificado; use `--insecure` **só nesse teste**, ou aponte a CA com
+`KURO_CA_BUNDLE=/caminho/ca.pem` se a sua rede tem CA própria.
+
+O `58000` continua publicado em `127.0.0.1` para a CLI local. Quem vem de fora
+entra pelo 443.
 
 > **Windows:** use `127.0.0.1` para a API, não `localhost`. Com o Docker
 > Desktop, `localhost:58000` pode tentar IPv6 primeiro e travar por 30 s.
@@ -578,6 +602,7 @@ Tailwind, Docker Compose.
 | Variável | Padrão | Para quê |
 |---|---|---|
 | `ADMIN_API_KEY` / `RUNTIME_API_KEY` | — | chaves de API; **sem elas o serviço fica aberto** |
+| `KURO_API_DOMAIN` / `KURO_TLS_EMAIL` | `localhost` / — | domínio e e-mail do certificado (profile `tls`) |
 | `AGENT_SERVICE_BIND` | `127.0.0.1:58000` | onde a API é publicada no host |
 | `LANGFUSE_ENABLED` | `false` | ligue junto com o profile `observability` |
 | `GOOGLE_API_KEY` | — | chave do Gemini (provedor padrão) |
@@ -659,6 +684,10 @@ Leia antes de expor o serviço fora de uma rede confiável:
 - **Tools `python` não são uma sandbox.** O namespace é restrito (imports
   liberados, nomes perigosos bloqueados), mas isso barra erro e abuso
   acidental, não um autor mal-intencionado. Por isso vêm desligadas.
+- **Use o profile `tls` fora da sua máquina.** A chave de API vai num header:
+  sem HTTPS, ela e as mensagens do cliente trafegam em texto claro. Ver
+  [HTTPS](#https-profile-tls). O serviço em si fala HTTP — quem termina o TLS é
+  o Caddy na frente.
 - **Tools só alcançam endereços públicos.** O destino é resolvido e conferido
   antes de cada chamada, nos dois caminhos de rede (`kind="api"` e o `httpx` das
   tools Python). Libere um host interno legítimo em `TOOL_EGRESS_ALLOWLIST`.

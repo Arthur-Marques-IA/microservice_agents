@@ -23,6 +23,25 @@ class ServiceUnavailable(Exception):
     pass
 
 
+class TlsError(ServiceUnavailable):
+    """O serviço respondeu, mas o certificado não foi aceito.
+
+    Separado de `ServiceUnavailable` porque a saída dos dois é oposta: ali a
+    pergunta certa é "o serviço subiu?", aqui o serviço está de pé e o que falta
+    é confiar na CA. Tratar os dois igual manda quem opera olhar o lugar errado."""
+
+
+def _transport_failure(base_url: str, exc: Exception) -> ServiceUnavailable:
+    texto = str(exc)
+    if "SSL" in texto.upper() or "CERTIFICATE" in texto.upper():
+        return TlsError(
+            f"o certificado de {base_url} não foi aceito: {texto.strip()}. "
+            "Se ele vem de uma CA própria, aponte-a com KURO_CA_BUNDLE=/caminho/ca.pem "
+            "(ou --ca-bundle). Para um teste local com certificado autoassinado, --insecure."
+        )
+    return ServiceUnavailable(f"não consegui falar com {base_url} ({type(exc).__name__})")
+
+
 class Client:
     def __init__(
         self,
@@ -30,12 +49,15 @@ class Client:
         timeout: float = 120.0,
         transport: httpx.BaseTransport | None = None,
         api_key: str | None = None,
+        verify: bool | str = True,
     ):
         self.base_url = base_url.rstrip("/")
         # A chave vai no cliente, não em cada chamada: esquecer de passá-la em
         # um comando novo viraria um 401 sem explicação.
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
-        self._http = httpx.Client(base_url=self.base_url, timeout=timeout, transport=transport, headers=headers)
+        self._http = httpx.Client(
+            base_url=self.base_url, timeout=timeout, transport=transport, headers=headers, verify=verify
+        )
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         # Uma nova tentativa para falhas de transporte transitórias (port-forward do
@@ -46,8 +68,10 @@ class Client:
                 break
             except httpx.TransportError as exc:
                 retryable = method in ("GET", "PUT", "DELETE") or isinstance(exc, httpx.ConnectError)
-                if attempt == 2 or not retryable:
-                    raise ServiceUnavailable(f"não consegui falar com {self.base_url} ({type(exc).__name__})") from exc
+                # Certificado recusado não melhora na segunda tentativa.
+                falha = _transport_failure(self.base_url, exc)
+                if attempt == 2 or not retryable or isinstance(falha, TlsError):
+                    raise falha from exc
         if response.status_code >= 400:
             raise ApiError(response.status_code, _detail(response))
         if response.status_code == 204 or not response.content:
@@ -112,7 +136,7 @@ class Client:
                     raise ApiError(response.status_code, _detail(response))
                 yield from _parse_sse(response.iter_lines())
         except httpx.TransportError as exc:
-            raise ServiceUnavailable(f"não consegui falar com {self.base_url} ({type(exc).__name__})") from exc
+            raise _transport_failure(self.base_url, exc) from exc
 
     def analyze(self, body: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/analyze", json=body)
