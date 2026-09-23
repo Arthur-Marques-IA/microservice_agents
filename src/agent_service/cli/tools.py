@@ -183,16 +183,33 @@ def invoke(
     tool_name: str,
     arg: list[str] = typer.Option([], "--arg", "-a", help="Argumento nome=valor (repetível; valor em JSON quando possível)."),
     args_json: str | None = typer.Option(None, "--args-json", help="Argumentos como objeto JSON."),
+    dep: list[str] = typer.Option(
+        [],
+        "--dep",
+        "-d",
+        help="Simula o `dependencies` do /chat (nome=valor, repetível) — é o que preenche "
+        "um parâmetro com source='dependency'.",
+    ),
     function: str | None = typer.Option(None, "--fn", help="Função da toolkit (obrigatório para kind=builtin)."),
 ) -> None:
-    """Executa a tool isoladamente. Sai com código 1 se a tool falhar."""
+    """Executa a tool isoladamente. Sai com código 1 se a tool falhar.
+
+    Um parâmetro `source="dependency"` não vem dos argumentos: no `/chat` ele é
+    injetado pelo servidor a partir de `dependencies`. Use `-d` para testá-lo
+    sem montar um agente."""
     st = state(ctx)
     arguments = {**(parse_json_object(st, args_json, "--args-json") if args_json else {}), **parse_pairs(st, arg, "--arg")}
-    _invoke(st, tool_name, arguments, function)
+    _invoke(st, tool_name, arguments, function, parse_pairs(st, dep, "--dep"))
 
 
-def _invoke(st: State, tool_name: str, arguments: dict[str, Any], function: str | None) -> None:
-    result = call(st, st.client.invoke_tool, tool_name, arguments, function)
+def _invoke(
+    st: State,
+    tool_name: str,
+    arguments: dict[str, Any],
+    function: str | None,
+    dependencies: dict[str, Any] | None = None,
+) -> None:
+    result = call(st, st.client.invoke_tool, tool_name, arguments, function, dependencies)
     if st.json_mode:
         print_json(result)
     if not result["ok"]:  # a API responde 200 com ok=false quando a tool em si falha

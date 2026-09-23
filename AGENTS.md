@@ -79,9 +79,16 @@ cat conversa.json | kuro --json analyze classificador        # texto/JSON por st
 # Teto do texto de entrada: MAX_INPUT_CHARS (200000 caracteres), no /chat e no /analyze.
 
 # Feedback de conversa vira instrução (agentes conversacionais)
+# A nota é uma lista de regras com id, não um texto solto: o merge edita e remove
+# regra por id, e a resposta traz o `diff` do que mudou. Regras parecidas demais
+# são fundidas pelo servidor, sem depender de o modelo obedecer.
 kuro --json chat suporte -m "meu wifi caiu"
 kuro --json agents feedback suporte -m "deveria confirmar o CPF antes de dar detalhes"  # usa a sessão salva
-kuro --json agents feedback suporte --show                    # nota atual (markdown), já em uso nas próximas respostas
+kuro --json agents feedback suporte --show                    # regras atuais, com os ids
+kuro --json agents feedback suporte --remove a1b2c3           # apaga uma regra
+kuro --json agents feedback suporte --versions                # histórico
+kuro --json agents feedback suporte --rollback 2              # volta para as regras da v2
+kuro --json agents feedback suporte --clear --yes             # zera a nota e o histórico
 
 # Tools (sem montar agente)
 kuro --json tools list
@@ -91,6 +98,7 @@ kuro --json tools apply -f cep.json             # cria (precisa de tool_name e k
 kuro --json tools set cep enabled=false         # altera só esses campos (kind não muda)
 kuro --json tools delete cep --yes              # trava se algum agente usa a tool
 kuro --json tools invoke calculator --fn add -a a=2 -a b=3
+kuro --json tools invoke ficha -a assunto=fatura -d cpf=12345678900   # -d simula o `dependencies` do /chat
 
 # Execuções (Langfuse; um run leva alguns segundos para aparecer)
 kuro --json runs list --agent suporte -n 5
@@ -117,6 +125,7 @@ kuro --json collections create manuais --label "Manuais do produto"
 # é google. `ollama` não usa chave de API nenhuma:
 kuro --json collections create interna --label "Interna" --embedder ollama
 cat manual.txt | kuro --json collections add manuais --title "Manual v2"
+kuro --json collections add manuais -f manual.pdf             # arquivo (PDF, DOCX, CSV, TXT, MD...)
 kuro --json collections search manuais "prazo de garantia"   # o mesmo que o agente enxerga
 kuro --json agents set suporte knowledge_collection=manuais
 
@@ -160,8 +169,8 @@ chamada (com a URL já montada, porque um parâmetro `location="path"` pode comp
 uma tool apontando para dentro falha com 422; uma chamada recusada devolve o motivo ao modelo.
 Para um serviço interno legítimo, libere o host em `TOOL_EGRESS_ALLOWLIST`. O mesmo vale para o
 `httpx` das tools `kind="python"`.
-Para testar sem montar agente: `kuro tools invoke <tool> --args-json '{"x": 1}'`
-(a rota aceita também `dependencies`, via `POST /tools/{nome}/invoke`).
+Para testar sem montar agente: `kuro tools invoke <tool> --args-json '{"x": 1}'`,
+com `-d campo=valor` para os parâmetros `source="dependency"`.
 
 O formato do `apply` é o mesmo do `POST /agents`: `agent_type`, `name`, `instructions`, `tools`,
 `model_provider`, `model_id`, `model_credential_id`, `knowledge_collection`, `dependency_fields`,

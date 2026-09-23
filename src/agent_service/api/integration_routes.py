@@ -39,9 +39,16 @@ class DependencyContract(BaseModel):
 class IntegrationContract(BaseModel):
     agent_type: str
     name: str
+    kind: str = "conversational"
     prompt_version: int
+    endpoint: str
+    """Rota que quem integra chama: `/chat` num agente conversacional,
+    `/analyze` num analista — são contratos de corpo diferentes."""
     chat_url: str
-    stream_url: str
+    stream_url: str | None = None
+    """`None` em `kind="analysis"`: analista é one-shot, não tem streaming."""
+    response_schema: list[dict[str, Any]] = []
+    """Só em `kind="analysis"`: a forma do `result` que volta."""
     dependencies: list[DependencyContract]
     request_example: dict[str, Any]
     curl: str
@@ -93,16 +100,25 @@ def get_integration_contract(
     ]
 
     exemplo_dependencies = {d.name: d.example for d in dependencies if d.required or d.example is not None}
-    request_example: dict[str, Any] = {
-        "agent_type": agent_type,
-        "user_id": "usuario-123",
-        "session_id": "sessao-123",
-        "message": "Olá!",
-    }
+    # Um analista não recebe `message` nem sessão: o corpo dele é `document`, e a
+    # resposta é o objeto do `response_schema`. Um exemplo de `/chat` aqui manda
+    # quem integra montar a chamada errada.
+    kind = definition.get("kind") or "conversational"
+    is_analysis = kind == "analysis"
+    if is_analysis:
+        request_example = {"agent_type": agent_type, "document": "Texto a analisar."}
+    else:
+        request_example = {
+            "agent_type": agent_type,
+            "user_id": "usuario-123",
+            "session_id": "sessao-123",
+            "message": "Olá!",
+        }
     if exemplo_dependencies:
         request_example["dependencies"] = exemplo_dependencies
 
     base = base_url.rstrip("/")
+    endpoint = "/analyze" if is_analysis else "/chat"
     corpo = json.dumps(request_example, ensure_ascii=False, indent=2)
     # Com auth ligada o exemplo precisa do header: um cURL que não funciona é
     # pior que exemplo nenhum, porque manda quem integra procurar no lugar errado.
@@ -110,7 +126,7 @@ def get_integration_contract(
 
     auth_header = "  -H 'Authorization: Bearer $KURO_RUNTIME_API_KEY' \\\n" if auth_enabled() else ""
     curl = (
-        f"curl -X POST {base}/chat \\\n"
+        f"curl -X POST {base}{endpoint} \\\n"
         f"  -H 'Content-Type: application/json' \\\n"
         f"{auth_header}"
         f"  -d '{corpo}'"
@@ -119,9 +135,12 @@ def get_integration_contract(
     return IntegrationContract(
         agent_type=agent_type,
         name=definition["name"],
+        kind=kind,
         prompt_version=definition["prompt_version"],
-        chat_url=f"{base}/chat",
-        stream_url=f"{base}/chat/stream",
+        endpoint=endpoint,
+        chat_url=f"{base}{endpoint}",
+        stream_url=None if is_analysis else f"{base}/chat/stream",
+        response_schema=definition.get("response_schema") or [],
         dependencies=dependencies,
         request_example=request_example,
         curl=curl,

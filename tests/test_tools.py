@@ -6,8 +6,7 @@ exposto em `api/tools_routes.py`.
 import asyncio
 import copy
 import json
-import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 

@@ -15,6 +15,7 @@ partir de uma tool do agente analista), sem precisar montar um multipart/form.
 
 import logging
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from agno.knowledge.content import Content, FileData
@@ -130,6 +131,36 @@ async def add_text(
     # enquanto os vetores ficam em `knowledge_<coleção>`. Sem o nome da coleção
     # no hash, o mesmo texto em duas coleções vira uma linha só — e um
     # `skip_if_exists` de outra coleção poderia pular a indexação.
+    content.content_hash = knowledge._build_content_hash(content)
+    content.id = generate_id(f"{collection_name}:{content.content_hash}")
+    await knowledge._aload_content(content, upsert=False, skip_if_exists=True)
+    return content.id
+
+
+async def add_file(
+    collection_name: str,
+    *,
+    content_bytes: bytes,
+    filename: str,
+    name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    """Ingestão de um arquivo (PDF, DOCX, CSV, TXT...) numa coleção qualquer.
+
+    O AgentOS expõe `POST /knowledge/content`, mas ele só enxerga as coleções
+    registradas no boot e o console acabou preso à coleção padrão. Aqui a
+    coleção é resolvida por nome como em todo o resto — então vale para uma
+    criada depois do boot, e com o embedder dela (`documents/embedder.py`).
+    O leitor é escolhido pelo Agno a partir da extensão."""
+    knowledge = get_collection(collection_name)
+    extensao = Path(filename).suffix.lstrip(".").lower() or "txt"
+    content = Content(
+        name=name or Path(filename).stem,
+        file_data=FileData(content=content_bytes, type=extensao, filename=filename),
+        metadata=metadata,
+    )
+    # Mesmo id determinístico do `add_text`, pela mesma razão: a tabela de
+    # conteúdo é uma só para todas as coleções.
     content.content_hash = knowledge._build_content_hash(content)
     content.id = generate_id(f"{collection_name}:{content.content_hash}")
     await knowledge._aload_content(content, upsert=False, skip_if_exists=True)

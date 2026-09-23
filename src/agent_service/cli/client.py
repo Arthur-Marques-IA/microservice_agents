@@ -175,9 +175,21 @@ class Client:
     def delete_tool(self, tool_name: str) -> None:
         self._request("DELETE", f"/tools/{tool_name}")
 
-    def invoke_tool(self, tool_name: str, arguments: dict[str, Any], function_name: str | None) -> dict[str, Any]:
+    def invoke_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        function_name: str | None,
+        dependencies: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         return self._request(
-            "POST", f"/tools/{tool_name}/invoke", json={"arguments": arguments, "function_name": function_name}
+            "POST",
+            f"/tools/{tool_name}/invoke",
+            json={
+                "arguments": arguments,
+                "function_name": function_name,
+                "dependencies": dependencies or {},
+            },
         )
 
     # -- provedores e credenciais de modelo ----------------------------------
@@ -217,6 +229,15 @@ class Client:
 
     def add_document(self, name: str, body: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", f"/collections/{name}/documents", json=body)
+
+    def add_collection_file(self, name: str, *, filename: str, content: bytes, title: str | None) -> dict[str, Any]:
+        """Upload de arquivo para a collection (multipart) — PDF, DOCX, CSV..."""
+        return self._request(
+            "POST",
+            f"/collections/{name}/files",
+            files={"file": (filename, content)},
+            data={"name": title} if title else None,
+        )
 
     def search_collection(self, name: str, query: str, limit: int) -> list[dict[str, Any]]:
         return self._request("GET", f"/collections/{name}/search", params={"query": query, "limit": limit})

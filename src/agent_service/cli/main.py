@@ -324,7 +324,7 @@ def delete_credential(
         if not typer.confirm(f"Remover a credencial {credential_id}?"):
             raise typer.Exit()
     call(st, st.client.delete_credential, credential_id)
-    emit(st, {"deleted": credential_id}, lambda _: console.print(f"[green]✓[/] credencial removida"))
+    emit(st, {"deleted": credential_id}, lambda _: console.print("[green]✓[/] credencial removida"))
 
 
 # -- shell -----------------------------------------------------------------------

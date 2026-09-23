@@ -5,12 +5,13 @@ Um agente consulta uma collection quando aponta para ela:
 """
 
 import sys
+from pathlib import Path
 from typing import Any
 
 import typer
 from rich.table import Table
 
-from agent_service.cli.common import EXIT_USAGE, State, call, console, emit, fail, state
+from agent_service.cli.common import EXIT_USAGE, call, console, emit, fail, state
 
 app = typer.Typer(help="Collections de documentos (RAG): listar, criar, alimentar, buscar.")
 
@@ -138,9 +139,29 @@ def add_document(
     name: str,
     text: str | None = typer.Option(None, "--text", "-t", help="Texto a indexar; sem isto, lê de stdin."),
     title: str | None = typer.Option(None, "--title", help="Nome do documento."),
+    file: str | None = typer.Option(None, "--file", "-f", help="Arquivo a indexar (PDF, DOCX, CSV, TXT, MD...)."),
 ) -> None:
-    """Indexa um texto na collection. Ex.: `type manual.txt | kuro collections add manuais`."""
+    """Indexa um texto ou um arquivo na collection.
+
+    Ex.: `kuro collections add manuais -f manual.pdf`, ou
+    `type manual.txt | kuro collections add manuais`."""
     st = state(ctx)
+    if file is not None:
+        if text is not None:
+            fail(st, "use --file ou --text, não os dois", EXIT_USAGE)
+        caminho = Path(file)
+        if not caminho.is_file():
+            fail(st, f"arquivo não encontrado: {file}", EXIT_USAGE)
+        result = call(
+            st,
+            st.client.add_collection_file,
+            name,
+            filename=caminho.name,
+            content=caminho.read_bytes(),
+            title=title,
+        )
+        emit(st, result, lambda r: console.print(f"[green]✓[/] {caminho.name} indexado ({r['content_id']})"))
+        return
     if text is None:
         text = "" if sys.stdin.isatty() else sys.stdin.read()
         if not text.strip():

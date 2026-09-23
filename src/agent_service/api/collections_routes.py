@@ -13,15 +13,16 @@ import re
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import inspect, text
 
+from agent_service.config import get_settings
 from agent_service.db import get_db
 
 from agent_service.agents.store import list_definitions
 from agent_service.documents import store
-from agent_service.documents.collections import add_text, default_collection_name, search
+from agent_service.documents.collections import add_file, add_text, default_collection_name, search
 from agent_service.documents.embedder import (
     DEFAULT_EMBEDDER_PROVIDER,
     EMBEDDERS,
@@ -226,6 +227,34 @@ def delete_collection(collection_name: str) -> None:
 async def ingest_text(collection_name: str, request: AddTextRequest) -> dict[str, str]:
     _row_or_404(collection_name)
     content_id = await add_text(collection_name, text=request.text, name=request.name, metadata=request.metadata)
+    return {"content_id": content_id}
+
+
+@router.post("/{collection_name}/files", status_code=201)
+async def ingest_file(
+    collection_name: str,
+    file: UploadFile = File(..., description="PDF, DOCX, CSV, TXT, MD..."),
+    name: str | None = Form(default=None, description="Nome do documento (padrão: o do arquivo)."),
+) -> dict[str, str]:
+    """Indexa um arquivo na collection, com o embedder dela.
+
+    Existe além do `/knowledge/content` do AgentOS porque aquele só enxerga as
+    coleções registradas no boot — o console ficava preso à coleção padrão e a
+    CLI não tinha upload nenhum."""
+    _row_or_404(collection_name)
+    conteudo = await file.read()
+    if not conteudo:
+        raise HTTPException(status_code=422, detail="arquivo vazio")
+    limite = get_settings().max_attachment_mb * 1024 * 1024
+    if len(conteudo) > limite:
+        raise HTTPException(
+            status_code=413,
+            detail=f"arquivo tem {len(conteudo) // 1024 // 1024}MB e o limite é "
+            f"{get_settings().max_attachment_mb}MB (MAX_ATTACHMENT_MB)",
+        )
+    content_id = await add_file(
+        collection_name, content_bytes=conteudo, filename=file.filename or "documento", name=name
+    )
     return {"content_id": content_id}
 
 
