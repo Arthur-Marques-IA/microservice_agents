@@ -13,32 +13,58 @@ e processamento assíncrono) em `/knowledge/content`, além de busca em
 partir de uma tool do agente analista), sem precisar montar um multipart/form.
 """
 
+import logging
 from functools import lru_cache
 from typing import Any
 
 from agno.knowledge.content import Content, FileData
-from agno.knowledge.embedder.google import GeminiEmbedder
 from agno.knowledge.knowledge import Knowledge
 from agno.utils.string import generate_id
 from agno.vectordb.pgvector import PgVector
 
 from agent_service.config import get_settings
 from agent_service.db import get_db
-from agent_service.documents.store import SEED_COLLECTION, list_collection_names
+from agent_service.documents.embedder import (
+    EmbedderNotConfiguredError,
+    UnknownEmbedderProviderError,
+    build_embedder,
+)
+from agent_service.documents.store import SEED_COLLECTION, get_collection_row, list_collection_names
+
+
+logger = logging.getLogger(__name__)
+
+EmbedderError = (EmbedderNotConfiguredError, UnknownEmbedderProviderError)
 
 
 def collection_exists(name: str) -> bool:
     return name in list_collection_names()
 
 
-@lru_cache
 def get_collection(name: str) -> Knowledge:
-    """Retorna (criando se necessário) a coleção de documentos `name`."""
-    settings = get_settings()
+    """Retorna (criando se necessário) a coleção de documentos `name`.
+
+    O embedder vem do cadastro da collection (`documents/store.py`), não de uma
+    constante: coleção sem provedor gravado continua no Gemini, que é o que
+    todas usavam antes. O cache é por (nome, embedder) porque uma rotação de
+    credencial só é relevante no restart — a chave já está dentro do cliente."""
+    row = get_collection_row(name) or {}
+    return _build_collection(
+        name,
+        row.get("embedder_provider"),
+        row.get("embedder_model"),
+        row.get("embedder_dimensions"),
+    )
+
+
+@lru_cache
+def _build_collection(
+    name: str, embedder_provider: str | None, embedder_model: str | None, embedder_dimensions: int | None
+) -> Knowledge:
     vector_db = PgVector(
         table_name=f"knowledge_{name}",
-        db_url=settings.database_url,
-        embedder=GeminiEmbedder(api_key=settings.google_api_key),
+        db_url=get_settings().database_url,
+        embedder=build_embedder(embedder_provider, embedder_model, embedder_dimensions),
     )
     return Knowledge(
         name=name,
@@ -65,7 +91,17 @@ def all_collections() -> list[Knowledge]:
     padrao = default_collection_name()
     # A padrão primeiro: é ela que o AgentOS usa quando ninguém escolhe.
     ordenadas = [padrao] + [n for n in nomes if n != padrao] if padrao in nomes else nomes
-    return [get_collection(name) for name in ordenadas]
+
+    montadas = []
+    for name in ordenadas:
+        try:
+            montadas.append(get_collection(name))
+        except EmbedderError:
+            # Uma collection apontando para um provedor sem credencial não pode
+            # derrubar o serviço no boot: as outras seguem, e quem chamar esta
+            # recebe o erro na hora, com o motivo.
+            logger.warning("Collection %r ficou fora do AgentOS: embedder não configurado", name, exc_info=True)
+    return montadas
 
 
 async def add_text(

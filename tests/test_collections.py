@@ -149,3 +149,78 @@ def test_same_text_in_two_collections_gets_distinct_content_ids(manuais):
         id_general = asyncio.run(add_text("general", text="mesmo texto"))
         id_manuais = asyncio.run(add_text("manuais", text="mesmo texto"))
     assert id_general != id_manuais
+
+
+# -- embedder por collection -------------------------------------------------
+#
+# O embedder deixou de ser fixo no Gemini: cada collection grava o seu na
+# criação (ver documents/embedder.py). O que estes testes cobrem é o que
+# quebraria em silêncio — uma collection antiga sem a coluna, e a troca de
+# embedder depois de indexada.
+
+
+def test_collection_sem_embedder_gravado_continua_no_google(manuais):
+    """Linha anterior à coluna: `embedder_provider` nulo é google, não erro."""
+    from agent_service.documents import store as doc_store
+
+    doc_store.update_collection(manuais, label="Manuais")
+    row = doc_store.get_collection_row(manuais)
+    row["embedder_provider"] = None
+    with patch.object(doc_store, "get_collection_row", return_value=row):
+        detail = get_collection_detail(manuais)
+    assert detail["embedder_provider"] == "google"
+    assert detail["embedder_model"] == "gemini-embedding-001"
+
+
+def test_create_collection_guarda_o_embedder_escolhido():
+    created = create_collection(
+        CollectionIn(name="local", label="Local", embedder_provider="ollama", embedder_model="nomic-embed-text")
+    )
+    try:
+        assert created["embedder_provider"] == "ollama"
+        assert created["embedder_model"] == "nomic-embed-text"
+        # Fixo: o update não expõe o campo, então não há como trocá-lo pela API.
+        assert "embedder_provider" not in CollectionUpdateIn.model_fields
+    finally:
+        delete_collection("local")
+
+
+def test_create_collection_recusa_provedor_desconhecido():
+    with pytest.raises(HTTPException) as exc:
+        create_collection(CollectionIn(name="x", label="X", embedder_provider="cohere"))
+    assert exc.value.status_code == 422
+    assert "cohere" in str(exc.value.detail)
+
+
+def test_create_collection_recusa_provedor_sem_credencial():
+    """Falha na criação, não na primeira ingestão: uma collection que parece
+    pronta e só quebra ao receber documento é o pior dos dois erros."""
+    from agent_service.documents import embedder
+
+    with patch.object(embedder, "_credential", return_value=(None, None)):
+        with pytest.raises(HTTPException) as exc:
+            create_collection(CollectionIn(name="x", label="X", embedder_provider="openai"))
+    assert exc.value.status_code == 422
+    assert "openai" in str(exc.value.detail)
+
+
+def test_embedder_google_usa_a_credencial_cadastrada_antes_do_env():
+    """O bug original: o embedder ignorava /model-credentials e só olhava a
+    GOOGLE_API_KEY do ambiente."""
+    from agent_service.documents import embedder
+
+    with patch.object(embedder, "_credential", return_value=("chave-do-console", None)):
+        built = embedder.build_embedder("google")
+    assert built.api_key == "chave-do-console"
+
+
+def test_embedder_nao_chuta_dimensao_de_modelo_trocado():
+    """A dimensão padrão vale para o modelo padrão. Com outro modelo, aplicar a
+    mesma largura criaria a tabela pgvector errada — e busca errada é silenciosa."""
+    from agent_service.documents import embedder
+
+    with patch.object(embedder, "_credential", return_value=(None, None)):
+        padrao = embedder.build_embedder("ollama")
+        trocado = embedder.build_embedder("ollama", "mxbai-embed-large")
+    assert padrao.dimensions == 768
+    assert trocado.dimensions != 768

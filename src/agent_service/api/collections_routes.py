@@ -19,6 +19,14 @@ from pydantic import BaseModel, Field
 from agent_service.agents.store import list_definitions
 from agent_service.documents import store
 from agent_service.documents.collections import add_text, default_collection_name, search
+from agent_service.documents.embedder import (
+    DEFAULT_EMBEDDER_PROVIDER,
+    EMBEDDERS,
+    EmbedderNotConfiguredError,
+    UnknownEmbedderProviderError,
+    build_embedder,
+    resolve_spec,
+)
 
 router = APIRouter(prefix="/collections", tags=["collections"])
 
@@ -29,6 +37,14 @@ class CollectionIn(BaseModel):
     name: str = Field(..., description="Slug estável — vira o nome da tabela pgvector")
     label: str = Field(..., min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
+    embedder_provider: str | None = Field(
+        default=None,
+        description="Quem gera os vetores: google (padrão), openai ou ollama. Fixo depois de criada.",
+    )
+    embedder_model: str | None = Field(default=None, max_length=200)
+    embedder_dimensions: int | None = Field(
+        default=None, gt=0, le=8192, description="Só é preciso com um `embedder_model` fora do padrão do provedor."
+    )
 
 
 class CollectionUpdateIn(BaseModel):
@@ -43,6 +59,9 @@ class CollectionOut(BaseModel):
     label: str
     description: str | None
     is_seed: bool
+    embedder_provider: str
+    embedder_model: str
+    embedder_dimensions: int | None = None
     agents_using: list[str] = []
     """Agentes com `knowledge_collection` apontando para cá — avisa antes de excluir."""
     created_at: datetime
@@ -65,11 +84,42 @@ def _agents_using(name: str) -> list[str]:
 
 
 def _out(row: dict[str, Any]) -> dict[str, Any]:
+    # `embedder_provider` sai preenchido mesmo para as collections anteriores à
+    # coluna: quem lê precisa saber qual embedder responde, não se a linha é velha.
+    spec = resolve_spec(row.get("embedder_provider"))
     return {
         **row,
+        "embedder_provider": spec.provider,
+        "embedder_model": row.get("embedder_model") or spec.default_model_id,
         "agents_using": _agents_using(row["name"]),
         "is_default": row["name"] == default_collection_name(),
     }
+
+
+class EmbedderOut(BaseModel):
+    provider: str
+    label: str
+    default_model_id: str
+    default_dimensions: int | None
+    requires_api_key: bool
+    description: str
+    configured: bool
+    """A credencial existe agora — uma collection neste provedor indexaria."""
+
+
+@router.get("/embedders", response_model=list[EmbedderOut])
+def list_embedders() -> list[dict[str, Any]]:
+    """Provedores de embedding e quais já têm credencial. Declarada antes de
+    `/{collection_name}` porque o FastAPI casa as rotas na ordem."""
+    saida = []
+    for spec in EMBEDDERS.values():
+        try:
+            build_embedder(spec.provider)
+            configured = True
+        except EmbedderNotConfiguredError:
+            configured = False
+        saida.append({**vars(spec), "configured": configured})
+    return saida
 
 
 def _row_or_404(name: str) -> dict[str, Any]:
@@ -90,7 +140,20 @@ def create_collection(body: CollectionIn) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="name deve ser um slug: minúsculas, números, '-' ou '_'")
     if store.get_collection_row(body.name) is not None:
         raise HTTPException(status_code=409, detail=f"Coleção {body.name!r} já existe")
-    created = store.create_collection(name=body.name, label=body.label, description=body.description)
+    # Falhar aqui, e não na primeira ingestão: uma collection criada com um
+    # provedor sem chave parece pronta e só quebra quando alguém manda um documento.
+    try:
+        build_embedder(body.embedder_provider, body.embedder_model, body.embedder_dimensions)
+    except (UnknownEmbedderProviderError, EmbedderNotConfiguredError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    created = store.create_collection(
+        name=body.name,
+        label=body.label,
+        description=body.description,
+        embedder_provider=(body.embedder_provider or DEFAULT_EMBEDDER_PROVIDER).lower(),
+        embedder_model=body.embedder_model,
+        embedder_dimensions=body.embedder_dimensions,
+    )
     return _out(created)
 
 

@@ -308,6 +308,25 @@ O console também aceita upload de arquivo e URL, com chunking e processamento
 assíncrono (pipeline do AgentOS), por enquanto só na coleção padrão (`general`).
 Nas demais, use texto.
 
+#### Quem gera os vetores
+
+Cada collection escolhe o seu embedder **na criação**, entre `google` (padrão),
+`openai` e `ollama` — a chave sai de `/model-credentials`, a mesma dos modelos
+(o `google` ainda aceita a `GOOGLE_API_KEY` do `.env`). Com `ollama` o RAG não
+precisa de chave de API nenhuma e nada sai da máquina.
+
+```bash
+uv run kuro collections embedders                 # quem está pronto e quem falta credencial
+uv run kuro collections create interna --label "Interna" --embedder ollama
+```
+
+O embedder não muda depois: a tabela `knowledge_<nome>` guarda vetores de uma
+largura e de uma semântica só, então trocá-lo não daria erro — daria busca
+silenciosamente errada. Para trocar, crie outra collection e reindexe. Um
+`--embedder-model` fora do padrão do provedor pede também
+`--embedder-dimensions`, pelo mesmo motivo. Collections criadas antes disto
+continuam no Gemini, sem reindexar.
+
 ### Memória
 
 | Camada | Alcance | Como liga |

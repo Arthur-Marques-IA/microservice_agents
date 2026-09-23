@@ -110,7 +110,12 @@ kuro --json agents integrate suporte
 
 # Bases de conhecimento (RAG) — o agente consulta a que estiver em knowledge_collection
 kuro --json collections list
+kuro --json collections embedders                            # provedores de embedding e quais têm credencial
 kuro --json collections create manuais --label "Manuais do produto"
+# O embedder é escolhido na criação e não muda depois (a tabela de vetores é de
+# um embedder só; para trocar, crie outra collection e reindexe). Sem --embedder
+# é google. `ollama` não usa chave de API nenhuma:
+kuro --json collections create interna --label "Interna" --embedder ollama
 cat manual.txt | kuro --json collections add manuais --title "Manual v2"
 kuro --json collections search manuais "prazo de garantia"   # o mesmo que o agente enxerga
 kuro --json agents set suporte knowledge_collection=manuais

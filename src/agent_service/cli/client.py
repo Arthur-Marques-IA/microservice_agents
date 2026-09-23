@@ -193,6 +193,9 @@ class Client:
     def list_collections(self) -> list[dict[str, Any]]:
         return self._request("GET", "/collections")
 
+    def list_embedders(self) -> list[dict[str, Any]]:
+        return self._request("GET", "/collections/embedders")
+
     def create_collection(self, body: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/collections", json=body)
 

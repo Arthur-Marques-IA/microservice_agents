@@ -11,7 +11,22 @@ Sem Alembic: `init_store()` roda `create_all(checkfirst=True)` no startup.
 
 from typing import Any
 
-from sqlalchemy import Boolean, Column, DateTime, MetaData, String, Table, delete, func, insert, select, update
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    delete,
+    func,
+    insert,
+    inspect,
+    select,
+    text,
+    update,
+)
 
 from agent_service.db import get_db
 
@@ -24,6 +39,11 @@ document_collections = Table(
     Column("label", String, nullable=False),
     Column("description", String, nullable=True),
     Column("is_seed", Boolean, nullable=False, default=False),
+    # Embedder fixado na criação (ver documents/embedder.py). `NULL` = google,
+    # que é o que toda collection usava antes desta coluna existir.
+    Column("embedder_provider", String, nullable=True),
+    Column("embedder_model", String, nullable=True),
+    Column("embedder_dimensions", Integer, nullable=True),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column(
         "updated_at",
@@ -41,8 +61,23 @@ class CollectionNotFoundError(LookupError):
     pass
 
 
+def _add_missing_columns() -> None:
+    """`create_all(checkfirst=True)` não mexe em tabela existente — as colunas de
+    embedder precisam de `ALTER TABLE` (o projeto não usa Alembic)."""
+    engine = get_db().db_engine
+    inspector = inspect(engine)
+    if not inspector.has_table("document_collections"):
+        return
+    existing = {c["name"] for c in inspector.get_columns("document_collections")}
+    for column, tipo in (("embedder_provider", "VARCHAR"), ("embedder_model", "VARCHAR"), ("embedder_dimensions", "INTEGER")):
+        if column not in existing:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE document_collections ADD COLUMN {column} {tipo}"))
+
+
 def init_store() -> None:
     metadata.create_all(get_db().db_engine, checkfirst=True)
+    _add_missing_columns()
 
 
 def seed_default_collection() -> None:
@@ -73,11 +108,28 @@ def get_collection_row(name: str) -> dict[str, Any] | None:
     return _row_to_dict(row) if row is not None else None
 
 
-def create_collection(*, name: str, label: str, description: str | None = None, is_seed: bool = False) -> dict[str, Any]:
+def create_collection(
+    *,
+    name: str,
+    label: str,
+    description: str | None = None,
+    is_seed: bool = False,
+    embedder_provider: str | None = None,
+    embedder_model: str | None = None,
+    embedder_dimensions: int | None = None,
+) -> dict[str, Any]:
+    """O embedder é gravado aqui e não muda depois: os vetores de
+    `knowledge_<name>` têm a largura e a semântica de um embedder só."""
     with get_db().db_engine.begin() as conn:
         conn.execute(
             insert(document_collections).values(
-                name=name, label=label, description=description, is_seed=is_seed
+                name=name,
+                label=label,
+                description=description,
+                is_seed=is_seed,
+                embedder_provider=embedder_provider,
+                embedder_model=embedder_model,
+                embedder_dimensions=embedder_dimensions,
             )
         )
     return get_collection_row(name)  # type: ignore[return-value]

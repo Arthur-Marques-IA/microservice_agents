@@ -20,12 +20,17 @@ def _render_list(rows: list[dict[str, Any]]) -> None:
         console.print("Nenhuma collection. Crie uma com `kuro collections create <nome> --label \"Manuais\"`.")
         return
     table = Table(show_edge=False, header_style="bold")
-    for column in ("name", "nome", "descrição", "agentes"):
+    for column in ("name", "nome", "embedder", "descrição", "agentes"):
         table.add_column(column)
     for c in rows:
         seed = " [dim](seed)[/]" if c["is_seed"] else ""
+        embedder = f"{c.get('embedder_provider', 'google')}/{c.get('embedder_model', '—')}"
         table.add_row(
-            f"[cyan]{c['name']}[/]{seed}", c["label"], c["description"] or "—", ", ".join(c["agents_using"]) or "—"
+            f"[cyan]{c['name']}[/]{seed}",
+            c["label"],
+            embedder,
+            c["description"] or "—",
+            ", ".join(c["agents_using"]) or "—",
         )
     console.print(table)
 
@@ -49,11 +54,59 @@ def create_collection(
     name: str = typer.Argument(..., help="Slug: minúsculas, números, '-' ou '_'."),
     label: str = typer.Option(..., "--label", "-l", help="Nome exibido."),
     description: str | None = typer.Option(None, "--description", "-d"),
+    embedder: str | None = typer.Option(
+        None, "--embedder", help="Quem gera os vetores: google (padrão), openai ou ollama. Não muda depois."
+    ),
+    embedder_model: str | None = typer.Option(None, "--embedder-model", help="Modelo de embedding do provedor."),
+    embedder_dimensions: int | None = typer.Option(
+        None, "--embedder-dimensions", min=1, help="Só com um --embedder-model fora do padrão do provedor."
+    ),
 ) -> None:
-    """Cria uma collection (a tabela de vetores nasce na primeira ingestão)."""
+    """Cria uma collection (a tabela de vetores nasce na primeira ingestão).
+
+    O embedder fica fixo: a tabela `knowledge_<nome>` guarda vetores de um
+    embedder só. Para trocar, crie outra collection e reindexe."""
     st = state(ctx)
-    created = call(st, st.client.create_collection, {"name": name, "label": label, "description": description})
-    emit(st, created, lambda c: console.print(f"[green]✓[/] collection {c['name']} criada"))
+    created = call(
+        st,
+        st.client.create_collection,
+        {
+            "name": name,
+            "label": label,
+            "description": description,
+            "embedder_provider": embedder,
+            "embedder_model": embedder_model,
+            "embedder_dimensions": embedder_dimensions,
+        },
+    )
+    emit(
+        st,
+        created,
+        lambda c: console.print(
+            f"[green]✓[/] collection {c['name']} criada ({c['embedder_provider']}/{c['embedder_model']})"
+        ),
+    )
+
+
+@app.command("embedders")
+def list_embedders(ctx: typer.Context) -> None:
+    """Provedores de embedding e quais já têm credencial cadastrada."""
+    st = state(ctx)
+
+    def render(rows: list[dict[str, Any]]) -> None:
+        table = Table(show_edge=False, header_style="bold")
+        for column in ("provider", "modelo padrão", "chave", "pronto"):
+            table.add_column(column)
+        for e in rows:
+            table.add_row(
+                f"[cyan]{e['provider']}[/]",
+                e["default_model_id"],
+                "sim" if e["requires_api_key"] else "não precisa",
+                "sim" if e["configured"] else "[red]falta credencial[/]",
+            )
+        console.print(table)
+
+    emit(st, call(st, st.client.list_embedders), render)
 
 
 @app.command("delete")
