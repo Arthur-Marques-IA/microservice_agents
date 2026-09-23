@@ -57,14 +57,17 @@ se configura pelo console dá para configurar pela CLI, e vice-versa:
 | Collections: CRUD e busca | `/collections` | `collections ...` | Conhecimento |
 | Embedder de cada collection | `/collections/embedders` | `collections embedders` | diálogo nova coleção |
 | Indexar texto e arquivo | `/collections/{n}/documents`, `/files` | `collections add`, `add -f` | abas Texto e Arquivo |
+| Listar e apagar documento indexado | `/collections/{n}/documents` | `collections docs\|rm-doc` | tabela da coleção |
 | Provedores e credenciais de modelo | `/model-providers`, `/model-credentials` | `providers`, `credentials` | Chaves de API |
 | Execuções, traces e scores | `/observability/*` | `runs ...` | Logs |
-| Conversas salvas | `/sessions` | `sessions ...` | Conversas |
+| Conversas salvas, renomear e apagar | `/sessions` | `sessions list\|show\|rename\|delete` | Conversas |
 
-Duas exceções, e as duas são limitações reais e não esquecimento:
+Três exceções, e as três são limitações reais e não esquecimento:
 **indexar por URL** só funciona na coleção padrão (é o pipeline do AgentOS que
-não aceita escolher a coleção), e **`runs tail`**, que acompanha execuções ao
-vivo, existe só na CLI — no console, a lista de Logs atualiza sozinha.
+não aceita escolher a coleção); **`runs tail`**, que acompanha execuções ao
+vivo, existe só na CLI (no console, a lista de Logs atualiza sozinha); e
+**testar uma chave de API antes de salvá-la** existe só no console, porque na
+CLI o caminho é cadastrar e rodar `credentials test`.
 
 ---
 
@@ -557,10 +560,11 @@ que nada fica esperando resposta. As receitas estão em **[AGENTS.md](AGENTS.md)
 
 | Página | O que tem |
 |---|---|
-| **Playground** `/chat` | conversa em streaming com qualquer agente; URL por conversa, histórico reidratado; edição de `dependencies`; 👍/👎; link para o trace; código de integração pronto |
-| **Agentes** `/agents` | configuração (só os campos alterados vão no `PUT`), versões com diff, execuções filtráveis por versão e status, conversas, aba Integração com cURL/JS/Python |
-| **Tools** `/tools` | criação e edição dos três tipos, com formulário próprio por tipo, botão **Testar** e origem de cada parâmetro |
-| **Conhecimento** `/knowledge` | documentos com status, upload por texto, arquivo ou URL, teste de busca semântica |
+| **Playground** `/chat` | conversa em streaming com qualquer agente conversacional; URL por conversa, histórico reidratado; edição de `dependencies`; anexos; 👍/👎 — e o 👎 pergunta o que mudar e ensina o agente |
+| **Análise** `/analyze` | roda um agente analista: documento (ou anexo) entra, o objeto do `response_schema` sai |
+| **Agentes** `/agents` | configuração (só os campos alterados vão no `PUT`), tipo do agente e editor da saída estruturada, versões com diff, **Aprendizado** (as regras vindas de feedback, editáveis, com histórico e rollback), execuções, conversas e a aba Integração com o contrato vindo do backend |
+| **Tools** `/tools` | criação e edição dos três tipos, com formulário próprio por tipo, campos de dentro de parâmetros `object`/`array`, botão **Testar** (com `dependencies`) e origem de cada parâmetro |
+| **Conhecimento** `/knowledge` | documentos com status, escolha do embedder na criação, upload por texto ou arquivo em qualquer coleção (URL só na padrão), teste de busca semântica |
 | **Modelos** `/models` | credenciais por provedor, teste de chave |
 | **Logs** `/logs` | sessões e execuções de todos os agentes, KPIs, gráfico diário; cada sessão e cada run abrem em detalhe |
 | **Trace** `/runs/[id]` | cascata de spans (agente → modelo → tools), prompt formatado, tokens, custo e avaliações |

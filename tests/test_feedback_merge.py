@@ -138,3 +138,23 @@ def test_delete_zera_nota_e_historico(agente):
     clear_feedback(agente)
     assert get_feedback_note(agente) is None
     assert get_feedback_versions(agente) == []
+
+
+def test_negacao_nao_e_duplicata():
+    """"Não informe o saldo sem confirmar o CPF" e a versão sem o "não" batem
+    0,96 de semelhança e dizem o oposto. Fundi-las engoliria o feedback novo."""
+    atuais = _regras("Não informe o saldo sem confirmar o CPF do cliente")
+    plano = MergePlan(operacoes=[RuleOp(op="add", texto="Informe o saldo sem confirmar o CPF do cliente")])
+    finais, diff = apply_plan(atuais, plano)
+    assert len(finais) == 2, "a regra oposta precisa entrar, não ser fundida"
+    assert not diff["fundidas"]
+
+
+def test_regra_gigante_e_ignorada_com_motivo():
+    """Acima do teto da API, a regra faria o GET da nota falhar na validação da
+    resposta — a aba inteira quebraria por causa de uma regra."""
+    atuais = _regras(CPF)
+    plano = MergePlan(operacoes=[RuleOp(op="add", texto="x" * 600)])
+    finais, diff = apply_plan(atuais, plano)
+    assert [r["texto"] for r in finais] == [CPF]
+    assert diff["ignoradas"]

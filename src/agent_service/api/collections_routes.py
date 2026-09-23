@@ -22,7 +22,14 @@ from agent_service.db import get_db
 
 from agent_service.agents.store import list_definitions
 from agent_service.documents import store
-from agent_service.documents.collections import add_file, add_text, default_collection_name, search
+from agent_service.documents.collections import (
+    add_file,
+    add_text,
+    default_collection_name,
+    list_documents,
+    remove_document,
+    search,
+)
 from agent_service.documents.embedder import (
     DEFAULT_EMBEDDER_PROVIDER,
     EMBEDDERS,
@@ -253,9 +260,70 @@ async def ingest_file(
             f"{get_settings().max_attachment_mb}MB (MAX_ATTACHMENT_MB)",
         )
     content_id = await add_file(
-        collection_name, content_bytes=conteudo, filename=file.filename or "documento", name=name
+        collection_name,
+        content_bytes=conteudo,
+        filename=file.filename or "documento",
+        content_type=file.content_type,
+        name=name,
     )
     return {"content_id": content_id}
+
+
+class DocumentOut(BaseModel):
+    id: str
+    name: str | None = None
+    description: str | None = None
+    status: str | None = None
+    status_message: str | None = None
+    type: str | None = None
+    size: int | None = None
+    created_at: int | None = None
+    updated_at: int | None = None
+
+
+class DocumentPageMeta(BaseModel):
+    page: int
+    limit: int
+    total_count: int
+    total_pages: int
+
+
+class DocumentPage(BaseModel):
+    data: list[DocumentOut]
+    meta: DocumentPageMeta
+
+
+@router.get("/{collection_name}/documents", response_model=DocumentPage)
+async def list_collection_documents(
+    collection_name: str, limit: int = 50, page: int = 1
+) -> dict[str, Any]:
+    """O que está indexado nesta coleção, com o status do processamento.
+
+    Paginado porque o console lista isso numa tabela — e porque a tabela de
+    conteúdo é compartilhada por todas as coleções, então sem o recorte por
+    coleção (que o Agno faz por `linked_to`) viriam documentos alheios."""
+    _row_or_404(collection_name)
+    documentos, total = await list_documents(collection_name, limit=limit, page=page)
+    return {
+        "data": documentos,
+        "meta": {
+            "page": page,
+            "limit": limit,
+            "total_count": total,
+            "total_pages": max(1, -(-total // limit)),
+        },
+    }
+
+
+@router.delete("/{collection_name}/documents/{content_id}", status_code=204)
+async def delete_collection_document(collection_name: str, content_id: str) -> None:
+    """Remove o documento e os vetores dele — é como se tira da base uma
+    resposta errada que o agente estava citando."""
+    _row_or_404(collection_name)
+    if not await remove_document(collection_name, content_id):
+        raise HTTPException(
+            status_code=404, detail=f"Documento {content_id!r} não encontrado em {collection_name!r}"
+        )
 
 
 @router.get("/{collection_name}/search", response_model=list[SearchResult])

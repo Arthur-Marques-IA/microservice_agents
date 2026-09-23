@@ -142,6 +142,7 @@ async def add_file(
     *,
     content_bytes: bytes,
     filename: str,
+    content_type: str | None = None,
     name: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> str:
@@ -151,12 +152,18 @@ async def add_file(
     registradas no boot e o console acabou preso à coleção padrão. Aqui a
     coleção é resolvida por nome como em todo o resto — então vale para uma
     criada depois do boot, e com o embedder dela (`documents/embedder.py`).
-    O leitor é escolhido pelo Agno a partir da extensão."""
+
+    `type` recebe o MIME, como no router do AgentOS: é dele que o Agno escolhe
+    o leitor. Passar a extensão faria um PDF cair no leitor de texto."""
     knowledge = get_collection(collection_name)
-    extensao = Path(filename).suffix.lstrip(".").lower() or "txt"
     content = Content(
         name=name or Path(filename).stem,
-        file_data=FileData(content=content_bytes, type=extensao, filename=filename),
+        file_data=FileData(
+            content=content_bytes,
+            type=content_type or None,
+            filename=filename,
+            size=len(content_bytes),
+        ),
         metadata=metadata,
     )
     # Mesmo id determinístico do `add_text`, pela mesma razão: a tabela de
@@ -165,6 +172,44 @@ async def add_file(
     content.id = generate_id(f"{collection_name}:{content.content_hash}")
     await knowledge._aload_content(content, upsert=False, skip_if_exists=True)
     return content.id
+
+
+async def list_documents(
+    collection_name: str, *, limit: int = 50, page: int = 1
+) -> tuple[list[dict[str, Any]], int]:
+    """Documentos indexados nesta coleção.
+
+    A tabela de conteúdo (`agno_knowledge`) é uma só para todas as coleções — o
+    recorte vem do próprio Agno, que filtra por `linked_to=<nome da coleção>`."""
+    knowledge = get_collection(collection_name)
+    documentos, total = await knowledge.aget_content(limit=limit, page=page)
+    return [
+        {
+            "id": c.id,
+            "name": c.name,
+            "description": c.description,
+            "status": getattr(c.status, "value", c.status),
+            "status_message": c.status_message,
+            "type": c.file_type,
+            "size": c.size,
+            "created_at": c.created_at,
+            "updated_at": c.updated_at,
+        }
+        for c in documentos
+    ], total
+
+
+async def remove_document(collection_name: str, content_id: str) -> bool:
+    """Apaga o documento e os vetores dele. `False` se o id não é da coleção.
+
+    A conferência é necessária: `aremove_content_by_id` acha o documento pelo id
+    em toda a tabela, então sem isso um id de outra coleção seria apagado por
+    uma chamada endereçada a esta."""
+    knowledge = get_collection(collection_name)
+    documentos, _ = await knowledge.aget_content(limit=1000)
+    if not any(c.id == content_id for c in documentos):
+        return False
+    return await knowledge.aremove_content_by_id(content_id)
 
 
 async def search(collection_name: str, *, query: str, limit: int = 5) -> list[Any]:

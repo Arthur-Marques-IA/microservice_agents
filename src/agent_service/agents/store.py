@@ -167,6 +167,47 @@ def _add_missing_columns() -> None:
         if "version" not in colunas:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE agent_feedback_notes ADD COLUMN version INTEGER NOT NULL DEFAULT 1"))
+        _migrate_markdown_notes()
+
+
+def _migrate_markdown_notes() -> None:
+    """Converte, uma vez, as notas que eram markdown solto em regras gravadas.
+
+    Fazer isso só na leitura não bastava: os ids saíam diferentes a cada
+    consulta, então `--show` seguido de `--remove <id>` nunca casava, e não
+    havia versão 1 no histórico para onde voltar depois do primeiro merge."""
+    engine = get_db().db_engine
+    with engine.begin() as conn:
+        # O filtro é em Python: comparar uma coluna JSON com `[]` no SQL depende
+        # do dialeto, e no teste (sqlite) simplesmente não casava — a migração
+        # passava batido e os ids voltavam a ser gerados a cada leitura.
+        linhas = conn.execute(
+            select(
+                agent_feedback_notes.c.agent_type,
+                agent_feedback_notes.c.content,
+                agent_feedback_notes.c.rules,
+            )
+        ).all()
+        for agent_type, content, rules in linhas:
+            if rules or not content:
+                continue
+            regras = rules_from_markdown(content)
+            if not regras:
+                continue
+            conn.execute(
+                update(agent_feedback_notes)
+                .where(agent_feedback_notes.c.agent_type == agent_type)
+                .values(rules=regras, content=rules_to_markdown(regras))
+            )
+            conn.execute(
+                insert(agent_feedback_versions).values(
+                    agent_type=agent_type,
+                    version=1,
+                    rules=regras,
+                    content=rules_to_markdown(regras),
+                    origin="merge",
+                )
+            )
 
 
 def init_store() -> None:

@@ -48,6 +48,9 @@ _INSTRUCTIONS = [
     "'seja mais cuidadoso'). Sem marcador, sem numeração, sem comentários seus.",
 ]
 
+MAX_TEXTO = 500
+"""Mesmo teto de `FeedbackRule.texto` em `api/agents_routes.py`."""
+
 _SIMILARIDADE_DE_DUPLICATA = 0.9
 """Acima disto, duas regras dizem a mesma coisa. Calibrado para pegar reescrita
 ("confirme o CPF antes" vs "confirme o CPF antes de dar detalhes") sem fundir
@@ -100,12 +103,30 @@ def _normalizar(texto: str) -> str:
     return re.sub(r"[^a-z0-9 ]+", " ", sem_acento).strip()
 
 
+_NEGACOES = {"nao", "nunca", "jamais"}
+"""`sem` fica de fora de propósito: ele aparece nos dois lados de um par como
+"Não informe o saldo sem confirmar o CPF" / "Informe o saldo sem confirmar o
+CPF", que é exatamente o par que precisa ser distinguido."""
+
+
+def _nega(texto: str) -> bool:
+    return bool(_NEGACOES & set(_normalizar(texto).split()))
+
+
 def _duplicada(texto: str, anteriores: list[str]) -> int | None:
-    """Índice da regra anterior que diz a mesma coisa, se houver."""
+    """Índice da regra anterior que diz a mesma coisa, se houver.
+
+    Uma regra e a negação dela são quase idênticas como texto ("Não informe o
+    saldo sem confirmar o CPF" vs "Informe o saldo sem confirmar o CPF" batem
+    0,96) e opostas como instrução. Fundi-las engoliria o feedback novo em
+    silêncio, então diferença de negativa desfaz a semelhança."""
     alvo = _normalizar(texto)
     for i, outro in enumerate(anteriores):
-        if difflib.SequenceMatcher(None, alvo, _normalizar(outro)).ratio() >= _SIMILARIDADE_DE_DUPLICATA:
-            return i
+        if difflib.SequenceMatcher(None, alvo, _normalizar(outro)).ratio() < _SIMILARIDADE_DE_DUPLICATA:
+            continue
+        if _nega(texto) != _nega(outro):
+            continue
+        return i
     return None
 
 
@@ -132,6 +153,12 @@ def apply_plan(rules: list[dict[str, Any]], plan: MergePlan) -> tuple[list[dict[
         texto = (op.texto or "").strip()
         if not texto:
             diff["ignoradas"].append(f"{op.op} sem texto")
+            continue
+        if len(texto) > MAX_TEXTO:
+            # O mesmo teto do `FeedbackRule` da API. Deixar entrar uma regra
+            # maior faria o GET da nota falhar na validação da resposta — a aba
+            # inteira quebraria por causa de uma regra.
+            diff["ignoradas"].append(f"{op.op}: regra com mais de {MAX_TEXTO} caracteres")
             continue
         if op.op == "edit" and op.id in por_id:
             anterior = por_id[op.id]["texto"]

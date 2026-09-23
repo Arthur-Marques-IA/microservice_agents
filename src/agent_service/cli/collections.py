@@ -196,6 +196,49 @@ def add_document(
     emit(st, result, lambda r: console.print(f"[green]✓[/] indexado ({r['content_id']})"))
 
 
+@app.command("docs")
+def list_documents(ctx: typer.Context, name: str) -> None:
+    """Documentos indexados na collection, com o status do processamento."""
+    st = state(ctx)
+
+    def render(page: dict[str, Any]) -> None:
+        rows = page["data"]
+        if not rows:
+            console.print("[dim]nenhum documento indexado[/]")
+            return
+        table = Table(show_edge=False, header_style="bold")
+        for column in ("id", "nome", "tipo", "status"):
+            table.add_column(column)
+        for d in rows:
+            status = d.get("status") or "—"
+            cor = "green" if status == "completed" else "red" if status == "failed" else "yellow"
+            table.add_row(f"[cyan]{d['id']}[/]", d.get("name") or "—", d.get("type") or "—", f"[{cor}]{status}[/]")
+        console.print(table)
+
+    emit(st, call(st, st.client.list_collection_documents, name), render)
+
+
+@app.command("rm-doc")
+def remove_document(
+    ctx: typer.Context,
+    name: str,
+    content_id: str,
+    yes: bool = typer.Option(False, "--yes", "-y", help="Não pede confirmação (obrigatório sem TTY)."),
+) -> None:
+    """Tira um documento da base (o texto e os vetores dele). Não tem volta.
+
+    É como se corrige uma resposta errada que o agente estava citando: ache o
+    id com `kuro collections docs <coleção>`."""
+    st = state(ctx)
+    if not yes:
+        if not st.interactive:
+            fail(st, "confirme com --yes para remover sem TTY", EXIT_USAGE)
+        if not typer.confirm(f"Remover o documento {content_id!r} de {name!r}?"):
+            raise typer.Exit()
+    call(st, st.client.delete_collection_document, name, content_id)
+    emit(st, {"deleted": content_id}, lambda _: console.print(f"[green]✓[/] documento removido de {name}"))
+
+
 @app.command("search")
 def search_collection(
     ctx: typer.Context,

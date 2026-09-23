@@ -6,6 +6,7 @@ da resposta; erros viram `ApiError` (HTTP 4xx/5xx) ou `ServiceUnavailable`
 """
 
 import json
+import mimetypes
 from collections.abc import Iterator
 from typing import Any
 
@@ -237,13 +238,24 @@ class Client:
         return self._request("POST", f"/collections/{name}/documents", json=body)
 
     def add_collection_file(self, name: str, *, filename: str, content: bytes, title: str | None) -> dict[str, Any]:
-        """Upload de arquivo para a collection (multipart) — PDF, DOCX, CSV..."""
+        """Upload de arquivo para a collection (multipart) — PDF, DOCX, CSV...
+
+        O MIME vai junto porque é dele que o Agno escolhe o leitor do arquivo;
+        sem ele um PDF seria lido como texto."""
+        mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         return self._request(
             "POST",
             f"/collections/{name}/files",
-            files={"file": (filename, content)},
+            files={"file": (filename, content, mime)},
             data={"name": title} if title else None,
         )
+
+    def list_collection_documents(self, name: str, limit: int = 100) -> dict[str, Any]:
+        """`{data: [...], meta: {...}}` — a mesma forma que o console consome."""
+        return self._request("GET", f"/collections/{name}/documents", params={"limit": limit})
+
+    def delete_collection_document(self, name: str, content_id: str) -> None:
+        self._request("DELETE", f"/collections/{name}/documents/{content_id}")
 
     def search_collection(self, name: str, query: str, limit: int) -> list[dict[str, Any]]:
         return self._request("GET", f"/collections/{name}/search", params={"query": query, "limit": limit})
@@ -276,6 +288,11 @@ class Client:
     def session_runs(self, session_id: str, user_id: str | None = None) -> list[dict[str, Any]]:
         params = {"type": "agent", **({"user_id": user_id} if user_id else {})}
         return self._request("GET", f"/sessions/{session_id}/runs", params=params)
+
+    def rename_session(self, session_id: str, name: str) -> dict[str, Any]:
+        return self._request(
+            "POST", f"/sessions/{session_id}/rename", params={"type": "agent"}, json={"session_name": name}
+        )
 
     def delete_session(self, session_id: str, user_id: str | None = None) -> None:
         self._request("DELETE", f"/sessions/{session_id}", params={"user_id": user_id} if user_id else {})

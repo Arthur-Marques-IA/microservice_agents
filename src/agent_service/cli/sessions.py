@@ -99,6 +99,17 @@ def show_session(
     emit(st, call(st, st.client.session_runs, session_id, user_id), _render_transcript)
 
 
+@app.command("rename")
+def rename_session(ctx: typer.Context, session_id: str, name: str) -> None:
+    """Dá um nome à conversa — é o que aparece na lista, aqui e no console."""
+    st = state(ctx)
+    emit(
+        st,
+        call(st, st.client.rename_session, session_id, name),
+        lambda _: console.print(f"[green]✓[/] sessão {session_id} renomeada"),
+    )
+
+
 @app.command("delete")
 def delete_session(
     ctx: typer.Context,

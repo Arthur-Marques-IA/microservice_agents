@@ -86,10 +86,14 @@ export function KnowledgeView({ openAddInitially }: { openAddInitially: boolean 
 
   useEffect(() => {
     let cancelled = false;
+    // Pela coleção, não pela tabela inteira: a tabela de conteúdo do Agno é
+    // compartilhada por todas as coleções, então a lista antiga mostrava
+    // documentos de outras coleções sob a coleção selecionada.
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), page: String(page) });
-    requestJson<Paginated<KnowledgeContent>>(`/api/knowledge/content?${params}`, {
-      fallbackError: "Falha ao listar documentos",
-    })
+    requestJson<Paginated<KnowledgeContent>>(
+      `/api/collections/${encodeURIComponent(collection)}/documents?${params}`,
+      { fallbackError: "Falha ao listar documentos" }
+    )
       .then((data) => {
         if (!cancelled) {
           setResult({ requestKey, data, error: null, polling: hasActiveProcessing(data, Date.now()) });
@@ -103,7 +107,7 @@ export function KnowledgeView({ openAddInitially }: { openAddInitially: boolean 
     return () => {
       cancelled = true;
     };
-  }, [requestKey, page]);
+  }, [requestKey, page, collection]);
 
   const documents = result?.data?.data ?? [];
   const meta = result?.data?.meta;
@@ -157,10 +161,10 @@ export function KnowledgeView({ openAddInitially }: { openAddInitially: boolean 
     });
     if (!confirmed) return;
     try {
-      await requestJson(`/api/knowledge/content/${encodeURIComponent(doc.id)}`, {
-        method: "DELETE",
-        fallbackError: "Falha ao excluir documento",
-      });
+      await requestJson(
+        `/api/collections/${encodeURIComponent(collection)}/documents/${encodeURIComponent(doc.id)}`,
+        { method: "DELETE", fallbackError: "Falha ao excluir documento" }
+      );
       toast({ title: "Documento excluído", variant: "success" });
       reload();
     } catch (err) {

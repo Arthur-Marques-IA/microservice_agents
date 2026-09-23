@@ -111,6 +111,7 @@ kuro --json runs tail --agent suporte           # acompanha ao vivo; um objeto J
 # O user_id é o mesmo do chat: `cli` por padrão, ou KURO_USER_ID.
 kuro --json sessions list --agent suporte
 kuro --json sessions show <session_id>          # transcrição: cada mensagem, a resposta e os tokens
+kuro --json sessions rename <session_id> "Cliente X"
 kuro --json sessions delete <session_id> --yes  # apaga a conversa e as execuções dela (não tem volta)
 
 # Integração: como outro módulo chama este agente (endpoint, cURL, dependências obrigatórias)
@@ -128,6 +129,8 @@ kuro --json collections create manuais --label "Manuais do produto"
 kuro --json collections create interna --label "Interna" --embedder ollama
 cat manual.txt | kuro --json collections add manuais --title "Manual v2"
 kuro --json collections add manuais -f manual.pdf             # arquivo (PDF, DOCX, CSV, TXT, MD...)
+kuro --json collections docs manuais                          # o que está indexado, com o status
+kuro --json collections rm-doc manuais <content_id> --yes     # tira um documento da base (não tem volta)
 kuro --json collections search manuais "prazo de garantia"   # o mesmo que o agente enxerga
 kuro --json agents set suporte knowledge_collection=manuais
 

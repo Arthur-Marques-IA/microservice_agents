@@ -124,7 +124,10 @@ def get_integration_contract(
     # pior que exemplo nenhum, porque manda quem integra procurar no lugar errado.
     from agent_service.api.auth import auth_enabled
 
-    auth_header = "  -H 'Authorization: Bearer $KURO_RUNTIME_API_KEY' \\\n" if auth_enabled() else ""
+    # Aspas duplas: dentro de aspas simples o shell não expande a variável, e o
+    # cURL sairia com o literal `$KURO_RUNTIME_API_KEY` no header — 401 para
+    # quem copiasse e colasse, que é o oposto do que este endpoint existe para fazer.
+    auth_header = '  -H "Authorization: Bearer $KURO_RUNTIME_API_KEY" \\\n' if auth_enabled() else ""
     curl = (
         f"curl -X POST {base}{endpoint} \\\n"
         f"  -H 'Content-Type: application/json' \\\n"
