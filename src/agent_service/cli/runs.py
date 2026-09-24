@@ -124,6 +124,45 @@ def tail_runs(
             console.print()
 
 
+@app.command("sessions")
+def list_run_sessions(
+    ctx: typer.Context,
+    agent: str | None = typer.Option(None, "--agent", "-a", help="Filtra por agent_type."),
+    status: str | None = typer.Option(None, "--status", help="success | error"),
+    user_id: str | None = typer.Option(None, "--user-id"),
+    limit: int = typer.Option(100, "--limit", "-n", min=1, max=200, help="Execuções varridas."),
+) -> None:
+    """Execuções agrupadas por sessão: tokens, custo, erros e avaliações.
+
+    É o mesmo recorte da aba Logs do console. Não confundir com
+    `kuro sessions`, que lê a conversa no Postgres e funciona sem Langfuse —
+    isto vem do Langfuse e sai com 503 se ele estiver desligado."""
+    st = state(ctx)
+    page = call(st, st.client.run_sessions, agent_type=agent, status=status, user_id=user_id, limit=limit)
+    emit(st, page, _render_run_sessions)
+
+
+def _render_run_sessions(page: dict[str, Any]) -> None:
+    rows = page["items"]
+    if not rows:
+        console.print("[dim]nenhuma sessão no período varrido[/]")
+        return
+    table = Table(show_edge=False, header_style="bold")
+    for column in ("session_id", "agentes", "execuções", "erros", "tokens", "última atividade"):
+        table.add_column(column, no_wrap=True)
+    for s in rows:
+        table.add_row(
+            s["session_id"],
+            ", ".join(s.get("agent_types") or []) or "—",
+            str(s["run_count"]),
+            f"[red]{s['error_count']}[/]" if s["error_count"] else "0",
+            str(s["total_tokens"]),
+            str(s["last_activity"])[5:16].replace("T", " "),
+        )
+    console.print(table)
+    console.print(f"[dim]agregado sobre as {page['scanned']} execuções mais recentes[/]")
+
+
 @app.command("stats")
 def stats(
     ctx: typer.Context,

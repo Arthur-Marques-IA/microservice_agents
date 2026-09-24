@@ -268,6 +268,13 @@ class Client:
     def run_trace(self, run_id: str) -> dict[str, Any]:
         return self._request("GET", f"/observability/runs/{run_id}/trace")
 
+    def run_sessions(self, **params: Any) -> dict[str, Any]:
+        """Execuções agrupadas por sessão (Langfuse) — não confundir com
+        `list_sessions`, que é a conversa no Postgres."""
+        return self._request(
+            "GET", "/observability/sessions", params={k: v for k, v in params.items() if v is not None}
+        )
+
     def run_stats(self, **params: Any) -> dict[str, Any]:
         return self._request("GET", "/observability/stats", params={k: v for k, v in params.items() if v is not None})
 
