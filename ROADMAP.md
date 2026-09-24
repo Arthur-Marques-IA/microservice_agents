@@ -4,6 +4,54 @@
 > — os itens entregues ficam riscados, com o que foi feito e o que sobrou, em vez de sumirem.
 > Complementa a seção "Roadmap (fase 2+)" do README: reordena os itens de lá, acrescenta o que não
 > aparecia e diz o que cortar.
+>
+> **Repriorizado em 2026-09-24** para a migração dos agentes R4/R6/R8 do RegenteUDSP e para o
+> modo enxuto sem Langfuse. A ordem que vale agora é a da §0; as seções seguintes continuam como
+> detalhamento técnico de cada item.
+
+## 0. Prioridade atual: Kuro enxuto + migração do Regente
+
+**Fronteira com o Regente.** O Kuro decide e o Regente valida e executa. Ficam no Regente:
+claim/debounce por `conversation_id`, catálogo, preço, desconto, alçada, estado da ficha de
+matrícula (R8) e do reset de senha (R4), escrita no Flie/Vindi e o fallback quando o Kuro está fora
+do ar. O Kuro devolve uma decisão estruturada e rastreável. Todo número que ela contém é revalidado
+pelo Regente antes de qualquer efeito. Os três agentes são uma chamada por ciclo com JSON estrito,
+então entram como `kind="analysis"` via `/analyze`. Não dependem do procedural nem de memória.
+
+**Sprint 1, "Kuro Lite" (~1 sem.): produção sem Langfuse**
+1. `PostgresTraceStore` (tabelas `runs`, `run_spans`, `run_scores`) implementando o `TraceStore` de
+   `observability/trace_store.py`, com os mesmos modelos de resposta. A gravação é feita por
+   `traced_run_events`, com status sempre terminal. Já nasce com `tenant_id` (default `'default'`) e
+   `config_hash`. O Langfuse vira um exportador opcional (§4.1).
+2. `langfuse` e `openinference-instrumentation-agno` passam para um extra opcional
+   `[observability]`, com import lazy. O script de init do banco do Langfuse sai do caminho padrão.
+3. O Redis sai do core do compose se nada além do `messaging/` morto o usar (§8). A meta é subir o
+   serviço com Postgres + agent-service.
+4. `_resolve` passa a rodar em `run_in_threadpool` (H0.6, a opção mais barata).
+5. `kuro runs list/show/stats/tail` e `/observability/*` passam a funcionar sem Langfuse.
+
+**Sprint 2, governança mínima (~1–1,5 sem.)**
+1. Alembic com baseline e fim de `_add_missing_columns` (H0.3).
+2. Versão da config inteira, em versão enxuta: `config_hash` (instructions, modelo, tools, schema,
+   nota de feedback) gravado em cada run, com snapshot em `agent_versions`. O `/analyze` devolve
+   `run_id`, `agent_version` e `config_hash`, e o `run_id` serve de `decision_id` para a auditoria
+   do Regente.
+3. `kuro eval <agente> -f casos.jsonl` v0: faz replay de um dataset e compara **campos de decisão**
+   (acao, departamento, oferta_id, parcelas...) de forma determinística, com regras de policy
+   declarativas. Sai com 1 se houver regressão. O LLM-juiz fica para depois.
+4. `agent_type@draft` + `kuro agents promote`: o Regente chama sempre prod e o eval roda na draft.
+
+**Sprint 3+, migração em ondas (shadow → assistido → autônomo)**
+- R8 em shadow: o Regente usa `KuroClient` com `LLM_PROVIDER=legacy|kuro|shadow` e grava a decisão
+  do legado e a do Kuro lado a lado. O shadow vira o dataset do `kuro eval`. O R8 é promovido
+  quando a equivalência de decisão atingir a meta.
+- Depois vem o R4 (shadow → prod) e por último o R6 (shadow → assistido com
+  `R6_AUTO_EFFECT_ENABLED=false` → autônomo). A revalidação financeira fica 100% no Regente.
+
+**Adiado de propósito** (há um consumidor só): tabela `api_keys` multi-chave, multi-tenancy
+estrutural/RLS, RBAC no console, snapshot com cache e `LISTEN/NOTIFY`, dependências `tool_only`,
+procedural (§4.2, que migra depois a ficha do R8 e o reset do R4), sandbox Python (manter
+`CUSTOM_PYTHON_TOOLS_ENABLED` desligado em produção), exportador OpenTelemetry, MCP e GitOps.
 
 ## 1. Onde o produto está
 
@@ -319,15 +367,15 @@ da §4.1.
 
 ## 9. Sequência sugerida
 
-Os prazos são estimativas grosseiras para dar ordem de grandeza, não compromisso.
+Os prazos são estimativas grosseiras para dar ordem de grandeza, não compromisso. Repriorizada em
+2026-09-24 (ver §0): o que destrava o Regente vem antes, e o resto espera uma necessidade real.
 
 | Fase | Entregas | Resultado |
 |---|---|---|
-| **H0**, 2–3 sem. | CI, Alembic, `tenant_id`, API keys com escopos, bloqueio de egress, I/O fora do event loop | Pode ir para um ambiente compartilhado |
-| **H1a**, 1 sem. | Profiles `ui`/`observability`, `kuro up/down/status`, trace store em Postgres | Modo "só terminal" completo |
-| **H1b**, 3–4 sem. | Agente procedural + `state` no contrato + evento de conclusão (worker Redis de verdade) | Novo tipo de produto: fluxos guiados |
-| **H2**, 4–6 sem. | Versão da config inteira, `draft/prod` + `@versão`, `kuro eval` (replay), governança da nota de feedback | "Validada" deixa de ser promessa |
-| **H3**, contínuo | Servidor MCP, GitOps (`plan/apply` de diretório), templates, `kuro dash` (TUI), orçamento por agente | Um agente de IA opera o Kuro de ponta a ponta |
+| **S1**, 1 sem. | Trace store em Postgres, Langfuse como extra opcional, Redis fora do core, `_resolve` em threadpool | Produção enxuta com runs auditáveis |
+| **S2**, 1–1,5 sem. | Alembic, `config_hash` + `agent_versions`, `kuro eval` v0 determinístico, `@draft` + `promote` | Mudança de agente provada antes de ir para prod |
+| **S3+**, contínuo | R8 shadow → prod, R4 shadow → prod, R6 shadow → assistido → autônomo | Regente fora do `ServiceLLM::chatJson()` |
+| **Depois** | `api_keys`/tenant/RLS, procedural, `tool_only`, cache com `LISTEN/NOTIFY`, sandbox Python, `kuro up/down`, MCP, GitOps, `kuro dash` | Plataforma completa, por necessidade |
 
 A paridade CLI saiu desta linha: ela foi fechada junto com a §6 e está documentada como matriz no
 README.
