@@ -1,7 +1,9 @@
 # Roadmap do Kuro (agent-service)
 
-> Feito a partir da leitura do código em 2026-09-18 (commit `298a869`). Complementa a seção
-> "Roadmap (fase 2+)" do README: reordena os itens de lá, acrescenta o que não aparecia e diz o que cortar.
+> Feito a partir da leitura do código em 2026-09-18 (commit `298a869`) e revisado a cada batelada
+> — os itens entregues ficam riscados, com o que foi feito e o que sobrou, em vez de sumirem.
+> Complementa a seção "Roadmap (fase 2+)" do README: reordena os itens de lá, acrescenta o que não
+> aparecia e diz o que cortar.
 
 ## 1. Onde o produto está
 
@@ -101,12 +103,12 @@ docker compose --profile ui --profile observability up -d   # completo
 
 Para ficar redondo:
 
-- **Desligar o tracing junto com o profile.** Só remover os containers não basta. `LANGFUSE_ENABLED`
-  tem default `true` e o compose passa as chaves ao `agent-service` de qualquer jeito, então
-  `configure_tracing()` continua instrumentando e cada run tenta exportar para um host que não existe
-  (timeout de 20 s). No `agent-service`, use `LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}` e ligue a
-  variável só no comando completo. Sem isso, o modo enxuto fica mais lento e cheio de erro no log, o
-  contrário do que ele promete.
+- ~~**Desligar o tracing junto com o profile.**~~ **Feito.** Só remover os containers não bastava: o
+  compose passa as chaves ao `agent-service` de qualquer jeito, então `configure_tracing()` continuava
+  instrumentando e cada run tentava exportar para um host que não existe (timeout de 20 s). Hoje
+  `LANGFUSE_ENABLED` é `false` por padrão **nos três lugares** — `config.py`, `.env.example` e o
+  compose — e sobe com `LANGFUSE_ENABLED=true docker compose --profile observability up -d`. Os três
+  discordavam entre si, o que fazia o comportamento depender de como o serviço tinha subido.
 - **`kuro up [--ui] [--observability]` / `kuro down` / `kuro status`**: um wrapper do compose,
   para quem opera tudo pela CLI. Grave a escolha em `.kuro/config.toml`.
 - **Preço do modo enxuto: um trace store local.** `observability/trace_store.py` já é uma interface.
@@ -207,12 +209,15 @@ Regras de design:
    `"suporte@draft"`. A promoção vira `kuro agents promote suporte 12`, com rollback de um comando
    (resolve o item "rollback" do README de um jeito mais útil que um `activate`). Opcional: canário
    por % de sessões.
-4. **A nota de feedback precisa de governança.** Hoje ela é sobrescrita (`upsert_feedback_note`), fica
-   sem histórico, passa a valer na próxima mensagem de produção e o merge usa sempre o modelo padrão.
-   Sugestões:
-   - histórico + diff;
-   - `--dry-run` que mostra a nota resultante antes de salvar;
-   - modo "proposta", em que a nota cai em `draft` e passa pelo `kuro eval` antes de ir para prod;
+4. **A nota de feedback precisa de governança.** **Metade feita.** Ela deixou de ser um markdown
+   sobrescrito e virou uma lista de regras com id: o modelo devolve operações (`edit`/`remove`/`add`)
+   em vez de reescrever tudo, o servidor funde as regras parecidas demais, cada gravação vira uma
+   versão com rollback, e o `POST` responde com o `diff`. O merge também passou a usar o modelo e a
+   credencial do próprio agente, não o provedor padrão.
+   **Continua faltando** o que separa "editável" de "governado":
+   - `--dry-run` que mostra as regras resultantes antes de gravar;
+   - modo "proposta", em que as regras caem em `draft` e passam pelo `kuro eval` antes de ir para prod
+     — hoje elas valem na próxima mensagem de produção, sem revisão;
    - agrupar vários 👎 comentados num merge só (lote semanal), em vez de um merge por feedback.
 5. **Servidor MCP do Kuro.** Mesmas operações da CLI expostas como tools MCP (`create_agent`,
    `chat_agent`, `list_runs`, `run_eval`...). O Claude Code e outros agentes passam a operar sem
@@ -273,7 +278,7 @@ da §4.1.
 | `memory/mem0_backend.py` | `MemoryClient` é o Mem0 **hospedado**, então dados do cliente (CPF etc.) saem da sua infra. O post-hook salva só a mensagem do usuário, de forma síncrona | Mem0 OSS (`Memory`) sobre o mesmo pgvector, por questão de LGPD; salvar o par usuário/assistente; hook assíncrono em background |
 | ~~`agents/base.py` + `/analyze`~~ | **corrigido**: o agente de análise recebia `db=get_db()` e cada chamada criava uma sessão `analyze-<uuid>` no Postgres, com o documento inteiro dentro | `db=None` em `kind="analysis"`. O Agno guarda todo acesso a sessão com `if agent.db is not None`, e a busca na collection não usa `agent.db`, então o RAG continua valendo |
 | Anexos | O base64 fica no histórico da sessão e volta a cada turno (o `AGENTS.md` já avisa) | `POST /files` que devolve `file_id`, guardar em storage de objetos (o MinIO já está no compose) e no histórico manter só a referência |
-| `documents/collections.py` | Embedder fixo em Gemini e `lru_cache` sem invalidação | Embedder e credencial por collection (usando o cofre), com invalidação igual à dos agentes |
+| ~~`documents/collections.py`~~ | **corrigido em parte**: o embedder era fixo em Gemini com a `GOOGLE_API_KEY` do ambiente | Embedder e credencial por collection (`documents/embedder.py`), escolhidos na criação e vindos do cofre. O `lru_cache` agora é chaveado pelo embedder, mas **rotação de credencial ainda exige restart** — a chave já está dentro do cliente |
 | AgentOS no boot | Agentes e collections criados depois do boot não aparecem nas rotas do AgentOS | Se o playground do os.agno.com não for essencial, deixe o AgentOS só para ingestão, ou remova (ver §8) |
 | Seleção de modelo | Ainda não há fallback (o README já prevê) | Com vários provedores já cadastrados, dá para ligar `fallback_models` por agente agora |
 | Streaming | O `/chat` síncrono agrega o stream em memória | Timeout por run + cancelamento quando o cliente desconecta, e `max_tool_calls` por agente contra loops de tool |
@@ -307,7 +312,10 @@ da §4.1.
   procedural não resolva.
 - **Dependência do playground do os.agno.com.** Seu console já cobre isso. Manter o AgentOS só por ele
   traz a ressalva de "aparece só depois do restart".
-- **Multi-provedor de embeddings antes do trace store local e da auth.** O ganho é menor que o dos itens do H0/H1.
+- ~~**Multi-provedor de embeddings antes do trace store local e da auth.**~~ Este corte caiu: a auth
+  saiu antes (H0), e o que motivou o multi-provedor não foi ganho de qualidade e sim uma dependência
+  errada — o RAG exigia uma chave do Google mesmo num serviço rodando os agentes em OpenAI, e ignorava
+  o cofre de credenciais. O trace store local continua na frente do resto.
 
 ## 9. Sequência sugerida
 
@@ -319,4 +327,7 @@ Os prazos são estimativas grosseiras para dar ordem de grandeza, não compromis
 | **H1a**, 1 sem. | Profiles `ui`/`observability`, `kuro up/down/status`, trace store em Postgres | Modo "só terminal" completo |
 | **H1b**, 3–4 sem. | Agente procedural + `state` no contrato + evento de conclusão (worker Redis de verdade) | Novo tipo de produto: fluxos guiados |
 | **H2**, 4–6 sem. | Versão da config inteira, `draft/prod` + `@versão`, `kuro eval` (replay), governança da nota de feedback | "Validada" deixa de ser promessa |
-| **H3**, contínuo | Servidor MCP, GitOps (`plan/apply` de diretório), templates, paridade CLI, `kuro dash` (TUI), orçamento por agente | Um agente de IA opera o Kuro de ponta a ponta |
+| **H3**, contínuo | Servidor MCP, GitOps (`plan/apply` de diretório), templates, `kuro dash` (TUI), orçamento por agente | Um agente de IA opera o Kuro de ponta a ponta |
+
+A paridade CLI saiu desta linha: ela foi fechada junto com a §6 e está documentada como matriz no
+README.
