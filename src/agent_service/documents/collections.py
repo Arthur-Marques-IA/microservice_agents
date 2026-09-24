@@ -11,6 +11,9 @@ e processamento assíncrono) em `/knowledge/content`, além de busca em
 
 `add_text` cobre o caso de ingestão simples e programática (ex. futuramente a
 partir de uma tool do agente analista), sem precisar montar um multipart/form.
+`add_file` existe porque o pipeline do AgentOS só enxerga as collections
+registradas no boot e não aceita escolher a collection — aqui a collection é
+resolvida por nome, como no resto do módulo. A ingestão por URL continua lá.
 """
 
 import logging

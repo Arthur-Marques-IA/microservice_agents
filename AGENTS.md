@@ -106,6 +106,7 @@ kuro --json runs show <run_id>                  # mensagem, resposta, spans (LLM
 kuro --json runs score <run_id> 1 --comment "resposta correta"
 kuro --json runs stats --agent suporte          # total, erros, tokens, custo e série diária
 kuro --json runs tail --agent suporte           # acompanha ao vivo; um objeto JSON por execução, Ctrl+C sai
+kuro --json runs sessions --agent suporte       # execuções agrupadas por sessão (tokens, custo, erros)
 
 # Conversas guardadas (Postgres — funciona mesmo com o Langfuse desligado)
 # O user_id é o mesmo do chat: `cli` por padrão, ou KURO_USER_ID.

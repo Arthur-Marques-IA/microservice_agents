@@ -24,8 +24,8 @@
 | ~~SSRF nas tools de API~~ | **feito** — `tools/egress.py` resolve o destino e recusa loopback/privado/link-local antes de cada chamada, nos dois caminhos de rede (`kind="api"` e o `httpx` das tools Python), com `TOOL_EGRESS_ALLOWLIST` para o host interno legítimo |
 | Sem migrações | `agents/store.py::_add_missing_columns` faz `ALTER TABLE` à mão, já com 4 casos | Vai quebrar na primeira mudança de tipo ou de constraint |
 | ~~Sem CI~~ | **feito** — `.github/workflows/ci.yml`: pytest, lint e build do frontend, e build das duas imagens, em todo push e PR |
-| Versionamento parcial | só `instructions` gera versão; mudar modelo, tools ou a nota de feedback não gera | O trace grava `prompt-v{N}`, então uma regressão causada por troca de modelo ou pela nota fica invisível |
-| RAG preso ao Google | `documents/collections.py` fixa `GeminiEmbedder(settings.google_api_key)` | Um agente em OpenAI/Anthropic continua precisando de `GOOGLE_API_KEY`, e o cofre de credenciais é ignorado |
+| Versionamento parcial | só `instructions` gera `prompt_version`; mudar modelo ou tools não gera. A nota de feedback ganhou histórico e rollback próprios, mas numa linha separada | O trace grava `prompt-v{N}`, então uma regressão causada por troca de modelo fica invisível — e é preciso cruzar duas linhas do tempo para achar uma causada pelas regras |
+| ~~RAG preso ao Google~~ | **feito** — `documents/embedder.py`: cada collection escolhe o embedder na criação (`google`/`openai`/`ollama`) e a chave sai de `/model-credentials`, como a do modelo. Fixo depois de criada de propósito: a tabela de vetores é de um embedder só |
 | Modo só-terminal fica sem logs | com o Langfuse desligado, `kuro runs` não tem dados (o `health` avisa) | É exatamente o usuário que você quer atender com a "UI opcional" — que agora existe (profiles `ui`/`observability`), o que torna o trace store local da §4.1 mais urgente, não menos |
 
 ## 2. Posicionamento (para guiar as escolhas)
@@ -34,8 +34,8 @@
 
 Três superfícies com papéis bem separados: **API** para integrar (contrato estável), **CLI/MCP** para
 operar e corrigir, **UI** opcional para inspecionar. Toda feature nova deveria chegar primeiro na API +
-CLI e só depois na UI. A dívida que existia em tools (criar/editar só pela API e pela UI) foi paga;
-o que resta fora da CLI é o upload de arquivo para collection (ver §6).
+CLI e só depois na UI. A paridade entre as três está fechada e documentada como matriz no README
+(ver §6 para o que sobrou de fora e por quê).
 
 A palavra que sustenta o produto é **validada**. Você já tem as peças (versões, traces, scores), mas
 falta o ciclo que as une: *mudei o agente → provo que não piorou → publico*. A §5 cuida disso.
@@ -234,11 +234,17 @@ Regras de design:
 | Estatísticas (KPIs, custo por agente) | ✅ | ✅ | ✅ `kuro runs stats` |
 | Seguir execuções ao vivo | — | — | ✅ `kuro runs tail --agent x` (consulta repetida, não um stream) |
 | Restaurar versão | via PUT | ✅ | ✅ `kuro agents rollback <t> <v>` |
-| Upload de arquivo para collection | só na padrão | só na padrão | ❌ → `collections add -f doc.pdf`, liberando qualquer collection |
+| Upload de arquivo para collection | ✅ | ✅ | ✅ `collections add -f doc.pdf` |
+| Documentos indexados (listar, apagar) | ✅ | ✅ | ✅ `collections docs` / `rm-doc` |
+| Regras de feedback (ver, editar, histórico, rollback) | ✅ | ✅ aba Aprendizado | ✅ `agents feedback --show/--remove/--versions/--rollback` |
+| Rodar um agente analista | ✅ | ✅ página Análise | ✅ `kuro analyze` |
 
-A paridade fechou, menos o upload de arquivo: esse é o único item que precisa de
-rota nova (multipart + chunking) e esbarra no `/knowledge/content` do AgentOS, que
-hoje só alimenta a collection padrão. Decidir isso é o que falta.
+A paridade fechou. O upload de arquivo saiu do `/knowledge/content` do AgentOS
+(que só alimenta a collection padrão) para uma rota própria,
+`POST /collections/{nome}/files`, que resolve a collection por nome e usa o
+embedder dela. Sobraram três exceções, todas com motivo declarado no README:
+indexar por **URL** (ainda no pipeline do AgentOS, só na padrão), **`runs tail`**
+e **testar uma chave antes de salvá-la**.
 
 `kuro sessions` usa as rotas de sessão do AgentOS (Postgres), não
 `/observability/sessions`, justamente para continuar funcionando no modo

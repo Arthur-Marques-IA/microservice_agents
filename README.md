@@ -240,9 +240,21 @@ primeiro boot.
 - **Versões:** cada mudança em `instructions` grava uma versão nova. O console
   mostra o diff contra a atual e permite "restaurar no editor", que publica o
   texto antigo como versão nova. Mudar nome, tools ou modelo não gera versão.
-- **Nota de feedback:** `uv run kuro agents feedback suporte -m "..."` junta o
-  comentário com as regras anteriores numa nota em markdown, que passa a
-  valer nas respostas seguintes (`uv run kuro agents feedback suporte --show`).
+- **Regras de feedback:** `uv run kuro agents feedback suporte -m "..."` junta o
+  comentário com as regras que o agente já segue, e elas passam a valer na
+  resposta seguinte — sem virar uma versão de prompt.
+
+  A nota é uma **lista de regras com id**, não um texto solto. O modelo não
+  reescreve tudo: ele devolve operações sobre as regras que existem (editar,
+  remover, acrescentar) e o servidor aplica, fundindo as que ficarem parecidas
+  demais. É isso que impede os dois defeitos do formato anterior — regra
+  duplicada quando o feedback é repetido com outras palavras, e regra que some
+  sem ninguém ver. A resposta traz o `diff` do que mudou.
+
+  Cada gravação vira uma versão: `--show` lista as regras com os ids,
+  `--remove <id>` apaga uma, `--versions` mostra o histórico, `--rollback <n>`
+  volta e `--clear` zera. No console isso é a aba **Aprendizado** do agente, e
+  no chat o 👎 numa resposta pergunta o que deveria ter sido diferente.
 
 ### Tools
 
@@ -333,9 +345,10 @@ uv run kuro collections search manuais "prazo de garantia"      # o mesmo que o 
 uv run kuro agents set suporte knowledge_collection=manuais
 ```
 
-O console também aceita upload de arquivo e URL, com chunking e processamento
-assíncrono (pipeline do AgentOS), por enquanto só na coleção padrão (`general`).
-Nas demais, use texto.
+Arquivo e texto valem em qualquer coleção, pelo console ou pela CLI
+(`collections add -f manual.pdf`). Já a ingestão por **URL** passa pelo pipeline
+do AgentOS, que não aceita escolher a coleção — só alimenta a padrão
+(`general`).
 
 #### Quem gera os vetores
 
@@ -495,7 +508,10 @@ mesma conversa. Use `--new-session` para recomeçar.
 
 ```bash
 uv run kuro agents feedback suporte -m "deveria confirmar o CPF antes de dar detalhes"
-uv run kuro agents feedback suporte --show      # a nota que o agente segue agora
+uv run kuro agents feedback suporte --show          # as regras atuais, com os ids
+uv run kuro agents feedback suporte --remove a1b2c3 # apaga uma regra
+uv run kuro agents feedback suporte --versions      # histórico
+uv run kuro agents feedback suporte --rollback 2    # volta para as regras da v2
 ```
 
 **Investigar o que aconteceu**
@@ -506,6 +522,7 @@ uv run kuro runs show <run_id>                  # chamadas ao modelo, tools e av
 uv run kuro runs score <run_id> 1 --comment "resposta correta"
 uv run kuro runs tail --agent suporte           # acompanha as execuções ao vivo (Ctrl+C sai)
 uv run kuro runs stats --agent suporte          # total, erros, tokens, custo e série diária
+uv run kuro runs sessions --agent suporte       # execuções agrupadas por sessão (o mesmo recorte dos Logs)
 uv run kuro sessions list                       # conversas guardadas deste user_id
 uv run kuro sessions show <session_id>          # a transcrição, mensagem a mensagem
 ```
@@ -518,8 +535,13 @@ funciona mesmo com o tracing desligado.
 ```bash
 uv run kuro tools                               # escolhe uma tool e invoca
 uv run kuro tools invoke calculator --fn add -a a=2 -a b=3
+uv run kuro tools invoke ficha -a assunto=fatura -d cpf=12345678900  # -d simula o dependencies do /chat
 uv run kuro tools apply -f cep.json             # cria ou atualiza uma tool
 uv run kuro tools set cep enabled=false         # muda só esses campos
+uv run kuro collections embedders               # quem gera os vetores, e quem já tem credencial
+uv run kuro collections add manuais -f manual.pdf   # indexa um arquivo
+uv run kuro collections docs manuais            # o que está indexado, com o status
+uv run kuro collections rm-doc manuais <id> --yes   # tira um documento da base
 uv run kuro collections search manuais "prazo de garantia"
 uv run kuro credentials test <credential_id>    # valida a chave sem gastar tokens
 uv run kuro health                              # serviço, Langfuse e provedores

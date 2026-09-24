@@ -90,8 +90,9 @@ class Settings(BaseSettings):
     custom_python_tools_enabled: bool = False
     """Desligado por padrão: tools Python rodam num namespace restrito, mas
     NÃO são uma sandbox forte contra um autor mal-intencionado — só ligue se
-    quem tem acesso à API/console já for confiável (o serviço não tem
-    autenticação neste MVP)."""
+    quem tem a chave de escopo `admin` já for confiável, porque é ela que
+    permite criar uma tool Python (`api/auth.py`). Sem `ADMIN_API_KEY`
+    configurada, isso é qualquer um que alcance a porta."""
 
 
 @lru_cache
