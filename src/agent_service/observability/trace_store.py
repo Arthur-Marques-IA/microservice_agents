@@ -1,7 +1,9 @@
 """Leitura dos traces: o console e outros módulos veem os runs sem abrir o Langfuse.
 
-`TraceStore` é o contrato; `LangfuseTraceStore` o implementa sobre a API
-pública do Langfuse v4 (as chaves ficam só no servidor). As respostas usam os
+`TraceStore` é o contrato. O backend padrão é o `DbTraceStore` (`run_store.py`,
+no Postgres do serviço), que funciona sem Langfuse. `LangfuseTraceStore` o
+implementa sobre a API pública do Langfuse v4 (as chaves ficam só no servidor),
+para quem escolhe `TRACE_STORE_BACKEND=langfuse`. As respostas usam os
 modelos daqui, nunca o JSON do Langfuse — trocar o backend de traces (Cloud,
 Postgres próprio...) não muda o contrato de quem consome.
 
@@ -617,10 +619,17 @@ _store: TraceStore | None = None
 
 
 def get_trace_store() -> TraceStore | None:
-    """`None` quando o Langfuse está desligado — as rotas respondem 503."""
+    """O trace store local por padrão. Com `TRACE_STORE_BACKEND=langfuse`, `None`
+    enquanto o Langfuse estiver desligado — as rotas respondem 503."""
     global _store
-    if _store is None and get_langfuse() is not None:
-        settings = get_settings()
+    if _store is not None:
+        return _store
+    settings = get_settings()
+    if settings.trace_store_backend == "db":
+        from agent_service.observability.run_store import DbTraceStore
+
+        _store = DbTraceStore()
+    elif get_langfuse() is not None:
         _store = LangfuseTraceStore(
             base_url=settings.langfuse_base_url,
             public_key=settings.langfuse_public_key or "",

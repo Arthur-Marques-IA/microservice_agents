@@ -269,7 +269,7 @@ class Client:
         return self._request("GET", f"/observability/runs/{run_id}/trace")
 
     def run_sessions(self, **params: Any) -> dict[str, Any]:
-        """Execuções agrupadas por sessão (Langfuse) — não confundir com
+        """Execuções agrupadas por sessão (trace store) — não confundir com
         `list_sessions`, que é a conversa no Postgres."""
         return self._request(
             "GET", "/observability/sessions", params={k: v for k, v in params.items() if v is not None}
@@ -283,9 +283,8 @@ class Client:
 
     # -- sessões (rotas do AgentOS, no Postgres) -----------------------------
     #
-    # Não confundir com `/observability/sessions`: aquilo é um agrupamento dos
-    # traces do Langfuse; isto é a conversa em si, e funciona com o Langfuse
-    # desligado — é o que `kuro sessions` precisa.
+    # Não confundir com `/observability/sessions`: aquilo é um agrupamento das
+    # execuções registradas; isto é a conversa em si — é o que `kuro sessions` precisa.
 
     def list_sessions(self, **params: Any) -> dict[str, Any]:
         """`{data: [...], meta: {...}}` — sempre `type=agent`, o único que o serviço cria."""

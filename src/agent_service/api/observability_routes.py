@@ -1,7 +1,7 @@
 """Observabilidade exposta pelo serviço: execuções, traces e scores.
 
-Os traces ficam no Langfuse (ver `observability/tracing.py`), mas ninguém
-precisa abrir o Langfuse: estas rotas são o contrato estável para o console e
+As execuções ficam no trace store local (`observability/run_store.py`), e o
+Langfuse, quando ligado, é só um exportador a mais. Ninguém precisa abrir o Langfuse: estas rotas são o contrato estável para o console e
 para outros módulos — listar as execuções de um agente, ler o trace completo
 de um `run_id` e registrar avaliações (feedback do usuário final, notas de evals).
 """
@@ -69,7 +69,10 @@ class ScoreOut(BaseModel):
 def _store() -> TraceStore:
     store = get_trace_store()
     if store is None:
-        raise HTTPException(status_code=503, detail="Langfuse não está configurado neste serviço.")
+        raise HTTPException(
+            status_code=503,
+            detail="TRACE_STORE_BACKEND=langfuse, mas o Langfuse não está configurado neste serviço.",
+        )
     return store
 
 
@@ -117,7 +120,7 @@ def list_runs(
     """Execuções de todos os agentes (ou de um só, com `agent_type`), mais recentes
     primeiro, com tokens, custo e feedback — a página `/observability` do console usa isto.
 
-    Runs recém-terminados levam alguns segundos para aparecer (ingestão assíncrona).
+    Um run aparece logo depois de terminar (a gravação sai do caminho da resposta).
     """
     return _list_runs(
         agent_type=agent_type,
@@ -146,7 +149,7 @@ def list_agent_runs(
 ) -> RunPage:
     """Execuções do agente, mais recentes primeiro, com tokens, custo e feedback.
 
-    Runs recém-terminados levam alguns segundos para aparecer (ingestão assíncrona).
+    Um run aparece logo depois de terminar (a gravação sai do caminho da resposta).
     """
     return _list_runs(
         agent_type=agent_type,
@@ -172,9 +175,9 @@ def list_sessions(
 ) -> SessionPage:
     """Sessões recentes (execuções agrupadas por `session_id`), com tokens, custo e feedback somados.
 
-    Não é uma listagem paginada de verdade — a API do Langfuse não agrupa por
-    sessão — então isto varre um lote das execuções mais recentes e agrupa em
-    memória; `scanned` na resposta diz quantas execuções entraram na varredura.
+    No trace store local é um `GROUP BY` sobre o histórico inteiro; `scanned` diz
+    quantas execuções entraram. Com `TRACE_STORE_BACKEND=langfuse` a API não agrupa
+    por sessão, e isto varre só um lote das execuções mais recentes.
     """
     query = RunQuery(agent_type=agent_type, status=status, user_id=user_id, since=since, until=until, limit=limit)
     try:
@@ -195,8 +198,8 @@ def run_stats(
 ) -> RunStats:
     """Série diária (execuções, erros, tokens, custo) mais contagem por status — os gráficos do console.
 
-    Mesma limitação de `list_sessions`: agregado em memória sobre um lote das
-    execuções mais recentes, não sobre o histórico inteiro.
+    No trace store local cobre o histórico inteiro; com `TRACE_STORE_BACKEND=langfuse`,
+    só um lote das execuções mais recentes (ver `list_sessions`).
     """
     query = RunQuery(
         agent_type=agent_type,
@@ -250,15 +253,12 @@ def run_trace(run_id: str) -> RunTraceOut:
 
 @router.post("/scores", response_model=ScoreOut, status_code=202)
 def create_score(body: ScoreIn) -> ScoreOut:
-    """Enfileira o score para o Langfuse — a ingestão é assíncrona, daí o 202."""
-    try:
-        trace_id = tracing.score_run(
-            run_id=body.run_id,
-            name=body.name,
-            value=body.value,
-            comment=body.comment,
-            user_id=body.user_id,
-        )
-    except tracing.ObservabilityDisabledError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    """Grava o score no trace store local (e o enfileira para o Langfuse, se ligado)."""
+    trace_id = tracing.score_run(
+        run_id=body.run_id,
+        name=body.name,
+        value=body.value,
+        comment=body.comment,
+        user_id=body.user_id,
+    )
     return ScoreOut(run_id=body.run_id, trace_id=trace_id, name=body.name, value=body.value)

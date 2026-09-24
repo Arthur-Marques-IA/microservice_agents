@@ -110,7 +110,7 @@ def root(
 
 @app.command("health")
 def health(ctx: typer.Context) -> None:
-    """Diagnóstico: serviço no ar, Langfuse, tools Python e provedores configurados."""
+    """Diagnóstico: serviço no ar, autenticação, Langfuse, tools Python e provedores configurados."""
     st = state(ctx)
     report: dict[str, Any] = {"url": st.client.base_url}
     report["service"] = call(st, st.client.health)
@@ -146,7 +146,7 @@ def health(ctx: typer.Context) -> None:
         )
         obs = r["observability"]
         on = obs.get("enabled")
-        console.print(f"{'[green]●[/]' if on else '[yellow]●[/]'} Langfuse {'ligado' if on else 'desligado — `kuro runs` não terá dados'}")
+        console.print(f"{'[green]●[/]' if on else '[dim]●[/]'} Langfuse {'ligado (exportador)' if on else 'desligado — `kuro runs` lê do trace store local'}")
         py = r["python_tools"].get("enabled")
         console.print(f"{'[green]●[/]' if py else '[dim]●[/]'} tools Python {'ligadas' if py else 'desligadas'}")
         if isinstance(r["credentials"], list):

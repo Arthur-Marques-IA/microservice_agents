@@ -16,6 +16,7 @@ from typing import Any
 
 from agno.agent import Agent
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -26,7 +27,7 @@ from agent_service.agents.dependency_fields import DependencyValidationError, va
 from agent_service.agents.registry import UnknownAgentTypeError, get_agent_with_definition, list_agent_types
 from agent_service.config import get_settings
 from agent_service.documents.collections import EmbedderError
-from agent_service.observability.tracing import RUN_FAILED, RunContext, get_langfuse, traced_run_events
+from agent_service.observability.tracing import RUN_FAILED, RunContext, traced_run_events
 from agent_service.tools.registry import ToolBuildError, UnknownToolError
 
 logger = logging.getLogger(__name__)
@@ -55,10 +56,13 @@ class ChatResponse(BaseModel):
     run_id: str
     """Id do run — use em `POST /observability/scores` para enviar feedback."""
     trace_id: str | None = None
-    """Trace no Langfuse (`None` com a observabilidade desligada)."""
+    """Id do trace do run — o mesmo no trace store local e no Langfuse, se ligado."""
 
 
 def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
+    """Monta o agente e o contexto do run. Faz I/O síncrono no Postgres (definição,
+    nota de feedback, uma consulta por tool): chame via `run_in_threadpool`, nunca
+    direto numa rota `async` — travaria o event loop do worker inteiro."""
     try:
         agent, definition = get_agent_with_definition(request.agent_type)
     except UnknownAgentTypeError as exc:
@@ -138,7 +142,7 @@ def _check_input_size(text: str, field: str) -> None:
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
     _check_input_size(request.message, "message")
-    agent, run = _resolve(request, "chat")
+    agent, run = await run_in_threadpool(_resolve, request, "chat")
 
     chunks: list[str] = []
     final_content: str | None = None
@@ -156,7 +160,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         session_id=request.session_id,
         content=final_content if final_content is not None else "".join(chunks),
         run_id=run.run_id,
-        trace_id=run.trace_id if get_langfuse() is not None else None,
+        trace_id=run.trace_id,
     )
 
 
@@ -183,7 +187,8 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     objeto estruturado (`response_schema` do agente), não texto."""
     _check_input_size(request.document, "document")
     try:
-        agent, definition = get_agent_with_definition(request.agent_type)
+        # I/O síncrono no Postgres — fora do event loop (ver `_resolve`).
+        agent, definition = await run_in_threadpool(get_agent_with_definition, request.agent_type)
     except UnknownAgentTypeError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ToolBuildError, UnknownToolError, *EmbedderError) as exc:
@@ -241,7 +246,7 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         agent_type=request.agent_type,
         result=final_content.model_dump(mode="json"),
         run_id=run.run_id,
-        trace_id=run.trace_id if get_langfuse() is not None else None,
+        trace_id=run.trace_id,
     )
 
 
@@ -255,8 +260,8 @@ async def chat_stream(request: ChatRequest) -> EventSourceResponse:
     Eventos: `run` ({run_id, trace_id}, antes de tudo), `message` ({content}, a
     cada trecho), `usage` (métricas do run), `error` ({message}) e `done`.
     """
-    agent, run = _resolve(request, "chat.stream")
-    trace_id = run.trace_id if get_langfuse() is not None else None
+    agent, run = await run_in_threadpool(_resolve, request, "chat.stream")
+    trace_id = run.trace_id
 
     async def event_generator():
         yield {"event": "run", "data": json.dumps({"run_id": run.run_id, "trace_id": trace_id})}

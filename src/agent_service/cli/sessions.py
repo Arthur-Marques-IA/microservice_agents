@@ -119,7 +119,7 @@ def delete_session(
 ) -> None:
     """Apaga a conversa e todas as suas execuções. Não tem volta.
 
-    Os traces do Langfuse não são afetados: `kuro runs` continua mostrando o
+    O registro das execuções não é afetado: `kuro runs` continua mostrando o
     que aconteceu."""
     st = state(ctx)
     if not yes:

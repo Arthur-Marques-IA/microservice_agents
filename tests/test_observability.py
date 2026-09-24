@@ -220,13 +220,12 @@ def test_feedback_only_accepts_0_or_1():
         ScoreIn(run_id="run-42", value=0.5)
 
 
-def test_scores_need_langfuse_configured(monkeypatch):
+def test_scores_work_without_langfuse(monkeypatch):
     monkeypatch.setattr(tracing, "_client", None)
 
-    with pytest.raises(HTTPException) as exc:
-        create_score(ScoreIn(run_id="run-42", value=1))
+    score = create_score(ScoreIn(run_id="run-sem-langfuse", value=1, user_id="u1"))
 
-    assert exc.value.status_code == 503
+    assert score.trace_id == trace_id_for_run("run-sem-langfuse")
 
 
 def test_console_endpoints_degrade_without_langfuse(monkeypatch):

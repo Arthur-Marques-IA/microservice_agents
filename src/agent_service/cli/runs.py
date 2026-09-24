@@ -1,4 +1,4 @@
-"""`kuro runs`: execuções registradas no Langfuse (via /observability) e feedback."""
+"""`kuro runs`: execuções registradas no trace store do serviço (via /observability) e feedback."""
 
 import time
 from typing import Any
@@ -98,8 +98,8 @@ def tail_runs(
 ) -> None:
     """Acompanha as execuções ao vivo, como um `tail -f`. Ctrl+C para sair.
 
-    É uma consulta repetida ao Langfuse, não um stream: um run aparece alguns
-    segundos depois de terminar. Com `--json`, sai um objeto por execução."""
+    É uma consulta repetida, não um stream: um run aparece na primeira consulta
+    depois de terminar. Com `--json`, sai um objeto por execução."""
     st = state(ctx)
     seen: set[str] = set()
     first = True
@@ -135,8 +135,8 @@ def list_run_sessions(
     """Execuções agrupadas por sessão: tokens, custo, erros e avaliações.
 
     É o mesmo recorte da aba Logs do console. Não confundir com
-    `kuro sessions`, que lê a conversa no Postgres e funciona sem Langfuse —
-    isto vem do Langfuse e sai com 503 se ele estiver desligado."""
+    `kuro sessions`, que lê a conversa em si — isto agrupa as execuções
+    registradas (tokens, custo, erros)."""
     st = state(ctx)
     page = call(st, st.client.run_sessions, agent_type=agent, status=status, user_id=user_id, limit=limit)
     emit(st, page, _render_run_sessions)

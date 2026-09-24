@@ -1,6 +1,7 @@
 """Configurações centrais do microserviço, carregadas de variáveis de ambiente."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -16,10 +17,6 @@ class Settings(BaseSettings):
     # Banco de dados (memória comum, sessões, tracing, knowledge)
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/agent_service"
 
-    # Redis (mensageria assíncrona / cache de sessão)
-    redis_url: str = "redis://localhost:6379/0"
-    redis_stream_tasks: str = "agent-service:tasks"
-    redis_consumer_group: str = "agent-service:workers"
 
     # Provedor de modelo padrão
     default_model_provider: str = "google"
@@ -46,6 +43,11 @@ class Settings(BaseSettings):
     # Mem0 (camada de memória semântica opcional)
     mem0_api_key: str | None = None
     mem0_enabled: bool = False
+
+    # Onde `/observability/*` e `kuro runs` leem as execuções: "db" (tabelas
+    # `runs`/`run_spans`/`run_scores` no Postgres do serviço, sempre gravadas) ou
+    # "langfuse" (a API do Langfuse — exige o Langfuse ligado).
+    trace_store_backend: Literal["db", "langfuse"] = "db"
 
     # Observabilidade — Langfuse (sem as duas chaves, o tracing vira no-op)
     langfuse_enabled: bool = False

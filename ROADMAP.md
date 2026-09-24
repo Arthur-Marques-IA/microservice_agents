@@ -18,17 +18,26 @@ do ar. O Kuro devolve uma decisão estruturada e rastreável. Todo número que e
 pelo Regente antes de qualquer efeito. Os três agentes são uma chamada por ciclo com JSON estrito,
 então entram como `kind="analysis"` via `/analyze`. Não dependem do procedural nem de memória.
 
-**Sprint 1, "Kuro Lite" (~1 sem.): produção sem Langfuse**
-1. `PostgresTraceStore` (tabelas `runs`, `run_spans`, `run_scores`) implementando o `TraceStore` de
-   `observability/trace_store.py`, com os mesmos modelos de resposta. A gravação é feita por
-   `traced_run_events`, com status sempre terminal. Já nasce com `tenant_id` (default `'default'`) e
-   `config_hash`. O Langfuse vira um exportador opcional (§4.1).
-2. `langfuse` e `openinference-instrumentation-agno` passam para um extra opcional
-   `[observability]`, com import lazy. O script de init do banco do Langfuse sai do caminho padrão.
-3. O Redis sai do core do compose se nada além do `messaging/` morto o usar (§8). A meta é subir o
-   serviço com Postgres + agent-service.
-4. `_resolve` passa a rodar em `run_in_threadpool` (H0.6, a opção mais barata).
-5. `kuro runs list/show/stats/tail` e `/observability/*` passam a funcionar sem Langfuse.
+**Sprint 1, "Kuro Lite": produção sem Langfuse — feito**
+1. ~~Trace store local~~ **Feito** (`observability/run_store.py`): `DbTraceStore` com as tabelas
+   `runs`, `run_spans` (uma span por modelo e por tool call) e `run_scores`, implementando o
+   `TraceStore` com os mesmos modelos de resposta. `traced_run_events` grava todo run, com status
+   sempre terminal (inclusive cliente desconectado), numa thread fora do caminho da resposta. Uma
+   falha na gravação vira log e nunca derruba o run. Já nasce com `tenant_id` (default
+   `'default'`) e `config_hash` (vazio até o Sprint 2). Sessões e stats viraram `GROUP BY`. O
+   Langfuse passou a ser um exportador opcional, e `TRACE_STORE_BACKEND=langfuse` mantém a
+   leitura antiga.
+2. ~~Langfuse fora da instalação~~ **Feito**: `langfuse` e `openinference-instrumentation-agno`
+   foram para o extra `[observability]` (import lazy; a imagem só o inclui com
+   `KURO_EXTRAS="--extra observability"`). O `trace_id` é derivado sem o SDK, com o mesmo valor.
+   Ficou para depois: o script de init do banco do Langfuse ainda roda no Postgres do núcleo
+   (cria um banco vazio, custo desprezível).
+3. ~~Redis fora do core~~ **Feito**: o `messaging/` morto foi removido (§8), junto com a
+   dependência `redis` e o `REDIS_URL`. O núcleo sobe com Postgres + agent-service.
+4. ~~I/O fora do event loop~~ **Feito em parte**: `/chat`, `/chat/stream` e `/analyze` resolvem o
+   agente em `run_in_threadpool`. O snapshot com cache e `LISTEN/NOTIFY` continua em aberto.
+5. ~~`kuro runs` sem Langfuse~~ **Feito**: `list/show/stats/tail/sessions/score` e
+   `/observability/*` leem do trace store local, e o `health` não avisa mais "sem dados".
 
 **Sprint 2, governança mínima (~1–1,5 sem.)**
 1. Alembic com baseline e fim de `_add_missing_columns` (H0.3).
@@ -76,7 +85,7 @@ procedural (§4.2, que migra depois a ficha do R8 e o reset do R4), sandbox Pyth
 | ~~Sem CI~~ | **feito** — `.github/workflows/ci.yml`: pytest, lint e build do frontend, e build das duas imagens, em todo push e PR |
 | Versionamento parcial | só `instructions` gera `prompt_version`; mudar modelo ou tools não gera. A nota de feedback ganhou histórico e rollback próprios, mas numa linha separada | O trace grava `prompt-v{N}`, então uma regressão causada por troca de modelo fica invisível — e é preciso cruzar duas linhas do tempo para achar uma causada pelas regras |
 | ~~RAG preso ao Google~~ | **feito** — `documents/embedder.py`: cada collection escolhe o embedder na criação (`google`/`openai`/`ollama`) e a chave sai de `/model-credentials`, como a do modelo. Fixo depois de criada de propósito: a tabela de vetores é de um embedder só |
-| Modo só-terminal fica sem logs | com o Langfuse desligado, `kuro runs` não tem dados (o `health` avisa) | É exatamente o usuário que você quer atender com a "UI opcional" — que agora existe (profiles `ui`/`observability`), o que torna o trace store local da §4.1 mais urgente, não menos |
+| ~~Modo só-terminal fica sem logs~~ | **feito** — `observability/run_store.py`: todo run fica no Postgres do serviço, e o Langfuse virou um exportador opcional |
 
 ## 2. Posicionamento (para guiar as escolhas)
 
@@ -372,7 +381,7 @@ Os prazos são estimativas grosseiras para dar ordem de grandeza, não compromis
 
 | Fase | Entregas | Resultado |
 |---|---|---|
-| **S1**, 1 sem. | Trace store em Postgres, Langfuse como extra opcional, Redis fora do core, `_resolve` em threadpool | Produção enxuta com runs auditáveis |
+| ~~**S1**~~ feito | Trace store em Postgres, Langfuse como extra opcional, Redis fora do core, `_resolve` em threadpool | Produção enxuta com runs auditáveis |
 | **S2**, 1–1,5 sem. | Alembic, `config_hash` + `agent_versions`, `kuro eval` v0 determinístico, `@draft` + `promote` | Mudança de agente provada antes de ir para prod |
 | **S3+**, contínuo | R8 shadow → prod, R4 shadow → prod, R6 shadow → assistido → autônomo | Regente fora do `ServiceLLM::chatJson()` |
 | **Depois** | `api_keys`/tenant/RLS, procedural, `tool_only`, cache com `LISTEN/NOTIFY`, sandbox Python, `kuro up/down`, MCP, GitOps, `kuro dash` | Plataforma completa, por necessidade |

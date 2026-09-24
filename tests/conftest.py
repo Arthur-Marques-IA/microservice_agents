@@ -1,9 +1,13 @@
 import os
+import tempfile
+from pathlib import Path
 
 from cryptography.fernet import Fernet
 
 os.environ.setdefault("GOOGLE_API_KEY", "test-key")
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+# Arquivo, não `:memory:`: o SQLite em memória é um banco por thread, e as rotas
+# fazem o I/O do banco numa thread do pool (`run_in_threadpool`).
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{Path(tempfile.mkdtemp()) / 'agent_service.db'}")
 os.environ.setdefault("CREDENTIALS_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
 from agent_service.agents.seed import seed_default_agents  # noqa: E402
@@ -13,11 +17,13 @@ from agent_service.tools.seed import seed_default_tools  # noqa: E402
 from agent_service.documents.store import init_store as init_collection_store  # noqa: E402
 from agent_service.documents.store import seed_default_collection  # noqa: E402
 from agent_service.tools.store import init_store as init_tool_store  # noqa: E402
+from agent_service.observability.run_store import init_store as init_run_store  # noqa: E402
 
 init_store()
 init_tool_store()
 init_model_provider_store()
 init_collection_store()
+init_run_store()
 seed_default_collection()
 seed_default_tools()
 seed_default_agents()
@@ -26,6 +32,7 @@ import socket  # noqa: E402
 
 import pytest  # noqa: E402
 
+from agent_service.observability import run_store  # noqa: E402
 from agent_service.tools import egress  # noqa: E402
 
 _IP_PUBLICO = "93.184.216.34"
@@ -56,3 +63,10 @@ def dns_deterministico(monkeypatch):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_IP_PUBLICO, port))]
 
     monkeypatch.setattr(egress.socket, "getaddrinfo", resolve)
+
+
+@pytest.fixture(autouse=True)
+def gravacao_sincrona(monkeypatch):
+    """O trace store local grava numa thread sem esperar, para não atrasar a
+    resposta. Nos testes grava na hora, para o teste poder ler logo em seguida."""
+    monkeypatch.setattr(run_store, "_submit", lambda fn: fn())

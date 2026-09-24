@@ -16,16 +16,13 @@ dependencies = [
     "fastapi>=0.141.1",
     "google-genai>=2.23.0",
     "httpx>=0.28",
-    "langfuse>=4.15.3",
     "ollama>=0.4",
     "openai>=1.0",
-    "openinference-instrumentation-agno>=1.0.10",
     "pgvector>=0.5.0",
     "psycopg[binary]>=3.3.5",
     "pydantic-settings>=2.15.0",
     "python-multipart>=0.0.32",
     "questionary>=2.1",
-    "redis>=8.1.0",
     "rich>=13",
     "sqlalchemy>=2.0.52",
     "sse-starlette>=3.4.11",
@@ -37,6 +34,12 @@ dependencies = [
 kuro = "agent_service.cli.main:main"
 
 [project.optional-dependencies]
+# Exportador opcional para o Langfuse. Sem ele, as execuções ficam só no trace
+# store local (Postgres) — o que já alimenta `kuro runs` e `/observability/*`.
+observability = [
+    "langfuse>=4.15.3",
+    "openinference-instrumentation-agno>=1.0.10",
+]
 mem0 = [
     "mem0ai>=2.0.20",
 ]
@@ -52,6 +55,8 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    # Os testes do exportador usam o SDK do Langfuse de verdade (sem rede).
+    "agent-service[observability]",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]

@@ -100,7 +100,7 @@ kuro --json tools delete cep --yes              # trava se algum agente usa a to
 kuro --json tools invoke calculator --fn add -a a=2 -a b=3
 kuro --json tools invoke ficha -a assunto=fatura -d cpf=12345678900   # -d simula o `dependencies` do /chat
 
-# Execuções (Langfuse; um run leva alguns segundos para aparecer)
+# Execuções (trace store no Postgres do serviço; funciona sem Langfuse)
 kuro --json runs list --agent suporte -n 5
 kuro --json runs show <run_id>                  # mensagem, resposta, spans (LLM/tools), scores
 kuro --json runs score <run_id> 1 --comment "resposta correta"
@@ -108,7 +108,7 @@ kuro --json runs stats --agent suporte          # total, erros, tokens, custo e 
 kuro --json runs tail --agent suporte           # acompanha ao vivo; um objeto JSON por execução, Ctrl+C sai
 kuro --json runs sessions --agent suporte       # execuções agrupadas por sessão (tokens, custo, erros)
 
-# Conversas guardadas (Postgres — funciona mesmo com o Langfuse desligado)
+# Conversas guardadas (a transcrição em si)
 # O user_id é o mesmo do chat: `cli` por padrão, ou KURO_USER_ID.
 kuro --json sessions list --agent suporte
 kuro --json sessions show <session_id>          # transcrição: cada mensagem, a resposta e os tokens

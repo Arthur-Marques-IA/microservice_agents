@@ -21,27 +21,20 @@ services:
       timeout: 5s
       retries: 10
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "${REDIS_BIND:-127.0.0.1:6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   agent-service:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Imagem enxuta por padrão. Para exportar para o Langfuse:
+        # `KURO_EXTRAS="--extra observability" docker compose build agent-service`
+        KURO_EXTRAS: ${KURO_EXTRAS:-}
     env_file:
       - .env
     environment:
       # Sobrepõe o .env (feito para `uv run` local): dentro da rede do
       # compose os serviços se enxergam pelo nome, na porta interna.
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/agent_service
-      REDIS_URL: redis://redis:6379/0
       # Traces saem pela rede interna; os links do console usam o endereço do host.
       LANGFUSE_BASE_URL: http://langfuse-web:3000
       LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-http://localhost:3100}
@@ -76,8 +69,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
       # Sem depender do Langfuse de propósito: tracing é best-effort e o serviço
       # sobe (e responde) mesmo com o Langfuse fora do ar.
 
@@ -109,7 +100,7 @@ services:
         condition: service_healthy
 
   frontend:
-    # `docker compose up -d` sobe só o núcleo (postgres, redis, agent-service).
+    # `docker compose up -d` sobe só o núcleo (postgres, agent-service).
     # O console entra com `--profile ui`.
     profiles: ["ui"]
     restart: unless-stopped

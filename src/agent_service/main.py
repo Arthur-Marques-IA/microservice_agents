@@ -4,7 +4,7 @@ Monta um FastAPI próprio com o contrato estável (`agent_service.api.routes`)
 e o passa como `base_app` para o `AgentOS` do Agno, que adiciona por cima as
 rotas nativas de execução/streaming de agentes, sessões e knowledge (usadas
 pelo console e pelo playground em os.agno.com). Ver README para como conectar
-o playground. Os traces vão para o Langfuse (`observability/tracing.py`).
+o playground. Cada execução fica no trace store local (`observability/run_store.py`).
 """
 
 from agno.os import AgentOS
@@ -28,6 +28,7 @@ from agent_service.documents.collections import all_collections
 from agent_service.documents.store import init_store as init_collection_store
 from agent_service.documents.store import seed_default_collection
 from agent_service.models.store import init_store as init_model_provider_store
+from agent_service.observability.run_store import init_store as init_run_store
 from agent_service.observability.tracing import configure_tracing
 from agent_service.tools.seed import seed_default_tools
 from agent_service.tools.store import init_store as init_tool_store
@@ -41,6 +42,7 @@ init_tool_store()
 init_collection_store()
 seed_default_collection()
 init_model_provider_store()
+init_run_store()
 seed_default_tools()
 seed_default_agents()
 

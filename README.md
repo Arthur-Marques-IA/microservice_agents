@@ -81,30 +81,31 @@ cp .env.example .env
 # gere a chave de cifra com:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
-docker compose up -d --build                       # núcleo: postgres, redis, agent-service
+docker compose up -d --build                       # núcleo: postgres, agent-service
 uv run kuro health                                 # serviço, autenticação, Langfuse, provedores
 ```
 
-O núcleo sobe sozinho. Console e observabilidade são **opcionais**, cada um num
-profile do Compose — o peso real é o Langfuse (ClickHouse + MinIO + Redis +
-worker, ~16 GB recomendados), e quem só quer terminal não precisa dele:
+O núcleo sobe sozinho, com dois containers, e já registra cada execução no
+próprio Postgres (`kuro runs`, `/observability/*`). Console e Langfuse são
+**opcionais**, cada um num profile do Compose. O Langfuse (ClickHouse + MinIO +
+Redis + worker, ~16 GB recomendados) é só um exportador a mais para análise
+profunda, e a imagem nem o instala por padrão:
 
 ```bash
 docker compose --profile ui up -d                              # + console web
+KURO_EXTRAS="--extra observability" docker compose build agent-service   # imagem com o exportador
 LANGFUSE_ENABLED=true docker compose --profile ui --profile observability up -d   # tudo
 ```
 
 > Com o profile `observability` fora, `LANGFUSE_ENABLED` fica `false` por padrão.
-> Sem isso o serviço continuaria instrumentando e cada execução tentaria exportar
-> para um host que não existe — 20 s de timeout por run.
+> Ligado com o Langfuse fora do ar, cada execução pagaria o timeout do exportador.
 
 | Serviço | Endereço | Profile | Para quê |
 |---|---|---|---|
 | API | http://127.0.0.1:58000 | (núcleo) | contrato de integração; `/docs` tem o OpenAPI |
 | Postgres | `127.0.0.1:55432` | (núcleo) | pgvector; porta fora do padrão para não colidir |
-| Redis | `127.0.0.1:6379` | (núcleo) | mensageria |
 | Console | http://localhost:3000 | `ui` | playground, agentes, tools, base de conhecimento, logs |
-| Langfuse | http://localhost:3100 | `observability` | traces, tokens e custo por execução |
+| Langfuse | http://localhost:3100 | `observability` | exportador opcional: análise profunda dos traces |
 
 As portas são publicadas **só em `127.0.0.1`**. Para expor numa rede, não mude
 `AGENT_SERVICE_BIND`: suba o profile `tls`, que põe HTTPS na frente.
@@ -160,9 +161,8 @@ curl -X POST http://127.0.0.1:58000/chat -H "Content-Type: application/json" \
 
 > **Máquina com pouca RAM?** O Langfuse self-hosted (ClickHouse, MinIO, Redis
 > e dois serviços) pede ~16 GB. Numa máquina de 8 GB ele sozinho deixou as
-> respostas 4x mais lentas. Para testar, suba só o núcleo e desligue o tracing
-> (`LANGFUSE_ENABLED=false` no `.env`):
-> `docker compose up -d postgres redis agent-service frontend`.
+> respostas 4x mais lentas. O padrão já é sem ele: `docker compose up -d`
+> (mais `--profile ui` para o console) — as execuções continuam registradas.
 
 ---
 
@@ -527,8 +527,8 @@ uv run kuro sessions list                       # conversas guardadas deste user
 uv run kuro sessions show <session_id>          # a transcrição, mensagem a mensagem
 ```
 
-`runs` lê os traces do Langfuse; `sessions` lê a conversa no Postgres, então
-funciona mesmo com o tracing desligado.
+`runs` lê as execuções registradas (tokens, custo, spans); `sessions` lê a
+conversa em si. Os dois funcionam sem Langfuse.
 
 **Tools, conhecimento e modelos**
 
@@ -611,8 +611,11 @@ console fica no `localStorage` do navegador.
 Cada run registra a mensagem, as `dependencies`, cada chamada ao modelo
 (prompt, resposta, tokens, latência, custo) e cada tool call, com `user_id`,
 `session_id`, agente e `prompt-v{N}`. O `run_id` é gerado antes do run, então
-toda resposta aponta para o próprio trace. O envio não atrasa a resposta, e
-com o Langfuse fora do ar os runs seguem normais, só sem rastreio.
+toda resposta aponta para o próprio trace. Tudo isso fica no trace store local
+(tabelas `runs`, `run_spans` e `run_scores` no Postgres do serviço), gravado
+fora do caminho da resposta, com status sempre terminal (`success`, `error` ou
+`interrupted`). Com `LANGFUSE_ENABLED=true` os traces também vão para o
+Langfuse, que vira um exportador a mais.
 
 ```bash
 uv run kuro runs list --agent suporte -n 5            # latência, tokens, custo, 👍/👎
@@ -624,13 +627,12 @@ curl "http://127.0.0.1:58000/observability/stats?agent_type=suporte"
 
 Filtros: `agent_type`, `prompt_version`, `status` (`success`/`error`/`interrupted`),
 `user_id`, `session_id`, `since`/`until` (ISO 8601), `limit` (≤ 100) e `cursor`.
-Um run leva alguns segundos para aparecer (a ingestão é assíncrona).
-`/sessions` e `/stats` agregam em memória um lote das execuções recentes (o
-campo `scanned` diz quantas), porque a API do Langfuse não agrupa por sessão
-nem por dia.
+`/sessions` e `/stats` são `GROUP BY` sobre o histórico inteiro. Com
+`TRACE_STORE_BACKEND=langfuse` a leitura passa a vir da API do Langfuse, que
+não agrupa por sessão nem por dia: aí eles agregam só um lote das execuções
+recentes (o campo `scanned` diz quantas).
 
-O Langfuse roda no compose como armazenamento interno: ninguém precisa abrir
-a UI dele. Se precisar, ela fica em `http://localhost:3100`, só na máquina
+Quando ligado, o Langfuse roda no compose sem ninguém precisar abrir a UI dele. Se precisar, ela fica em `http://localhost:3100`, só na máquina
 local (login em `LANGFUSE_INIT_USER_EMAIL`/`LANGFUSE_INIT_USER_PASSWORD`). Para
 usar o Langfuse Cloud, remova os serviços `langfuse-*` do compose e aponte
 `LANGFUSE_BASE_URL=https://cloud.langfuse.com`. Troque todos os valores
@@ -653,8 +655,7 @@ src/agent_service/
   models/         catálogo de provedores, credenciais cifradas, criação do modelo
   memory/         memória comum (Agno) e Mem0
   documents/      collections de documentos (pgvector)
-  observability/  tracing (Langfuse + OpenTelemetry) e leitura de traces
-  messaging/      Redis Streams (produtor; consumidor ainda não ligado)
+  observability/  trace store local (Postgres), exportador Langfuse opcional e leitura de traces
   cli/            CLI kuro
   main.py         FastAPI + AgentOS
 frontend/         console Next.js (App Router, Tailwind, componentes próprios em components/ui/)
@@ -663,7 +664,7 @@ tests/            pytest
 
 **Stack:** Python 3.12, [Agno](https://docs.agno.com) (agentes, memória, tools,
 knowledge) e [AgentOS](https://docs.agno.com/agent-os) (sessões e ingestão),
-FastAPI, PostgreSQL + pgvector, Redis Streams, Langfuse, Next.js + TypeScript +
+FastAPI, PostgreSQL + pgvector, Langfuse (opcional), Next.js + TypeScript +
 Tailwind, Docker Compose.
 
 ---
@@ -676,16 +677,17 @@ Tailwind, Docker Compose.
 | `KURO_API_DOMAIN` / `KURO_TLS_EMAIL` | `localhost` / — | domínio e e-mail do certificado (profile `tls`) |
 | `AGENT_SERVICE_BIND` | `127.0.0.1:58000` | onde a API é publicada no host |
 | `LANGFUSE_ENABLED` | `false` | ligue junto com o profile `observability` |
+| `TRACE_STORE_BACKEND` | `db` | de onde `kuro runs` e `/observability/*` leem: `db` ou `langfuse` |
 | `GOOGLE_API_KEY` | — | chave do Gemini (provedor padrão) |
 | `CREDENTIALS_ENCRYPTION_KEY` | — | chave Fernet que cifra as credenciais de modelo; **obrigatória** para cadastrar chaves |
 | `DEFAULT_MODEL_PROVIDER` / `DEFAULT_MODEL_ID` | `google` / `gemini-2.5-flash` | modelo de quem não define um |
-| `DATABASE_URL` / `REDIS_URL` | localhost | sobrescritos dentro do compose |
+| `DATABASE_URL` | localhost | sobrescrito dentro do compose |
 | `MAX_ATTACHMENT_MB` | `20` | limite por anexo |
 | `MAX_INPUT_CHARS` | `200000` | teto do texto de entrada (`message` do `/chat`, `document` do `/analyze`) |
 | `CUSTOM_PYTHON_TOOLS_ENABLED` | `false` | liga a execução de tools `python` |
 | `TOOL_EGRESS_ALLOWLIST` | — | hosts internos que as tools podem alcançar (vazio = só endereços públicos) |
 | `MEM0_ENABLED` / `MEM0_API_KEY` | `false` / — | habilita agentes com `memory_backend: "mem0"` |
-| `LANGFUSE_ENABLED` | `false` | liga o tracing — suba junto o profile `observability` |
+| `LANGFUSE_ENABLED` | `false` | liga o exportador — exige o extra `observability` e o profile de mesmo nome |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` | valores de dev | conexão com o Langfuse |
 | `LANGFUSE_TIMEOUT_SECONDS` | `20` | timeout do envio de traces |
 | `AGENT_SERVICE_URL` (frontend) | — | endereço interno da API, só no servidor Next.js |
@@ -697,9 +699,9 @@ Tailwind, Docker Compose.
 ## Desenvolvimento
 
 ```bash
-# backend fora do Docker (precisa de postgres e redis do compose rodando)
-docker compose up -d postgres redis
-uv sync
+# backend fora do Docker (precisa do postgres do compose rodando)
+docker compose up -d postgres
+uv sync                     # o grupo dev já traz o extra `observability`, usado nos testes
 uv run uvicorn agent_service.main:app --app-dir src --reload
 
 # frontend
@@ -767,8 +769,8 @@ Leia antes de expor o serviço fora de uma rede confiável:
   hora, mas só aparecem nas rotas nativas do AgentOS (e no playground de
   os.agno.com) depois de um restart.
 - **Mem0 hospedado** envia as mensagens dos usuários para os servidores do Mem0.
-- **Langfuse self-hosted é pesado** (~16 GB recomendados). Ver
-  [Comece em 5 minutos](#comece-em-5-minutos) para rodar sem ele.
+- **Langfuse self-hosted é pesado** (~16 GB recomendados). Por isso é opcional
+  e desligado por padrão — o serviço registra as execuções sem ele.
 
 ---
 
@@ -777,12 +779,11 @@ Leia antes de expor o serviço fora de uma rede confiável:
 O plano completo, com diagnóstico, prioridades e o que cortar, está em
 **[ROADMAP.md](ROADMAP.md)**. Os próximos passos:
 
-- **Fundação:** autenticação por API key com escopos (`runtime`/`admin`),
-  bloqueio de IPs internos nas tools de API, Alembic, CI e `tenant_id` antes de existirem dados.
-- **Leve por padrão:** Docker Compose profiles (`ui`, `observability`) e
-  observabilidade em Postgres atrás do `TraceStore`, com o Langfuse como
-  destino OTLP opcional. Medido em 2026-09-18: numa máquina de 7,3 GB, um "oi"
-  levava 22 s com o Langfuse local e 5,3 s sem ele.
+- **Governança mínima para o Regente:** Alembic, versão da configuração
+  inteira (`config_hash`) em cada run, `kuro eval` determinístico e canais
+  `draft`/`prod`.
+- **Migração dos agentes do Regente** (R8, depois R4, por último R6) em
+  shadow → assistido → autônomo, com a validação de negócio no Regente.
 - **Mais rápido:** thinking do Gemini configurável por agente (1,33 s → 0,86 s
   medido), menos chamadas ao modelo no RAG, agentes montados no boot, import
   preguiçoso na CLI.

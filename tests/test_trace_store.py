@@ -326,9 +326,10 @@ def installed_store():
     trace_store.set_trace_store(None)
 
 
-def test_routes_return_503_when_langfuse_is_disabled(installed_store, monkeypatch) -> None:
+def test_routes_return_503_when_the_langfuse_backend_is_chosen_but_disabled(installed_store, monkeypatch) -> None:
     installed_store(None)
     monkeypatch.setattr(trace_store, "get_langfuse", lambda: None)
+    monkeypatch.setattr(trace_store.get_settings(), "trace_store_backend", "langfuse")
     for call in (lambda: list_agent_runs("conversational"), lambda: get_run_trace(RUN_ID)):
         with pytest.raises(HTTPException) as exc:
             call()
