@@ -56,7 +56,7 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
             <EmptyState
               icon={Activity}
               title="Logs desligados"
-              description="Configure LANGFUSE_PUBLIC_KEY e LANGFUSE_SECRET_KEY no agent-service para registrar as execuções."
+              description="O agent-service está com TRACE_STORE_BACKEND=langfuse e o Langfuse desligado. Volte para TRACE_STORE_BACKEND=db ou ligue o Langfuse."
             />
           </Card>
         </PageBody>

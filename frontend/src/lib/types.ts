@@ -561,9 +561,12 @@ export interface RunTrace {
   scores: TraceScore[];
 }
 
-/** `GET /observability/config` — se o Langfuse está ligado e onde fica o projeto. */
+/** `GET /observability/config` — se as execuções são registradas, se o Langfuse está ligado e onde fica o projeto. */
 export interface ObservabilityConfig {
+  /** As execuções são registradas e podem ser lidas (sempre, com o trace store local). */
   enabled: boolean;
+  /** O exportador do Langfuse está ligado. */
+  langfuse?: boolean;
   /** Projeto na UI do Langfuse (ex.: http://localhost:3100/project/agent-service). */
   project_url: string | null;
 }

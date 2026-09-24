@@ -29,7 +29,7 @@ import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { FeedbackCount, RunStatusBadge } from "@/components/observability/run-status";
 import { PageBody, PageHeader } from "@/components/workspace/page-header";
 
-/** A ingestão do Langfuse é assíncrona: um run recém-terminado leva alguns segundos para aparecer. */
+/** A gravação é assíncrona: um run recém-terminado pode levar um instante para aparecer. */
 const INDEXING_RETRIES = 10;
 const INDEXING_INTERVAL_MS = 3000;
 

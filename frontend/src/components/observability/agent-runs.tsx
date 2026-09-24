@@ -45,7 +45,7 @@ export function AgentRuns({ agentType, versions }: { agentType: string; versions
         <EmptyState
           icon={Activity}
           title="Observabilidade desligada"
-          description="Configure LANGFUSE_PUBLIC_KEY e LANGFUSE_SECRET_KEY no agent-service para registrar as execuções."
+          description="O agent-service está com TRACE_STORE_BACKEND=langfuse e o Langfuse desligado. Volte para TRACE_STORE_BACKEND=db ou ligue o Langfuse."
         />
       </Card>
     );

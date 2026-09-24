@@ -30,6 +30,10 @@ router = APIRouter(prefix="/observability", tags=["observability"])
 
 class ObservabilityConfigOut(BaseModel):
     enabled: bool
+    """As execuções estão sendo registradas e podem ser lidas (`/observability/runs`...).
+    Sempre `true` com o trace store local, o padrão."""
+    langfuse: bool = False
+    """O exportador do Langfuse está ligado."""
     project_url: str | None = None
     """Projeto na UI do Langfuse — `None` se desligado ou ainda inacessível."""
 
@@ -236,8 +240,12 @@ def get_run_trace(run_id: str) -> RunTrace:
 
 @router.get("/config", response_model=ObservabilityConfigOut)
 def observability_config() -> ObservabilityConfigOut:
-    enabled = tracing.get_langfuse() is not None
-    return ObservabilityConfigOut(enabled=enabled, project_url=tracing.project_url() if enabled else None)
+    langfuse = tracing.get_langfuse() is not None
+    return ObservabilityConfigOut(
+        enabled=get_trace_store() is not None,
+        langfuse=langfuse,
+        project_url=tracing.project_url() if langfuse else None,
+    )
 
 
 @router.get("/runs/{run_id}", response_model=RunTraceOut)

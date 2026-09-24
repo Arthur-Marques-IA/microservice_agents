@@ -234,7 +234,8 @@ def test_console_endpoints_degrade_without_langfuse(monkeypatch):
     config = observability_config()
     link = run_trace("run-42")
 
-    assert config.enabled is False and config.project_url is None
+    # Sem Langfuse as execuções continuam registradas, no trace store local.
+    assert config.enabled is True and config.langfuse is False and config.project_url is None
     assert link.trace_id == trace_id_for_run("run-42") and link.trace_url is None
 
 

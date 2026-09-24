@@ -145,8 +145,13 @@ def health(ctx: typer.Context) -> None:
             )
         )
         obs = r["observability"]
-        on = obs.get("enabled")
-        console.print(f"{'[green]●[/]' if on else '[dim]●[/]'} Langfuse {'ligado (exportador)' if on else 'desligado — `kuro runs` lê do trace store local'}")
+        recording = obs.get("enabled")
+        on = obs.get("langfuse", recording)
+        console.print(
+            f"{'[green]●[/]' if recording else '[yellow]●[/]'} execuções "
+            + ("registradas — `kuro runs` tem dados" if recording else "não registradas — `kuro runs` não terá dados")
+        )
+        console.print(f"{'[green]●[/]' if on else '[dim]●[/]'} Langfuse {'ligado (exportador)' if on else 'desligado'}")
         py = r["python_tools"].get("enabled")
         console.print(f"{'[green]●[/]' if py else '[dim]●[/]'} tools Python {'ligadas' if py else 'desligadas'}")
         if isinstance(r["credentials"], list):
