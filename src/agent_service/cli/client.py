@@ -111,6 +111,16 @@ class Client:
     def agent_versions(self, agent_type: str) -> list[dict[str, Any]]:
         return self._request("GET", f"/agents/{agent_type}/versions")
 
+    def agent_revisions(self, agent_type: str) -> list[dict[str, Any]]:
+        """Versões da configuração inteira (não só do prompt)."""
+        return self._request("GET", f"/agents/{agent_type}/revisions")
+
+    def agent_revision(self, agent_type: str, version: int) -> dict[str, Any]:
+        return self._request("GET", f"/agents/{agent_type}/revisions/{version}")
+
+    def promote_agent(self, agent_type: str, to: str) -> dict[str, Any]:
+        return self._request("POST", f"/agents/{agent_type}/promote", json={"to": to})
+
     def integration(self, agent_type: str) -> dict[str, Any]:
         """Contrato pronto pra quem vai chamar o agente de outro módulo."""
         return self._request(

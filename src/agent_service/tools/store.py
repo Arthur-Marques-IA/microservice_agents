@@ -10,8 +10,7 @@ como `registry.py` constrói o objeto real do Agno a partir de `config`:
 - `python`: uma função Python que o usuário escreveu, `exec`ada num
   namespace restrito (`tools/python_tool.py`; `config = {"code", "entrypoint"}`).
 
-Same shape/style de `agents/store.py`: `init_store()` cria a tabela
-(`create_all(checkfirst=True)`), sem Alembic.
+Mesmo estilo de `agents/store.py`; o schema é do Alembic (`agent_service/migrations`).
 """
 
 from typing import Any
@@ -54,10 +53,6 @@ tool_definitions = SATable(
         nullable=False,
     ),
 )
-
-
-def init_store() -> None:
-    metadata.create_all(get_db().db_engine, checkfirst=True)
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:

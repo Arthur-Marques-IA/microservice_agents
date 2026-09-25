@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "agno>=3.0.9",
+    "alembic>=1.14",
     "anthropic>=0.40",
     "asyncpg>=0.31.0",
     "click>=8.1",
@@ -32,6 +33,7 @@ dependencies = [
 
 [project.scripts]
 kuro = "agent_service.cli.main:main"
+kuro-migrate = "agent_service.migrations:main"
 
 [project.optional-dependencies]
 # Exportador opcional para o Langfuse. Sem ele, as execuções ficam só no trace

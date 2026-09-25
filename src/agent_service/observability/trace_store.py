@@ -56,6 +56,9 @@ class RunSummary(BaseModel):
     agent_type: str
     agent_name: str | None = None
     prompt_version: int | None = None
+    agent_version: int | None = None
+    """Versão da configuração inteira (`agents/versions.py`) — `None` em runs antigos."""
+    config_hash: str | None = None
     endpoint: str | None = None
     user_id: str | None = None
     session_id: str | None = None
@@ -167,6 +170,7 @@ class RunQuery:
     agent_type: str | None = None
     """`None` lista todos os agentes (para a página `/observability` do console)."""
     prompt_version: int | None = None
+    agent_version: int | None = None
     status: RunStatus | None = None
     user_id: str | None = None
     session_id: str | None = None
@@ -553,6 +557,8 @@ class LangfuseTraceStore:
             agent_type=str(metadata.get("agent_type") or root.get("traceName") or ""),
             agent_name=metadata.get("agent_name"),
             prompt_version=version,
+            agent_version=_to_int(metadata.get("agent_version")),
+            config_hash=metadata.get("config_hash") if metadata.get("config_hash") not in (None, "None") else None,
             endpoint=metadata.get("endpoint") or root.get("name"),
             user_id=root.get("userId") or None,
             session_id=root.get("sessionId") or None,

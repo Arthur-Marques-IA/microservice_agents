@@ -39,16 +39,30 @@ então entram como `kind="analysis"` via `/analyze`. Não dependem do procedural
 5. ~~`kuro runs` sem Langfuse~~ **Feito**: `list/show/stats/tail/sessions/score` e
    `/observability/*` leem do trace store local, e o `health` não avisa mais "sem dados".
 
-**Sprint 2, governança mínima (~1–1,5 sem.)**
-1. Alembic com baseline e fim de `_add_missing_columns` (H0.3).
-2. Versão da config inteira, em versão enxuta: `config_hash` (instructions, modelo, tools, schema,
-   nota de feedback) gravado em cada run, com snapshot em `agent_versions`. O `/analyze` devolve
-   `run_id`, `agent_version` e `config_hash`, e o `run_id` serve de `decision_id` para a auditoria
-   do Regente.
-3. `kuro eval <agente> -f casos.jsonl` v0: faz replay de um dataset e compara **campos de decisão**
-   (acao, departamento, oferta_id, parcelas...) de forma determinística, com regras de policy
-   declarativas. Sai com 1 se houver regressão. O LLM-juiz fica para depois.
-4. `agent_type@draft` + `kuro agents promote`: o Regente chama sempre prod e o eval roda na draft.
+**Sprint 2, governança mínima — feito**
+1. ~~Alembic~~ **Feito** (`agent_service/migrations`): a revisão de base congela o schema e adota
+   um banco criado pelo antigo `create_all` (cria o que falta, acrescenta as colunas que faltam e
+   roda uma vez as conversões de dados que viviam no startup). Os `init_store()` e os
+   `_add_missing_columns` saíram. As migrações rodam no startup, e `kuro-migrate` roda à mão.
+   Testado sobre o banco real do Docker. Com vários workers subindo juntos falta um lock
+   (advisory lock do Postgres), porque hoje há um processo só.
+2. ~~Versão da config inteira~~ **Feito** (`agents/versions.py`): a revisão cobre instructions,
+   modelo resolvido, tools pelo hash da config (sem expor segredo), schema, collection,
+   dependências e regras de feedback. É criada quando o registry remonta o agente, então nenhum
+   caminho de escrita precisa lembrar dela, e a mesma config reaproveita o mesmo número. Cada run
+   grava `agent_version`/`config_hash`, que o `/chat` e o `/analyze` devolvem (o `run_id` é o id
+   da decisão). CLI: `kuro agents revisions`.
+3. ~~`kuro eval` v0~~ **Feito** (`cli/eval.py`): dataset JSONL, comparação determinística campo a
+   campo (com caminhos aninhados e tolerância numérica), regras de política com `when` e
+   `{"$dep": ...}`, `--compare` com o agente de produção e a nota `eval` gravada em cada run.
+   Só para `kind="analysis"` (o caso do Regente). O LLM-juiz e o replay a partir de `runs` ficam
+   para depois.
+4. ~~draft/prod~~ **Feito de outro jeito**: em vez de `agente@draft` no runtime, o draft é um
+   agente comum (`r8-draft`) e `kuro agents promote r8-draft --to r8` copia a configuração. O
+   runtime não muda nada e o Regente chama sempre `r8`. Fixar uma versão por chamada
+   (`r8@12`) fica para quando houver necessidade.
+5. **Extra:** custo estimado por modelo (`models/pricing.py`, sobrescrito por `MODEL_PRICES`).
+   Sem o Langfuse o `cost_usd` vinha vazio para o Gemini.
 
 **Sprint 3+, migração em ondas (shadow → assistido → autônomo)**
 - R8 em shadow: o Regente usa `KuroClient` com `LLM_PROVIDER=legacy|kuro|shadow` e grava a decisão
@@ -81,9 +95,9 @@ procedural (§4.2, que migra depois a ficha do R8 e o reset do R4), sandbox Pyth
 |---|---|---|
 | ~~Nenhuma autenticação~~ | **feito (parcial)** — `api/auth.py`: chave de API com escopos `runtime`/`admin`, por middleware (cobre também as rotas do AgentOS, onde a conversa está). Falta a tabela `api_keys` com várias chaves, revogação e `last_used_at`: hoje são duas chaves de ambiente, o tamanho certo para um tenant |
 | ~~SSRF nas tools de API~~ | **feito** — `tools/egress.py` resolve o destino e recusa loopback/privado/link-local antes de cada chamada, nos dois caminhos de rede (`kind="api"` e o `httpx` das tools Python), com `TOOL_EGRESS_ALLOWLIST` para o host interno legítimo |
-| Sem migrações | `agents/store.py::_add_missing_columns` faz `ALTER TABLE` à mão, já com 4 casos | Vai quebrar na primeira mudança de tipo ou de constraint |
+| ~~Sem migrações~~ | **feito** — Alembic em `agent_service/migrations`, com a base adotando o banco que já existia |
 | ~~Sem CI~~ | **feito** — `.github/workflows/ci.yml`: pytest, lint e build do frontend, e build das duas imagens, em todo push e PR |
-| Versionamento parcial | só `instructions` gera `prompt_version`; mudar modelo ou tools não gera. A nota de feedback ganhou histórico e rollback próprios, mas numa linha separada | O trace grava `prompt-v{N}`, então uma regressão causada por troca de modelo fica invisível — e é preciso cruzar duas linhas do tempo para achar uma causada pelas regras |
+| ~~Versionamento parcial~~ | **feito** — `agents/versions.py`: a configuração inteira (modelo, tools, schema, regras de feedback) vira `agent_version`/`config_hash`, gravados em cada run |
 | ~~RAG preso ao Google~~ | **feito** — `documents/embedder.py`: cada collection escolhe o embedder na criação (`google`/`openai`/`ollama`) e a chave sai de `/model-credentials`, como a do modelo. Fixo depois de criada de propósito: a tabela de vetores é de um embedder só |
 | ~~Modo só-terminal fica sem logs~~ | **feito** — `observability/run_store.py`: todo run fica no Postgres do serviço, e o Langfuse virou um exportador opcional |
 
@@ -382,7 +396,7 @@ Os prazos são estimativas grosseiras para dar ordem de grandeza, não compromis
 | Fase | Entregas | Resultado |
 |---|---|---|
 | ~~**S1**~~ feito | Trace store em Postgres, Langfuse como extra opcional, Redis fora do core, `_resolve` em threadpool | Produção enxuta com runs auditáveis |
-| **S2**, 1–1,5 sem. | Alembic, `config_hash` + `agent_versions`, `kuro eval` v0 determinístico, `@draft` + `promote` | Mudança de agente provada antes de ir para prod |
+| ~~**S2**~~ feito | Alembic, `config_hash` + `agent_versions`, `kuro eval` v0 determinístico, `@draft` + `promote` | Mudança de agente provada antes de ir para prod |
 | **S3+**, contínuo | R8 shadow → prod, R4 shadow → prod, R6 shadow → assistido → autônomo | Regente fora do `ServiceLLM::chatJson()` |
 | **Depois** | `api_keys`/tenant/RLS, procedural, `tool_only`, cache com `LISTEN/NOTIFY`, sandbox Python, `kuro up/down`, MCP, GitOps, `kuro dash` | Plataforma completa, por necessidade |
 

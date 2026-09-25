@@ -39,6 +39,8 @@ kuro --json agents apply -f suporte.json                  # cria ou atualiza (ta
 kuro --json agents set suporte num_history_runs=5 tools='["calculator"]'   # altera só esses campos
 kuro --json agents versions suporte
 kuro --json agents rollback suporte 3 --yes                # reaplica as instructions da v3 (vira uma versão nova)
+kuro --json agents revisions suporte                      # versões da configuração inteira (modelo, tools, schema, regras...)
+kuro --json agents revisions suporte 4                    # a configuração completa da v4
 kuro --json agents delete suporte --yes
 
 # Testar um agente (a sessão fica salva por agente, então mensagens seguidas continuam a conversa)
@@ -74,6 +76,18 @@ EOF
 kuro --json analyze extrator-contrato -f contrato.txt        # ou stdin; devolve {result: {...}}
 kuro --json analyze classificador -m '{"mensagens": [...]}'  # texto direto, sem arquivo temporário
 cat conversa.json | kuro --json analyze classificador        # texto/JSON por stdin
+# /chat e /analyze devolvem `agent_version` e `config_hash`: a configuração que decidiu.
+
+# Mudar um agente em produção sem risco: draft → eval → promote
+kuro --json agents promote r8 --to r8-draft --yes            # cria/atualiza o draft (cópia do prod)
+kuro --json agents set r8-draft instructions='["..."]'       # mexa só no draft
+kuro --json eval r8-draft -f casos.jsonl -r regras.json --compare r8   # sai com 1 se piorou
+kuro --json agents promote r8-draft --to r8 --yes            # só depois do eval passar
+# casos.jsonl: {"id", "input": {...}|"texto", "dependencies": {...}, "expected": {"acao": "...", ...}} por linha.
+# Comparação determinística campo a campo; objetos viram caminhos (acordo.qtd_parcelas).
+# regras.json: [{"name", "field", "op", "value", "when"?}] — op: eq ne in not_in lt lte gt gte exists not_exists;
+# "value": {"$dep": "teto"} lê das dependencies do caso. Violação reprova o caso sempre.
+# Saída 0 se pass_rate >= --min-pass (0.9) e sem violação; com --compare, 1 se o candidato ficar pior.
 # Em kind="analysis": `num_history_runs` e `memory_backend` dão 422 (não fazem nada num
 # agente one-shot) e a nota de feedback não se aplica — ajuste as instructions.
 # Teto do texto de entrada: MAX_INPUT_CHARS (200000 caracteres), no /chat e no /analyze.

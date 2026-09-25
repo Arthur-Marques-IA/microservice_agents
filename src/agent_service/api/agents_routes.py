@@ -23,6 +23,7 @@ from agent_service.agents.dependency_fields import (
 from agent_service.agents.feedback import FeedbackMergeError, merge_feedback
 from agent_service.agents.response_model import ResponseSchemaError, validate_response_schema
 from agent_service.agents.registry import get_agent_with_definition
+from agent_service.agents.versions import effective_config, ensure_version, get_version, list_versions
 from agent_service.agents.store import (
     DefinitionNotFoundError,
     clear_feedback_note,
@@ -394,6 +395,134 @@ def delete_agent(agent_type: str) -> None:
     if definition["is_seed"]:
         raise HTTPException(status_code=403, detail="Agente semeado pelo sistema não pode ser removido")
     delete_definition(agent_type)
+
+
+class RevisionOut(BaseModel):
+    version: int
+    config_hash: str
+    config: dict[str, Any]
+    """Tudo o que muda o comportamento: instructions, modelo resolvido, tools (pelo
+    hash da config de cada uma), schema, collection, regras de feedback..."""
+    created_at: datetime
+    current: bool = False
+
+
+class PromoteIn(BaseModel):
+    to: str = Field(..., min_length=1, max_length=64)
+    """Agente que recebe a configuração. Se não existir, é criado."""
+
+
+class PromoteOut(BaseModel):
+    agent: AgentDefinitionOut
+    source: str
+    source_version: int
+    previous_version: int | None
+    """Versão do destino antes da promoção (`None` se ele acabou de ser criado)."""
+    agent_version: int
+    unchanged: bool
+    """O destino já tinha exatamente esta configuração — nada foi gravado."""
+
+
+_PROMOTED_FIELDS = (
+    "instructions",
+    "tools",
+    "model_provider",
+    "model_id",
+    "model_credential_id",
+    "knowledge_collection",
+    "dependency_fields",
+    "memory_backend",
+    "num_history_runs",
+    "kind",
+    "response_schema",
+)
+
+
+def _current_revision(definition: dict[str, Any]) -> tuple[int, str]:
+    return ensure_version(definition["agent_type"], effective_config(definition))
+
+
+@router.get("/{agent_type}/revisions", response_model=list[RevisionOut])
+def get_revisions(agent_type: str) -> list[dict[str, Any]]:
+    """Versões da configuração inteira, mais recentes primeiro — a que roda agora
+    vem com `current: true`. É o número que cada run grava em `agent_version`.
+
+    `GET /agents/{t}/versions` continua sendo só o histórico das instructions."""
+    definition = get_definition(agent_type)
+    if definition is None:
+        raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
+    current, _ = _current_revision(definition)
+    return [{**v, "current": v["version"] == current} for v in list_versions(agent_type)]
+
+
+@router.get("/{agent_type}/revisions/{version}", response_model=RevisionOut)
+def get_revision(agent_type: str, version: int) -> dict[str, Any]:
+    definition = get_definition(agent_type)
+    if definition is None:
+        raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
+    revision = get_version(agent_type, version)
+    if revision is None:
+        raise HTTPException(status_code=404, detail=f"{agent_type!r} não tem a versão {version}")
+    current, _ = _current_revision(definition)
+    return {**revision, "current": revision["version"] == current}
+
+
+@router.post("/{agent_type}/promote", response_model=PromoteOut)
+def promote_agent(agent_type: str, body: PromoteIn) -> dict[str, Any]:
+    """Copia a configuração que muda o comportamento de `agent_type` para `to`:
+    instructions, modelo, tools, schema, collection, dependências e as regras de
+    feedback. O `name` do destino fica.
+
+    É o fluxo draft → prod: quem integra chama sempre `r8`; as mudanças são
+    feitas e avaliadas (`kuro eval`) em `r8-draft`, e só então promovidas. Para
+    criar o draft, promova ao contrário: `r8` → `r8-draft`."""
+    source = get_definition(agent_type)
+    if source is None:
+        raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
+    if body.to == agent_type:
+        raise HTTPException(status_code=422, detail="Origem e destino são o mesmo agente.")
+    if not _SLUG_RE.match(body.to):
+        raise HTTPException(status_code=422, detail=f"Nome de agente inválido: {body.to!r}")
+    source_version, source_hash = _current_revision(source)
+    values = {field: source.get(field) for field in _PROMOTED_FIELDS}
+
+    target = get_definition(body.to)
+    previous_version: int | None = None
+    if target is None:
+        create_definition(agent_type=body.to, name=source["name"], **values)
+    else:
+        previous_version, previous_hash = _current_revision(target)
+        if previous_hash == source_hash:
+            return {
+                "agent": target,
+                "source": agent_type,
+                "source_version": source_version,
+                "previous_version": previous_version,
+                "agent_version": previous_version,
+                "unchanged": True,
+            }
+        update_definition(body.to, **values)
+
+    if (source.get("kind") or "conversational") == "conversational":
+        source_note = get_feedback_note(agent_type)
+        target_note = get_feedback_note(body.to)
+        rules = source_note["rules"] if source_note else []
+        if rules != (target_note["rules"] if target_note else []):
+            # Mesmo sem regras na origem, grava uma versão (vazia) em vez de apagar:
+            # o histórico do destino é o caminho de volta se a promoção der errado.
+            save_feedback_note(body.to, rules, origin="promote")
+
+    promoted = get_definition(body.to)
+    assert promoted is not None
+    new_version, _ = _current_revision(promoted)
+    return {
+        "agent": promoted,
+        "source": agent_type,
+        "source_version": source_version,
+        "previous_version": previous_version,
+        "agent_version": new_version,
+        "unchanged": False,
+    }
 
 
 @router.get("/{agent_type}/versions", response_model=list[PromptVersionOut])

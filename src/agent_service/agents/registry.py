@@ -17,12 +17,13 @@ from agno.agent import Agent
 from agent_service.agents.base import build_agent
 from agent_service.agents.response_model import build_response_model
 from agent_service.agents.store import get_definition, get_feedback_note, list_definitions
+from agent_service.agents.versions import effective_config, ensure_version
 from agent_service.documents.collections import EmbedderError
 from agent_service.tools.store import get_tool as get_tool_row
 from agent_service.tools.registry import resolve_tools_with_stamp
 
-# (agent, definition.updated_at, tools_stamp, feedback_note.updated_at)
-_CacheEntry = tuple[Agent, datetime, tuple[datetime, ...], datetime | None]
+# (agent, definition.updated_at, tools_stamp, feedback_note.updated_at, (agent_version, config_hash))
+_CacheEntry = tuple[Agent, datetime, tuple[datetime, ...], datetime | None, tuple[int, str]]
 _cache: dict[str, _CacheEntry] = {}
 
 _FEEDBACK_HEADER = "Ajustes aprendidos com feedback de conversas anteriores:\n"
@@ -71,7 +72,8 @@ def _feedback_stamp(definition: dict[str, Any]) -> datetime | None:
 
 def get_agent_with_definition(agent_type: str) -> tuple[Agent, dict[str, Any]]:
     """Como `get_agent`, mas devolve também a definição usada — a observabilidade
-    registra em cada trace o nome e a `prompt_version` que responderam."""
+    registra em cada trace o nome, a `prompt_version` e a versão da configuração
+    inteira (`agent_version`/`config_hash`, ver `versions.py`) que responderam."""
     definition = get_definition(agent_type)
     if definition is None:
         raise UnknownAgentTypeError(
@@ -83,11 +85,17 @@ def get_agent_with_definition(agent_type: str) -> tuple[Agent, dict[str, Any]]:
         # A definição não mudou, mas uma tool dela pode ter mudado: o `Function`
         # com o schema antigo está dentro do `Agent` já construído.
         if cached[2] == _tools_stamp(definition):
-            return cached[0], definition
+            return cached[0], _with_version(definition, cached[4])
 
     agent, tools_stamp = _build_from_definition(definition)
-    _cache[agent_type] = (agent, definition["updated_at"], tools_stamp, _feedback_stamp(definition))
-    return agent, definition
+    # Remontar é o sinal de que algo mudou: é aqui que uma configuração nova vira versão.
+    version = ensure_version(agent_type, effective_config(definition))
+    _cache[agent_type] = (agent, definition["updated_at"], tools_stamp, _feedback_stamp(definition), version)
+    return agent, _with_version(definition, version)
+
+
+def _with_version(definition: dict[str, Any], version: tuple[int, str]) -> dict[str, Any]:
+    return {**definition, "agent_version": version[0], "config_hash": version[1]}
 
 
 def _tools_stamp(definition: dict[str, Any]) -> tuple[datetime, ...]:

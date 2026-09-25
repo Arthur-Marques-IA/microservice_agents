@@ -17,6 +17,7 @@ from rich.table import Table
 from agent_service.cli import agents, collections, runs, sessions, tools
 from agent_service.cli.analyze import analyze
 from agent_service.cli.chat import chat
+from agent_service.cli.eval import eval_command
 from agent_service.cli.client import ApiError, Client, ServiceUnavailable
 from agent_service.cli.common import (
     EXIT_FAILED,
@@ -50,6 +51,7 @@ app.add_typer(collections.app, name="collections")
 app.add_typer(sessions.app, name="sessions")
 app.command("chat")(chat)
 app.command("analyze")(analyze)
+app.command("eval")(eval_command)
 
 providers_app = typer.Typer(help="Provedores de modelo (LLM) suportados.")
 app.add_typer(providers_app, name="providers")
@@ -338,6 +340,7 @@ _SHELL_HELP = """[bold]Comandos[/] (a `/` é opcional; qualquer comando da CLI f
   /agents              escolher um agente → testar, ver, editar, versões
   /chat <agente>       conversar direto com um agente
   /analyze <agente>    analisar um documento (agentes kind=analysis), one-shot
+  /eval <agente> -f casos.jsonl   avaliar contra um dataset (decisão campo a campo)
   /agents feedback <agente>   ensinar o agente a partir de uma conversa
   /agents integrate <agente>   como chamar o agente de outro módulo
   /tools               escolher uma tool → ver e invocar

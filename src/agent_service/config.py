@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # `runs`/`run_spans`/`run_scores` no Postgres do serviço, sempre gravadas) ou
     # "langfuse" (a API do Langfuse — exige o Langfuse ligado).
     trace_store_backend: Literal["db", "langfuse"] = "db"
+    model_prices: str | None = None
+    """JSON `{"modelo": [USD/1M entrada, USD/1M saída]}` que sobrescreve a tabela
+    de `models/pricing.py` — o custo estimado das execuções sem Langfuse."""
 
     # Observabilidade — Langfuse (sem as duas chaves, o tracing vira no-op)
     langfuse_enabled: bool = False

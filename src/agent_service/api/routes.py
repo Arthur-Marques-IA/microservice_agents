@@ -57,6 +57,9 @@ class ChatResponse(BaseModel):
     """Id do run — use em `POST /observability/scores` para enviar feedback."""
     trace_id: str | None = None
     """Id do trace do run — o mesmo no trace store local e no Langfuse, se ligado."""
+    agent_version: int | None = None
+    """Versão da configuração inteira que respondeu (`GET /agents/{t}/revisions`)."""
+    config_hash: str | None = None
 
 
 def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
@@ -88,6 +91,8 @@ def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
         agent_type=request.agent_type,
         agent_name=definition["name"],
         prompt_version=definition["prompt_version"],
+        agent_version=definition.get("agent_version"),
+        config_hash=definition.get("config_hash"),
         user_id=request.user_id,
         session_id=request.session_id,
         message=request.message,
@@ -161,6 +166,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
         content=final_content if final_content is not None else "".join(chunks),
         run_id=run.run_id,
         trace_id=run.trace_id,
+        agent_version=run.agent_version,
+        config_hash=run.config_hash,
     )
 
 
@@ -178,7 +185,11 @@ class AnalyzeResponse(BaseModel):
     result: dict[str, Any]
     """Saída validada contra o `response_schema` do agente."""
     run_id: str
+    """Id da execução — serve de id da decisão na auditoria de quem chama."""
     trace_id: str | None = None
+    agent_version: int | None = None
+    """Versão da configuração inteira que decidiu (`GET /agents/{t}/revisions`)."""
+    config_hash: str | None = None
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)
@@ -211,6 +222,8 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         agent_type=request.agent_type,
         agent_name=definition["name"],
         prompt_version=definition["prompt_version"],
+        agent_version=definition.get("agent_version"),
+        config_hash=definition.get("config_hash"),
         user_id="analysis",
         session_id=f"analyze-{uuid.uuid4().hex}",
         message=request.document,
@@ -247,6 +260,8 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         result=final_content.model_dump(mode="json"),
         run_id=run.run_id,
         trace_id=run.trace_id,
+        agent_version=run.agent_version,
+        config_hash=run.config_hash,
     )
 
 
@@ -264,7 +279,14 @@ async def chat_stream(request: ChatRequest) -> EventSourceResponse:
     trace_id = run.trace_id
 
     async def event_generator():
-        yield {"event": "run", "data": json.dumps({"run_id": run.run_id, "trace_id": trace_id})}
+        yield {"event": "run", "data": json.dumps(
+                {
+                    "run_id": run.run_id,
+                    "trace_id": trace_id,
+                    "agent_version": run.agent_version,
+                    "config_hash": run.config_hash,
+                }
+            )}
         async with aclosing(traced_run_events(agent, run)) as events:
             try:
                 async for event in events:

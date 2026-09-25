@@ -237,9 +237,21 @@ primeiro boot.
   <img alt="Ciclo de versões do prompt, execuções, feedback e nota do agente" src="docs/diagramas/versoes-e-feedback-claro.svg">
 </picture>
 
-- **Versões:** cada mudança em `instructions` grava uma versão nova. O console
+- **Versões do prompt:** cada mudança em `instructions` grava uma versão nova. O console
   mostra o diff contra a atual e permite "restaurar no editor", que publica o
-  texto antigo como versão nova. Mudar nome, tools ou modelo não gera versão.
+  texto antigo como versão nova.
+- **Versões da configuração inteira** (`kuro agents revisions suporte`): qualquer
+  mudança que altera o comportamento — instructions, modelo, tools (e a config
+  delas), `response_schema`, collection, dependências, regras de feedback — vira
+  uma versão imutável, identificada por um `config_hash`. Cada execução grava
+  `agent_version` e `config_hash`, e o `/chat` e o `/analyze` os devolvem: é o que
+  responde "com que configuração esta decisão foi tomada?". Voltar a uma
+  configuração anterior reaproveita o número dela. Renomear não conta.
+- **Draft → prod:** quem integra chama sempre o agente de produção (`r8`). As
+  mudanças vão num draft (`kuro agents promote r8 --to r8-draft` cria a cópia),
+  são avaliadas com `kuro eval` e só então promovidas
+  (`kuro agents promote r8-draft --to r8`). O promote copia tudo o que muda o
+  comportamento, inclusive as regras de feedback, e mantém o nome do destino.
 - **Regras de feedback:** `uv run kuro agents feedback suporte -m "..."` junta o
   comentário com as regras que o agente já segue, e elas passam a valer na
   resposta seguinte — sem virar uma versão de prompt.
@@ -490,7 +502,24 @@ uv run kuro agents edit suporte                 # abre a definição no seu $EDI
 uv run kuro agents set suporte num_history_runs=5 tools='["cep"]'   # muda só esses campos
 uv run kuro agents versions suporte             # histórico do prompt
 uv run kuro agents rollback suporte 3           # volta as instructions para as da v3
+uv run kuro agents revisions suporte            # versões da configuração inteira (a atual marcada)
 ```
+
+**Mudar com segurança: draft, eval e promote** (agentes `analysis`)
+
+```bash
+uv run kuro agents promote r8 --to r8-draft --yes         # cria/atualiza o draft a partir do prod
+uv run kuro agents set r8-draft model_id=gemini-2.5-pro   # mexe só no draft
+uv run kuro eval r8-draft -f casos.jsonl -r regras.json --compare r8   # sai com 1 se piorou
+uv run kuro agents promote r8-draft --to r8 --yes         # publica
+```
+
+O dataset é JSONL, um caso por linha: `{"id", "input", "dependencies", "expected"}`.
+A comparação é determinística, campo a campo (objetos viram caminhos como
+`acordo.qtd_parcelas`), e as regras de política (`-r`) valem para toda saída —
+por exemplo `{"field": "acordo.valor_acordo", "op": "lte", "value": {"$dep": "teto"}}`.
+Cada run avaliado recebe a nota `eval` (1/0) no trace store. Detalhes em
+`uv run kuro eval --help`.
 
 **Testar**
 
@@ -614,8 +643,12 @@ Cada run registra a mensagem, as `dependencies`, cada chamada ao modelo
 toda resposta aponta para o próprio trace. Tudo isso fica no trace store local
 (tabelas `runs`, `run_spans` e `run_scores` no Postgres do serviço), gravado
 fora do caminho da resposta, com status sempre terminal (`success`, `error` ou
-`interrupted`). Com `LANGFUSE_ENABLED=true` os traces também vão para o
-Langfuse, que vira um exportador a mais.
+`interrupted`), mais a versão da configuração que rodou (`agent_version`,
+`config_hash`). O custo vem do Agno quando ele informa; senão é estimado pelos
+tokens com a tabela de `models/pricing.py` (sobrescreva com `MODEL_PRICES`) — um
+modelo fora da tabela fica sem custo, nunca com um valor inventado. Com
+`LANGFUSE_ENABLED=true` os traces também vão para o Langfuse, que vira um
+exportador a mais.
 
 ```bash
 uv run kuro runs list --agent suporte -n 5            # latência, tokens, custo, 👍/👎
@@ -678,6 +711,7 @@ Tailwind, Docker Compose.
 | `AGENT_SERVICE_BIND` | `127.0.0.1:58000` | onde a API é publicada no host |
 | `LANGFUSE_ENABLED` | `false` | ligue junto com o profile `observability` |
 | `TRACE_STORE_BACKEND` | `db` | de onde `kuro runs` e `/observability/*` leem: `db` ou `langfuse` |
+| `MODEL_PRICES` | tabela embutida | JSON `{"modelo": [USD/1M entrada, USD/1M saída]}` para o custo estimado sem Langfuse |
 | `GOOGLE_API_KEY` | — | chave do Gemini (provedor padrão) |
 | `CREDENTIALS_ENCRYPTION_KEY` | — | chave Fernet que cifra as credenciais de modelo; **obrigatória** para cadastrar chaves |
 | `DEFAULT_MODEL_PROVIDER` / `DEFAULT_MODEL_ID` | `google` / `gemini-2.5-flash` | modelo de quem não define um |
@@ -707,6 +741,10 @@ uv run uvicorn agent_service.main:app --app-dir src --reload
 # frontend
 cd frontend && npm install
 AGENT_SERVICE_URL=http://127.0.0.1:58000 npm run dev
+
+# schema: as migrações (Alembic) rodam sozinhas no startup; para aplicar à mão
+uv run kuro-migrate
+# mudança de schema nova = um arquivo em src/agent_service/migrations/versions/
 
 # testes
 uv run pytest
@@ -779,9 +817,6 @@ Leia antes de expor o serviço fora de uma rede confiável:
 O plano completo, com diagnóstico, prioridades e o que cortar, está em
 **[ROADMAP.md](ROADMAP.md)**. Os próximos passos:
 
-- **Governança mínima para o Regente:** Alembic, versão da configuração
-  inteira (`config_hash`) em cada run, `kuro eval` determinístico e canais
-  `draft`/`prod`.
 - **Migração dos agentes do Regente** (R8, depois R4, por último R6) em
   shadow → assistido → autônomo, com a validação de negócio no Regente.
 - **Mais rápido:** thinking do Gemini configurável por agente (1,33 s → 0,86 s
@@ -789,8 +824,8 @@ O plano completo, com diagnóstico, prioridades e o que cortar, está em
   preguiçoso na CLI.
 - **Agente procedural:** fluxos em etapas (coletar, confirmar, executar) com a
   máquina de estados no servidor e o estado da etapa devolvido no `/chat`.
-- **Validado de verdade:** versão da configuração inteira, canais `draft`/`prod`,
-  `kuro eval` para comparar versões com execuções reais, servidor MCP e agentes como código.
+- **Validado de verdade:** `kuro eval` com replay de execuções reais e LLM-juiz para
+  a qualidade do texto, servidor MCP e agentes como código.
 - **Dependências privadas:** marcar campos de `dependencies` que as tools
   usam mas que nunca entram no prompt do modelo.
 - **Memória:** modos explícitos por agente (`none`, `auto`, `agentic`, `mem0`),

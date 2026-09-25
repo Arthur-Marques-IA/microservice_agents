@@ -72,6 +72,9 @@ class RunContext:
     videos: tuple[Any, ...] = ()
     files: tuple[Any, ...] = ()
     run_id: str = field(default_factory=lambda: str(uuid4()))
+    agent_version: int | None = None
+    """Versão da configuração inteira (`agents/versions.py`)."""
+    config_hash: str | None = None
 
     @property
     def trace_id(self) -> str:
@@ -197,10 +200,21 @@ def _model_spans(metrics: Any, started_at: datetime) -> list[Any]:
     """Uma span por modelo chamado, das métricas agregadas do Agno (`RunMetrics.details`)."""
     from agent_service.observability.run_store import SpanRecord
 
+    from agent_service.models.pricing import estimate_cost
+
     spans = []
     for model_type, entries in (getattr(metrics, "details", None) or {}).items():
         for entry in entries or []:
             provider = getattr(entry, "provider", "") or "model"
+            cost = getattr(entry, "cost", None)
+            if cost is None:
+                cost = estimate_cost(
+                    provider=provider,
+                    model_id=getattr(entry, "id", None),
+                    input_tokens=getattr(entry, "input_tokens", 0) or 0,
+                    output_tokens=getattr(entry, "output_tokens", 0) or 0,
+                    reasoning_tokens=getattr(entry, "reasoning_tokens", 0) or 0,
+                )
             spans.append(
                 SpanRecord(
                     type="GENERATION",
@@ -210,7 +224,7 @@ def _model_spans(metrics: Any, started_at: datetime) -> list[Any]:
                     input_tokens=getattr(entry, "input_tokens", 0) or 0,
                     output_tokens=getattr(entry, "output_tokens", 0) or 0,
                     total_tokens=getattr(entry, "total_tokens", 0) or 0,
-                    cost_usd=getattr(entry, "cost", None),
+                    cost_usd=cost,
                     latency_ms=_ms(getattr(entry, "duration", None)),
                 )
             )
@@ -247,6 +261,8 @@ async def _recorded_events(agent: Agent, run: RunContext) -> AsyncIterator[RunOu
         agent_type=run.agent_type,
         agent_name=run.agent_name,
         prompt_version=run.prompt_version,
+        agent_version=run.agent_version,
+        config_hash=run.config_hash,
         endpoint=run.endpoint,
         user_id=run.user_id,
         session_id=run.session_id,
@@ -274,8 +290,10 @@ async def _recorded_events(agent: Agent, run: RunContext) -> AsyncIterator[RunOu
                     record.input_tokens = metrics.input_tokens or 0
                     record.output_tokens = metrics.output_tokens or 0
                     record.total_tokens = metrics.total_tokens or 0
-                    record.cost_usd = metrics.cost
                     record.spans.extend(_model_spans(metrics, record.started_at))
+                    # Custo do Agno quando ele informa; senão, a soma estimada por modelo.
+                    span_costs = [s.cost_usd for s in record.spans if s.type == "GENERATION" and s.cost_usd is not None]
+                    record.cost_usd = metrics.cost if metrics.cost is not None else (sum(span_costs) if span_costs else None)
             elif event.event == RunEvent.run_error.value:
                 record.status = "error"
                 record.status_message = event.content or RUN_FAILED
@@ -353,6 +371,8 @@ async def _produce(client: "Langfuse", agent: Agent, run: RunContext, queue: asy
                     "agent_type": run.agent_type,
                     "agent_name": run.agent_name,
                     "prompt_version": str(run.prompt_version),
+                    "agent_version": str(run.agent_version),
+                    "config_hash": str(run.config_hash),
                     "endpoint": run.endpoint,
                     "run_id": run.run_id,
                 },

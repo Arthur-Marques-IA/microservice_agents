@@ -111,7 +111,9 @@ def test_delete_definition_removes_feedback_note():
 def test_migracao_grava_as_regras_da_nota_legada_e_a_v1():
     """Converter só na leitura não bastava: os ids saíam diferentes a cada
     consulta (então `--remove <id>` nunca casava) e não havia v1 para voltar."""
-    from agent_service.agents.store import _migrate_markdown_notes
+    import importlib
+
+    baseline = importlib.import_module("agent_service.migrations.versions.0001_baseline")
 
     create_definition(agent_type="teste-mig", name="Mig", instructions=["v1"])
     with get_db().db_engine.begin() as conn:
@@ -120,7 +122,8 @@ def test_migracao_grava_as_regras_da_nota_legada_e_a_v1():
                 agent_type="teste-mig", content="- confirme o CPF\n- seja breve", rules=[], version=1
             )
         )
-    _migrate_markdown_notes()
+    with get_db().db_engine.begin() as conn:
+        baseline.migrate_markdown_notes(conn)
 
     primeira = get_feedback_note("teste-mig")["rules"]
     segunda = get_feedback_note("teste-mig")["rules"]

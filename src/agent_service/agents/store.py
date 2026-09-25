@@ -9,8 +9,8 @@ Duas tabelas próprias do projeto (fora do namespace `agno_*` que o
   na UI. Nunca é lido em runtime — só a versão "atual" em `agent_definitions`
   importa pra construir o agente.
 
-Sem Alembic/migração: `init_store()` roda `create_all(checkfirst=True)` no
-startup, no mesmo espírito do `PostgresDb(create_schema=True)` do Agno.
+O schema é criado e migrado pelo Alembic (`agent_service/migrations`); as
+tabelas daqui descrevem o estado atual para as consultas.
 """
 
 import re
@@ -30,9 +30,7 @@ from sqlalchemy import (
     delete,
     func,
     insert,
-    inspect,
     select,
-    text,
     update,
 )
 
@@ -137,82 +135,6 @@ agent_feedback_versions = Table(
     Column("origin", String, nullable=False, default="merge"),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
-
-
-def _add_missing_columns() -> None:
-    """`create_all(checkfirst=True)` só cria tabelas que não existem — uma coluna
-    nova numa tabela já existente precisa de `ALTER TABLE` manual, já que o
-    projeto não usa Alembic."""
-    engine = get_db().db_engine
-    inspector = inspect(engine)
-    if not inspector.has_table("agent_definitions"):
-        return
-    existing = {c["name"] for c in inspector.get_columns("agent_definitions")}
-    for column in ("model_credential_id", "knowledge_collection"):
-        if column not in existing:
-            with engine.begin() as conn:
-                conn.execute(text(f"ALTER TABLE agent_definitions ADD COLUMN {column} VARCHAR"))
-    if "kind" not in existing:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE agent_definitions ADD COLUMN kind VARCHAR NOT NULL DEFAULT 'conversational'"))
-    if "response_schema" not in existing:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE agent_definitions ADD COLUMN response_schema JSON NOT NULL DEFAULT '[]'::json"))
-
-    if inspector.has_table("agent_feedback_notes"):
-        colunas = {c["name"] for c in inspector.get_columns("agent_feedback_notes")}
-        if "rules" not in colunas:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE agent_feedback_notes ADD COLUMN rules JSON NOT NULL DEFAULT '[]'::json"))
-        if "version" not in colunas:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE agent_feedback_notes ADD COLUMN version INTEGER NOT NULL DEFAULT 1"))
-        _migrate_markdown_notes()
-
-
-def _migrate_markdown_notes() -> None:
-    """Converte, uma vez, as notas que eram markdown solto em regras gravadas.
-
-    Fazer isso só na leitura não bastava: os ids saíam diferentes a cada
-    consulta, então `--show` seguido de `--remove <id>` nunca casava, e não
-    havia versão 1 no histórico para onde voltar depois do primeiro merge."""
-    engine = get_db().db_engine
-    with engine.begin() as conn:
-        # O filtro é em Python: comparar uma coluna JSON com `[]` no SQL depende
-        # do dialeto, e no teste (sqlite) simplesmente não casava — a migração
-        # passava batido e os ids voltavam a ser gerados a cada leitura.
-        linhas = conn.execute(
-            select(
-                agent_feedback_notes.c.agent_type,
-                agent_feedback_notes.c.content,
-                agent_feedback_notes.c.rules,
-            )
-        ).all()
-        for agent_type, content, rules in linhas:
-            if rules or not content:
-                continue
-            regras = rules_from_markdown(content)
-            if not regras:
-                continue
-            conn.execute(
-                update(agent_feedback_notes)
-                .where(agent_feedback_notes.c.agent_type == agent_type)
-                .values(rules=regras, content=rules_to_markdown(regras))
-            )
-            conn.execute(
-                insert(agent_feedback_versions).values(
-                    agent_type=agent_type,
-                    version=1,
-                    rules=regras,
-                    content=rules_to_markdown(regras),
-                    origin="merge",
-                )
-            )
-
-
-def init_store() -> None:
-    metadata.create_all(get_db().db_engine, checkfirst=True)
-    _add_missing_columns()
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:

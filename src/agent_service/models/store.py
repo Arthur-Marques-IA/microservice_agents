@@ -8,18 +8,15 @@ A chave de API nunca é guardada em texto plano: `crypto.py` cifra antes de
 cliente do SDK; as respostas da API (`api/model_credentials_routes.py`)
 nunca devolvem `api_key_encrypted`.
 
-Sem Alembic: `init_store()` cria a tabela nova (`create_all(checkfirst=True)`)
-e, na primeira vez, migra as linhas da tabela antiga
-(`model_provider_credentials`, uma por provedor, de quando essa tela só
-gerenciava um modelo) para o novo formato, uma credencial "Padrão" por
-provedor que já estivesse configurado.
+A tabela antiga (`model_provider_credentials`, uma credencial por provedor) é
+convertida uma vez pela migração de base do Alembic (`agent_service/migrations`).
 """
 
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, DateTime, MetaData, String, delete, func, inspect, insert, select, update
+from sqlalchemy import Boolean, Column, DateTime, MetaData, String, delete, func, insert, select, update
 from sqlalchemy import Table as SATable
 
 from agent_service.db import get_db
@@ -51,54 +48,6 @@ model_credentials = SATable(
         nullable=False,
     ),
 )
-
-# Tabela antiga (uma linha por provedor, PK=provider) — só lida uma vez, na
-# migração; nunca mais escrita.
-_legacy_metadata = MetaData()
-_legacy_model_provider_credentials = SATable(
-    "model_provider_credentials",
-    _legacy_metadata,
-    Column("provider", String, primary_key=True),
-    Column("api_key_encrypted", String, nullable=True),
-    Column("key_hint", String, nullable=True),
-    Column("base_url", String, nullable=True),
-    Column("enabled", Boolean, nullable=False, default=True),
-    Column("last_tested_at", DateTime(timezone=True), nullable=True),
-    Column("last_test_ok", Boolean, nullable=True),
-    Column("last_test_message", String, nullable=True),
-)
-
-
-def _migrate_legacy_rows() -> None:
-    engine = get_db().db_engine
-    if not inspect(engine).has_table("model_provider_credentials"):
-        return
-    with engine.begin() as conn:
-        if conn.execute(select(model_credentials.c.id).limit(1)).first() is not None:
-            return  # já migrado (ou já tem credenciais criadas pela UI nova)
-        legacy_rows = conn.execute(select(_legacy_model_provider_credentials)).all()
-        for row in legacy_rows:
-            data = dict(row._mapping)
-            conn.execute(
-                insert(model_credentials).values(
-                    id=uuid4().hex,
-                    provider=data["provider"],
-                    label="Padrão",
-                    api_key_encrypted=data["api_key_encrypted"],
-                    key_hint=data["key_hint"],
-                    base_url=data["base_url"],
-                    enabled=data["enabled"],
-                    last_tested_at=data["last_tested_at"],
-                    last_test_ok=data["last_test_ok"],
-                    last_test_message=data["last_test_message"],
-                )
-            )
-
-
-def init_store() -> None:
-    metadata.create_all(get_db().db_engine, checkfirst=True)
-    _migrate_legacy_rows()
-
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
     return dict(row._mapping)

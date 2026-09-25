@@ -71,9 +71,10 @@ runs = Table(
     Column("agent_type", String, nullable=False, index=True),
     Column("agent_name", String, nullable=True),
     Column("prompt_version", Integer, nullable=True),
-    # Hash da configuração que rodou (instructions, modelo, tools, schema, nota de
-    # feedback) — preenchido quando o versionamento da config inteira chegar.
+    # Configuração que rodou (instructions, modelo, tools, schema, nota de
+    # feedback): hash e número da versão em `agent_versions` (`agents/versions.py`).
     Column("config_hash", String, nullable=True),
+    Column("agent_version", Integer, nullable=True),
     Column("endpoint", String, nullable=True),
     Column("user_id", String, nullable=True),
     Column("session_id", String, nullable=True, index=True),
@@ -127,10 +128,6 @@ run_scores = Table(
 )
 
 
-def init_store() -> None:
-    metadata.create_all(get_db().db_engine, checkfirst=True)
-
-
 # -- gravação ------------------------------------------------------------------
 
 
@@ -177,6 +174,7 @@ class RunRecord:
     ended_at: datetime | None = None
     spans: list[SpanRecord] = field(default_factory=list)
     tenant_id: str = DEFAULT_TENANT
+    agent_version: int | None = None
     config_hash: str | None = None
 
 
@@ -237,6 +235,7 @@ def _write_run(record: RunRecord) -> None:
                 agent_name=record.agent_name,
                 prompt_version=record.prompt_version,
                 config_hash=record.config_hash,
+                agent_version=record.agent_version,
                 endpoint=record.endpoint,
                 user_id=record.user_id,
                 session_id=record.session_id,
@@ -320,6 +319,8 @@ def _filters(query: RunQuery, *, with_session: bool = False) -> list[Any]:
         conditions.append(runs.c.agent_type == query.agent_type)
     if query.prompt_version is not None:
         conditions.append(runs.c.prompt_version == query.prompt_version)
+    if query.agent_version is not None:
+        conditions.append(runs.c.agent_version == query.agent_version)
     if query.status:
         conditions.append(runs.c.status == query.status)
     if query.user_id:
@@ -369,6 +370,8 @@ def _summary(row: Any, votes: list[int] | None = None) -> RunSummary:
         agent_type=row.agent_type,
         agent_name=row.agent_name,
         prompt_version=row.prompt_version,
+        agent_version=row.agent_version,
+        config_hash=row.config_hash,
         endpoint=row.endpoint,
         user_id=row.user_id,
         session_id=row.session_id,

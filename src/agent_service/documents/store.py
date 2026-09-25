@@ -6,7 +6,7 @@ conhecimento nova exigia editar Python e reiniciar. Aqui elas viram linhas em
 `tools/store.py` — a tabela pgvector de cada uma continua sendo criada pelo
 Agno na primeira ingestão (`documents/collections.py`).
 
-Sem Alembic: `init_store()` roda `create_all(checkfirst=True)` no startup.
+O schema é criado e migrado pelo Alembic (`agent_service/migrations`).
 """
 
 from typing import Any
@@ -22,9 +22,7 @@ from sqlalchemy import (
     delete,
     func,
     insert,
-    inspect,
     select,
-    text,
     update,
 )
 
@@ -59,25 +57,6 @@ SEED_COLLECTION = "general"
 
 class CollectionNotFoundError(LookupError):
     pass
-
-
-def _add_missing_columns() -> None:
-    """`create_all(checkfirst=True)` não mexe em tabela existente — as colunas de
-    embedder precisam de `ALTER TABLE` (o projeto não usa Alembic)."""
-    engine = get_db().db_engine
-    inspector = inspect(engine)
-    if not inspector.has_table("document_collections"):
-        return
-    existing = {c["name"] for c in inspector.get_columns("document_collections")}
-    for column, tipo in (("embedder_provider", "VARCHAR"), ("embedder_model", "VARCHAR"), ("embedder_dimensions", "INTEGER")):
-        if column not in existing:
-            with engine.begin() as conn:
-                conn.execute(text(f"ALTER TABLE document_collections ADD COLUMN {column} {tipo}"))
-
-
-def init_store() -> None:
-    metadata.create_all(get_db().db_engine, checkfirst=True)
-    _add_missing_columns()
 
 
 def seed_default_collection() -> None:

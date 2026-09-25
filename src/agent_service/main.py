@@ -12,7 +12,6 @@ from fastapi import FastAPI
 
 from agent_service.agents.registry import all_agents
 from agent_service.agents.seed import seed_default_agents
-from agent_service.agents.store import init_store
 from agent_service.api import auth
 from agent_service.api.agents_routes import router as agents_router
 from agent_service.api.collections_routes import router as collections_router
@@ -25,24 +24,17 @@ from agent_service.api.tools_routes import router as tools_router
 from agent_service.config import get_settings
 from agent_service.db import get_db
 from agent_service.documents.collections import all_collections
-from agent_service.documents.store import init_store as init_collection_store
 from agent_service.documents.store import seed_default_collection
-from agent_service.models.store import init_store as init_model_provider_store
-from agent_service.observability.run_store import init_store as init_run_store
+from agent_service.migrations import upgrade_database
 from agent_service.observability.tracing import configure_tracing
 from agent_service.tools.seed import seed_default_tools
-from agent_service.tools.store import init_store as init_tool_store
 
 configure_tracing()
 
 settings = get_settings()
 
-init_store()
-init_tool_store()
-init_collection_store()
+upgrade_database()
 seed_default_collection()
-init_model_provider_store()
-init_run_store()
 seed_default_tools()
 seed_default_agents()
 

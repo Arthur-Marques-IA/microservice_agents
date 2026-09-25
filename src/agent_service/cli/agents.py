@@ -224,6 +224,71 @@ def versions(ctx: typer.Context, agent_type: str) -> None:
     emit(st, call(st, st.client.agent_versions, agent_type), _render_versions)
 
 
+def _render_revisions(revisions: list[dict[str, Any]]) -> None:
+    table = Table(show_edge=False, header_style="bold")
+    for column in ("versão", "hash", "modelo", "tools", "regras", "prompt", "criada em"):
+        table.add_column(column)
+    for r in revisions:
+        c = r["config"]
+        marker = " [green]● atual[/]" if r.get("current") else ""
+        table.add_row(
+            f"v{r['version']}{marker}",
+            r["config_hash"],
+            f"{c.get('model_provider')}/{c.get('model_id')}",
+            ", ".join(t["tool_name"] for t in c.get("tools") or []) or "—",
+            str(len(c.get("feedback_rules") or [])),
+            f"{len(c.get('instructions') or [])} instr.",
+            str(r["created_at"])[:19],
+        )
+    console.print(table)
+
+
+@app.command("revisions")
+def revisions(
+    ctx: typer.Context,
+    agent_type: str,
+    version: int | None = typer.Argument(None, min=1, help="Mostra a configuração completa desta versão."),
+) -> None:
+    """Versões da configuração inteira: instructions, modelo, tools, schema, regras.
+
+    É o `agent_version` que cada run grava. `agents versions` mostra só o prompt."""
+    st = state(ctx)
+    if version is not None:
+        emit(st, call(st, st.client.agent_revision, agent_type, version), lambda r: console.print_json(json.dumps(r, default=str)))
+        return
+    emit(st, call(st, st.client.agent_revisions, agent_type), _render_revisions)
+
+
+@app.command("promote")
+def promote(
+    ctx: typer.Context,
+    agent_type: str = typer.Argument(..., help="Origem, ex.: r8-draft."),
+    to: str = typer.Option(..., "--to", help="Destino, ex.: r8 (criado se não existir)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Não pede confirmação (obrigatório sem TTY)."),
+) -> None:
+    """Copia a configuração de um agente para outro: o fluxo draft → prod.
+
+    Vão instructions, modelo, tools, schema, collection, dependências e regras de
+    feedback; o nome do destino fica. Para criar o draft, promova ao contrário:
+    `kuro agents promote r8 --to r8-draft`. Rode `kuro eval` antes."""
+    st = state(ctx)
+    if not yes:
+        if not st.interactive:
+            fail(st, "confirme com --yes para promover sem TTY", EXIT_USAGE)
+        if not typer.confirm(f"Copiar a configuração de {agent_type!r} para {to!r}?"):
+            raise typer.Exit()
+    result = call(st, st.client.promote_agent, agent_type, to)
+
+    def render(r: dict[str, Any]) -> None:
+        if r["unchanged"]:
+            console.print(f"[dim]{to} já está na mesma configuração de {agent_type} (v{r['agent_version']}) — nada a fazer[/]")
+            return
+        before = f"v{r['previous_version']}" if r["previous_version"] else "novo"
+        console.print(f"[green]✓[/] {to}: {before} → v{r['agent_version']} (configuração de {agent_type} v{r['source_version']})")
+
+    emit(st, result, render)
+
+
 @app.command("rollback")
 def rollback(
     ctx: typer.Context,
