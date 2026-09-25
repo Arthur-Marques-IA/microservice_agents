@@ -5,16 +5,17 @@ flowchart TB
 
     subgraph backend["src/agent_service/ · FastAPI"]
         ROUTES["api/<br/>contrato + CRUD"] --> REG["agents/registry<br/>monta o Agent do Agno<br/>(cache por updated_at)"]
-        REG --> STORE["agents/store<br/>definições + versões"]
+        REG --> STORE["agents/store + versions<br/>definições, prompt e<br/>versão da configuração"]
         REG --> TOOLS["tools/registry<br/>builtin · api · python"]
-        REG --> MODELS["models/provider<br/>credenciais cifradas"]
+        REG --> MODELS["models/provider<br/>credenciais cifradas,<br/>parâmetros e preço"]
         REG --> MEM["memory/<br/>Agno ou Mem0"]
         REG --> DOCS["documents/<br/>collections pgvector"]
-        ROUTES --> OBSV["observability/<br/>tracing + trace_store"]
+        ROUTES --> OBSV["observability/<br/>run_store (runs, spans,<br/>scores, referências)"]
         CLI["cli/ · kuro"] -. "HTTP" .-> ROUTES
+        MIG["migrations/<br/>Alembic"]
     end
 
     BFF -- "AGENT_SERVICE_URL" --> ROUTES
-    STORE & TOOLS & MODELS & MEM & DOCS --> PG[("Postgres + pgvector")]
-    ROUTES -.-> RD[("Redis Streams")]
-    OBSV -.-> LF[("Langfuse")]
+    STORE & TOOLS & MODELS & MEM & DOCS & OBSV --> PG[("Postgres + pgvector")]
+    MIG --> PG
+    OBSV -. "opcional" .-> LF[("Langfuse")]

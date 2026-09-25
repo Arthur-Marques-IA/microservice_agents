@@ -1,8 +1,9 @@
 flowchart TB
-    E["Você edita as instruções"] --> V["Nova versão do prompt<br/>com histórico e diff"]
+    E["Você muda o agente<br/>(prompt, modelo, parâmetros,<br/>tools, schema, regras)"] --> V["Nova versão da configuração<br/>(agent_version + config_hash)"]
     V --> R["Cada execução grava<br/>a versão que respondeu"]
-    R --> S["Feedback por execução<br/>no console ou pela API"]
+    R --> S["Feedback, avaliação e<br/>referência do shadow"]
     S --> F["Admin comenta<br/>uma conversa"]
-    F --> N["IA mescla o comentário<br/>na nota do agente"]
-    N --> R
-    S --> E
+    F --> N["IA mescla o comentário<br/>nas regras do agente"]
+    N --> V
+    S --> Q["kuro eval e concordância<br/>decidem o promote"]
+    Q --> E

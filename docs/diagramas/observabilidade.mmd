@@ -1,8 +1,7 @@
 flowchart LR
-    RUN["Execução do agente"] -- "OpenTelemetry<br/>(OpenInference)" --> EXP["Exportação em lote,<br/>em background"]
-    EXP --> LF[("Langfuse")]
-    LF -- "API pública<br/>(chaves só no servidor)" --> TS["TraceStore<br/>(interface)"]
-    TS --> OBS["/observability/*"]
+    RUN["Execução do agente"] -- "eventos do run<br/>(fora do caminho da resposta)" --> STORE[("Trace store local<br/>Postgres: runs, spans,<br/>scores, referências")]
+    RUN -. "opcional:<br/>LANGFUSE_ENABLED" .-> LF[("Langfuse")]
+    STORE --> OBS["/observability/*"]
     OBS --> CON["Console /logs"]
-    OBS --> CLI["kuro runs"]
-    OBS --> MOD["Outros módulos"]
+    OBS --> CLI["kuro runs · kuro eval"]
+    OBS --> MOD["Outros módulos<br/>(shadow, auditoria)"]

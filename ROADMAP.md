@@ -1,6 +1,7 @@
 # Roadmap do Kuro (agent-service)
 
 > Feito a partir da leitura do código em 2026-09-18 (commit `298a869`) e revisado a cada batelada
+> (última revisão: 2026-09-25, depois do Sprint 3 e da atualização do console)
 > — os itens entregues ficam riscados, com o que foi feito e o que sobrou, em vez de sumirem.
 > Complementa a seção "Roadmap (fase 2+)" do README: reordena os itens de lá, acrescenta o que não
 > aparecia e diz o que cortar.
@@ -103,13 +104,15 @@ procedural (§4.2, que migra depois a ficha do R8 e o reset do R4), sandbox Pyth
 
 **Já tem, e bem feito:**
 
-- Agentes dinâmicos em Postgres, resolvidos sem restart, com versão de prompt e diff no console.
+- Agentes dinâmicos em Postgres, resolvidos sem restart, com versão de prompt (com diff) e versão da
+  configuração inteira gravada em cada execução.
 - Três formatos de tool (builtin, API descrita em JSON, Python). Cada parâmetro declara a origem
   (`model`/`dependency`/`const`), o que impede que um CPF passe pelo modelo. Isso é um diferencial real.
 - Contrato de integração derivado dos dados (`/agents/{t}/integration`): a documentação não diverge do código.
 - Dois tipos de agente: `conversational` e `analysis` (one-shot com `response_schema` validado).
 - Anexos multimodais, RAG por collection, Mem0 plugável e a "nota de feedback" (um agent.md do admin).
-- Observabilidade completa via Langfuse, sem ninguém precisar abrir a UI do Langfuse.
+- Observabilidade no próprio Postgres (trace store local), com o Langfuse como exportador opcional.
+- Ciclo de mudança validada: draft → `kuro eval` → promote, e modo shadow com concordância.
 - CLI `kuro` pensada para outras IAs (`--json`, códigos de saída, `--no-input`, `AGENTS.md`).
 
 **Falta, em ordem de gravidade:**
@@ -133,8 +136,8 @@ operar e corrigir, **UI** opcional para inspecionar. Toda feature nova deveria c
 CLI e só depois na UI. A paridade entre as três está fechada e documentada como matriz no README
 (ver §6 para o que sobrou de fora e por quê).
 
-A palavra que sustenta o produto é **validada**. Você já tem as peças (versões, traces, scores), mas
-falta o ciclo que as une: *mudei o agente → provo que não piorou → publico*. A §5 cuida disso.
+A palavra que sustenta o produto é **validada**. O ciclo que une as peças — *mudei o agente → provo
+que não piorou → publico* — existe desde o Sprint 2 (ver §0 e §5); o que falta nele está na §5.
 
 ---
 
@@ -148,15 +151,17 @@ falta o ciclo que as une: *mudei o agente → provo que não piorou → publico*
    restart — necessário assim que houver mais de um consumidor ou mais de um tenant.
    Contexto original: tabela `api_keys` (hash, escopos, tenant, `last_used_at`).
    Escopos mínimos:
-   - `runtime`: `/chat`, `/analyze`, `/chat/stream`, scores. É o que os outros módulos recebem.
+   - `runtime`: `/chat`, `/analyze`, `/chat/stream`, scores e referência do shadow. É o que os outros
+     módulos recebem.
    - `admin`: CRUD de agentes, tools, credenciais, collections e leitura de traces. É o que CLI/UI usam.
 
    A CLI lê `KURO_API_KEY`. O BFF do Next injeta a key no server-side, como já faz com a URL.
    Quando isso existir, `CUSTOM_PYTHON_TOOLS_ENABLED` passa a fazer algum sentido.
-2. **Decidir multi-tenancy agora, antes de existir dado.** `agent_type` é PK global, e o mesmo vale
-   para tools, collections e credenciais. Mesmo que haja um tenant só, crie a coluna `tenant_id`
-   (default `'default'`) e PKs compostas. Fazer isso depois exige migrar 5 tabelas com dados.
-3. **Alembic.** Uma migração inicial que reflete o schema atual e o fim de `_add_missing_columns`.
+2. **Multi-tenancy — adiado de propósito (§0).** `agent_type` é PK global, e o mesmo vale para tools,
+   collections e credenciais. Com um consumidor só, a decisão de 2026-09-24 foi não pagar isso agora:
+   as tabelas novas (`runs`) já nascem com `tenant_id`, e as antigas migram quando houver o segundo
+   cliente — agora com Alembic, o que torna a migração de 5 tabelas um arquivo revisável.
+3. ~~**Alembic.**~~ **Feito** no Sprint 2 (`agent_service/migrations`, ver §0).
 4. ~~**CI (GitHub Actions).**~~ **Feito** (`.github/workflows/ci.yml`): pytest, `npm run lint`,
    `npm run build` e build das duas imagens. Sem `ruff` por enquanto — não está nas dependências de
    dev nem configurado, e adicioná-lo junto com a CI misturaria "passar a rodar os testes" com
@@ -167,7 +172,8 @@ falta o ciclo que as une: *mudei o agente → provo que não piorou → publico*
    `httpx` das tools Python passa pelo mesmo controle — sem isso a trava seria enfeite. Falta a parte
    por tenant, que depende do item 2. Limite conhecido: DNS rebinding (checamos e o httpx resolve de
    novo ao conectar); fechar isso é papel de um egress firewall no ambiente.
-6. **Tirar I/O síncrono do event loop.** `api/routes.py::chat` é `async`, mas `_resolve` faz
+6. **Tirar I/O síncrono do event loop.** **Feito em parte** no Sprint 1: `run_in_threadpool` nas três
+   rotas de execução. Continua valendo o resto: `api/routes.py::chat` é `async`, mas `_resolve` faz
    consultas síncronas no Postgres: `get_definition`, `get_feedback_note` (duas vezes: no stamp e no
    build) e um `get_tool` por tool, ou seja N+2 round-trips bloqueantes por mensagem. Opções, da mais
    barata para a mais completa:
@@ -181,17 +187,18 @@ falta o ciclo que as une: *mudei o agente → provo que não piorou → publico*
 
 Custa pouco, porque o frontend já é um serviço separado que só consome a API. **Não faça isso com flag
 no código, use `profiles` do Compose.** O peso real nem é a UI: é o Langfuse (ClickHouse + MinIO +
-Redis + worker, ~16 GB recomendados). Quem quer só terminal quer os dois desligados.
+Redis próprio + worker, ~16 GB recomendados). Quem quer só terminal quer os dois desligados.
 
 **Feito.** `frontend` está em `profiles: ["ui"]` e os cinco serviços do Langfuse em
 `profiles: ["observability"]`; `LANGFUSE_ENABLED` passou a ter default `false` no `agent-service`,
-como a ressalva abaixo exigia. `docker compose up -d` sobe três serviços; o comando completo sobe nove. Há ainda um profile
+como a ressalva abaixo exigia. `docker compose up -d` sobe dois serviços (postgres e agent-service —
+o Redis do núcleo saiu no Sprint 1); o comando completo sobe oito. Há ainda um profile
 `tls`, que põe um Caddy na frente com certificado do Let's Encrypt e renovação automática — sem
 ele a chave de API trafegaria em texto claro, o que inviabilizava o serviço ser chamado por
 outra plataforma em rede real.
 
 ```bash
-docker compose up -d                                   # núcleo: postgres, redis, agent-service
+docker compose up -d                                   # núcleo: postgres, agent-service
 docker compose --profile ui --profile observability up -d   # completo
 ```
 
@@ -205,23 +212,16 @@ Para ficar redondo:
   discordavam entre si, o que fazia o comportamento depender de como o serviço tinha subido.
 - **`kuro up [--ui] [--observability]` / `kuro down` / `kuro status`**: um wrapper do compose,
   para quem opera tudo pela CLI. Grave a escolha em `.kuro/config.toml`.
-- **Preço do modo enxuto: um trace store local.** `observability/trace_store.py` já é uma interface.
-  Crie uma implementação em Postgres com tabelas `runs` e `run_spans`, alimentada pelo próprio
-  `traced_run_events` (agente, versão, tokens, latência, status, tool calls). Isso resolve três
-  problemas de uma vez:
-  1. `kuro runs` funciona sem Langfuse;
-  2. `/observability/sessions` e `/stats` deixam de "varrer um lote e agregar em memória" (limitação
-     citada no README);
-  3. "taxa de 👍 por versão do prompt", que o README diz exigir "um índice próprio", passa a ser
-     um `GROUP BY`.
-
-  O Langfuse vira um exportador *adicional* para quem quer a análise profunda.
+- ~~**Preço do modo enxuto: um trace store local.**~~ **Feito** no Sprint 1
+  (`observability/run_store.py`): `kuro runs` funciona sem Langfuse, sessões e stats viraram
+  `GROUP BY` sobre o histórico inteiro, e "taxa de 👍 por versão" é uma consulta. O Langfuse virou
+  um exportador *adicional*, e nem vem mais na imagem padrão (extra `[observability]`).
 - Com a UI desligada, a CLI precisa cobrir tudo. Ver a tabela de paridade na §6.
 - **TUI de verdade.** O que existe hoje (`1eb1049 CLI/TUI v1`) é o shell/REPL interativo do `kuro`
   (typer + rich + questionary), não uma interface de tela cheia. Para quem desliga a UI, o próximo
   passo natural é um `kuro dash` em [Textual](https://textual.textualize.io): execuções chegando ao
-  vivo, funil das etapas, gasto de tokens e trace de um run navegável. Ele depende do trace store
-  local acima (H3).
+  vivo, funil das etapas, gasto de tokens e trace de um run navegável. O trace store local, de que
+  ele dependia, já existe.
 
 ### 4.2 Agente procedural (etapas)
 
@@ -261,7 +261,7 @@ resposta. Quem decide avançar, voltar ou concluir é o servidor. É isso que to
     { "id": "confirmacao", "type": "confirm" },
     { "id": "abrir", "type": "action", "tool": "abrir_chamado", "on_success": "done" }
   ],
-  "on_complete": { "emit": "redis", "stream": "kuro:procedures" }
+  "on_complete": { "emit": "webhook", "url": "https://regente.interno/kuro/procedures" }
 }
 ```
 
@@ -282,8 +282,8 @@ Regras de design:
   identificação fica pronta de saída.
 - **O contrato de resposta cresce sem quebrar:** `ChatResponse.state = {stage, collected, missing,
   done, result}`. O módulo integrador sabe quando acabou sem precisar interpretar o texto.
-- **Ao concluir,** o resultado estruturado vai para o Redis Stream / webhook. Esse é o primeiro uso
-  real de `messaging/` (ver §8).
+- **Ao concluir,** o resultado estruturado vai para um webhook de quem integra, com a entrega
+  enfileirada no Postgres (`SKIP LOCKED`, com retentativa) — sem Redis (ver §8).
 - **Observabilidade:** cada transição de etapa vira um span/evento. `kuro runs show` mostra a trilha
   `identificacao → problema → confirmacao → abrir`, o que ajuda muito a depurar onde os usuários
   desistem (funil por etapa na UI).
@@ -291,18 +291,17 @@ Regras de design:
 
 ## 5. Horizonte 2: "validada" de verdade (o diferencial)
 
-1. **Replay / avaliação de regressão:** `kuro eval <agente> --against v7 --last 50`. O comando reexecuta
-   as últimas N entradas reais (ou um dataset salvo) na versão candidata e compara com a atual usando
-   um LLM-juiz + as regras do `response_schema`. Na saída mostra um relatório e o código de saída diz
-   se piorou. É o recurso que fecha a narrativa "o Claude Code altera o agente e prova que não
-   quebrou". O `POST /observability/scores` já está pronto para receber as notas.
-2. **Versionar a configuração inteira, não só o prompt.** Cada `PUT` que muda comportamento (instruções,
-   modelo, tools, collection, nota de feedback, etapas) gera um snapshot imutável `agent_versions`.
-   O trace registra `config-v{N}`.
-3. **Canais `draft` / `prod` e fixação de versão.** `/chat` aceita `agent_type: "suporte@12"` ou
-   `"suporte@draft"`. A promoção vira `kuro agents promote suporte 12`, com rollback de um comando
-   (resolve o item "rollback" do README de um jeito mais útil que um `activate`). Opcional: canário
-   por % de sessões.
+1. **Replay / avaliação de regressão.** **Feito em parte** (Sprints 2 e 3): `kuro eval` roda um
+   dataset JSONL com comparação determinística campo a campo, regras de política e `--compare`
+   com a produção, e grava a nota `eval` em cada run; `kuro runs export` transforma as execuções
+   com referência do shadow em dataset. **Falta:** o LLM-juiz para a qualidade do texto (agentes
+   conversacionais) e o replay direto de execuções sem referência (`--last 50`).
+2. ~~**Versionar a configuração inteira, não só o prompt.**~~ **Feito** no Sprint 2
+   (`agents/versions.py`): `agent_version` + `config_hash` em cada run, criados quando o registry
+   remonta o agente. As "etapas" entram quando o procedural existir.
+3. **Canais `draft` / `prod` e fixação de versão.** **Feito de outro jeito:** o draft é um agente
+   comum e `kuro agents promote` copia a configuração (também pelo console). **Falta**, se houver
+   necessidade: fixar a versão por chamada (`suporte@12`) e canário por % de sessões.
 4. **A nota de feedback precisa de governança.** **Metade feita.** Ela deixou de ser um markdown
    sobrescrito e virou uma lista de regras com id: o modelo devolve operações (`edit`/`remove`/`add`)
    em vez de reescrever tudo, o servidor funde as regras parecidas demais, cada gravação vira uma
@@ -317,10 +316,10 @@ Regras de design:
    `chat_agent`, `list_runs`, `run_eval`...). O Claude Code e outros agentes passam a operar sem
    passar pelo shell nem interpretar stdout. O `AGENTS.md` continua sendo a documentação, e o MCP
    vira o transporte. Vale publicar também uma *skill* do Claude Code com as receitas.
-6. **Agentes como código (GitOps).** `kuro export ./kuro/` gera um YAML por agente, tool e collection.
-   `kuro plan ./kuro/` mostra o diff contra o servidor (estilo Terraform) e `kuro apply ./kuro/`
-   aplica. Os agentes passam a ser revisados em PR, a CI roda `kuro eval` e o próprio repo vira a
-   auditoria. `kuro schema agent` publica o JSON Schema para validação no editor.
+6. **Agentes como código (GitOps).** **Feito para agentes** no Sprint 3: `kuro agents export -o dir`
+   grava um JSON por agente, `kuro agents apply -f dir --dry-run` valida no servidor e mostra o que
+   mudaria, e `apply -f dir` só envia o que mudou (o fluxo de CI está em `docs/integracao.md` §6).
+   **Falta:** o mesmo para tools e collections, e `kuro schema agent` com o JSON Schema para o editor.
 
 ## 6. Usabilidade
 
@@ -343,26 +342,26 @@ A paridade fechou. O upload de arquivo saiu do `/knowledge/content` do AgentOS
 `POST /collections/{nome}/files`, que resolve a collection por nome e usa o
 embedder dela. Sobraram três exceções, todas com motivo declarado no README:
 indexar por **URL** (ainda no pipeline do AgentOS, só na padrão), **`runs tail`**
-e **testar uma chave antes de salvá-la**.
+e **testar uma chave antes de salvá-la**. O fluxo de CI (`eval`, `runs export`,
+`agents export`/`apply -f dir`, `--dry-run`) é só da CLI de propósito: trabalha com
+arquivos do repositório de quem mantém os agentes. Versões da configuração,
+promote e concordância do shadow estão também no console.
 
-`kuro sessions` usa as rotas de sessão do AgentOS (Postgres), não
-`/observability/sessions`, justamente para continuar funcionando no modo
-só-terminal. Já `runs stats` e `runs tail` leem o Langfuse: sem ele, saem com
-código 1 e a mensagem da API — o que reforça a necessidade do trace store local
-da §4.1.
+`kuro sessions` lê a conversa em si (rotas de sessão do AgentOS); `runs stats`,
+`runs tail` e `runs sessions` leem o trace store local — todos funcionam sem Langfuse.
 
 **Outros pontos:**
 
 - `kuro agents new --template {suporte|extrator|procedural}`: parte de um exemplo que funciona em vez
   de um JSON vazio. Os templates também servem de documentação viva.
-- `--dry-run` em `apply`, `set` e `feedback`: mostra o diff e as validações sem gravar. Faz muita
-  diferença quando quem opera é outra IA.
+- `--dry-run`: **feito em `apply`** (Sprint 3). Falta em `set` e em `feedback` (ver as regras
+  resultantes antes de gravar).
 - Mensagens de erro com a próxima ação sugerida (já acontece em várias rotas, então vale virar padrão),
   por exemplo `"hint": "kuro agents set x dependency_fields=..."`.
 - Custo visível no fluxo: `kuro chat` e o `ChatResponse` síncrono devolvem `usage` e custo estimado
   (hoje só o stream envia `usage`).
-- Um **orçamento por agente** (tokens/dia ou R$/mês), com alerta e bloqueio, fica simples depois do
-  trace store local.
+- Um **orçamento por agente** (tokens/dia ou R$/mês), com alerta e bloqueio: o trace store local e o
+  custo estimado por modelo (`models/pricing.py`) já existem, então é uma consulta + um corte.
 
 ## 7. Otimizações técnicas na stack
 
@@ -371,21 +370,22 @@ da §4.1.
 | `agents/base.py` | Todo agente `common` liga `enable_agentic_memory` + `add_memories_to_context`, o que traz chamadas extras ao LLM. ~~Com `mem0`, as duas memórias rodam em paralelo~~ (corrigido: o `mem0` agora substitui a memória do Agno) | Memória explícita em três modos: `none` / `agno` / `mem0`. A maioria dos agentes de atendimento com `user_id` efêmero não precisa de memória longa |
 | `memory/mem0_backend.py` | `MemoryClient` é o Mem0 **hospedado**, então dados do cliente (CPF etc.) saem da sua infra. O post-hook salva só a mensagem do usuário, de forma síncrona | Mem0 OSS (`Memory`) sobre o mesmo pgvector, por questão de LGPD; salvar o par usuário/assistente; hook assíncrono em background |
 | ~~`agents/base.py` + `/analyze`~~ | **corrigido**: o agente de análise recebia `db=get_db()` e cada chamada criava uma sessão `analyze-<uuid>` no Postgres, com o documento inteiro dentro | `db=None` em `kind="analysis"`. O Agno guarda todo acesso a sessão com `if agent.db is not None`, e a busca na collection não usa `agent.db`, então o RAG continua valendo |
-| Anexos | O base64 fica no histórico da sessão e volta a cada turno (o `AGENTS.md` já avisa) | `POST /files` que devolve `file_id`, guardar em storage de objetos (o MinIO já está no compose) e no histórico manter só a referência |
+| Anexos | O base64 fica no histórico da sessão e volta a cada turno (o `AGENTS.md` já avisa) | `POST /files` que devolve `file_id`, guardar em storage de objetos e no histórico manter só a referência (o MinIO do compose é do Langfuse e está no profile opcional: usar o Postgres ou um volume evita trazer ele de volta ao núcleo) |
 | ~~`documents/collections.py`~~ | **corrigido em parte**: o embedder era fixo em Gemini com a `GOOGLE_API_KEY` do ambiente | Embedder e credencial por collection (`documents/embedder.py`), escolhidos na criação e vindos do cofre. O `lru_cache` agora é chaveado pelo embedder, mas **rotação de credencial ainda exige restart** — a chave já está dentro do cliente |
 | AgentOS no boot | Agentes e collections criados depois do boot não aparecem nas rotas do AgentOS | Se o playground do os.agno.com não for essencial, deixe o AgentOS só para ingestão, ou remova (ver §8) |
 | Seleção de modelo | Ainda não há fallback (o README já prevê) | Com vários provedores já cadastrados, dá para ligar `fallback_models` por agente agora |
-| Streaming | O `/chat` síncrono agrega o stream em memória | Timeout por run + cancelamento quando o cliente desconecta, e `max_tool_calls` por agente contra loops de tool |
+| Streaming | O `/chat` síncrono agrega o stream em memória | ~~Timeout por run~~ **feito** (`timeout_seconds`, 504) e o cancelamento na desconexão já existe; falta `max_tool_calls` por agente contra loops de tool |
 | ~~Tool de API travando o event loop~~ | **corrigido**: o entrypoint era síncrono e o Agno chama entrypoint síncrono direto no caminho `async` (`Function.aexecute`), então uma chamada de 15s parava todas as requisições do worker | Entrypoint `async` com `httpx.AsyncClient` único — o pool também evita refazer o handshake TLS a cada chamada |
-| Escala | Cache por processo | Com o `LISTEN/NOTIFY` do H0 dá para rodar com `--workers N` ou várias réplicas sem cache velho |
+| Escala | Cache por processo; `MAX_CONCURRENT_RUNS` também é por processo; migração no startup sem lock | Com o `LISTEN/NOTIFY` do H0 dá para rodar com `--workers N` ou várias réplicas sem cache velho; advisory lock do Postgres no `upgrade_database` antes de subir mais de um processo |
 
 ## 8. O que cortar ou não fazer
 
-- **`messaging/redis_streams.py::consume_tasks`**: hoje é código morto que o README anuncia como
-  "pronto para virar um worker". Ele tem um consumer fixo (`worker-1`), faz ack depois do `yield`
-  (se o processo cair, a mensagem se perde) e não tem dead-letter. Ou vira o worker de jobs
-  assíncronos (`POST /chat/async` → `job_id` + webhook, e evento de conclusão do agente procedural),
-  ou sai. Um esqueleto documentado que ninguém chama engana quem lê o código.
+- ~~**`messaging/redis_streams.py::consume_tasks`**~~ **Saiu** no Sprint 1, junto com o Redis do
+  núcleo: era código morto (ack antes de processar, sem dead-letter). Decisão de 2026-09-25: **sem
+  fila no Kuro** — quem integra já tem a própria (no Regente, claim + daemon), e o Kuro responde 503
+  com `Retry-After` quando está no limite. Quando houver execução assíncrona de verdade (evento de
+  conclusão do procedural, `POST /chat/async`), a fila vai para o Postgres (`SELECT … FOR UPDATE
+  SKIP LOCKED`), não de volta para o Redis.
 - **Tools `python` enquanto não houver isolamento real.** O próprio código admite que o namespace
   restrito não é uma sandbox. As tools de API cobrem a maior parte dos casos. Se forem mantidas,
   precisam rodar em um container efêmero, sem rede e com limite de CPU/memória, e isso é um projeto à
@@ -409,7 +409,7 @@ da §4.1.
 - ~~**Multi-provedor de embeddings antes do trace store local e da auth.**~~ Este corte caiu: a auth
   saiu antes (H0), e o que motivou o multi-provedor não foi ganho de qualidade e sim uma dependência
   errada — o RAG exigia uma chave do Google mesmo num serviço rodando os agentes em OpenAI, e ignorava
-  o cofre de credenciais. O trace store local continua na frente do resto.
+  o cofre de credenciais.
 
 ## 9. Sequência sugerida
 
@@ -419,10 +419,10 @@ Os prazos são estimativas grosseiras para dar ordem de grandeza, não compromis
 | Fase | Entregas | Resultado |
 |---|---|---|
 | ~~**S1**~~ feito | Trace store em Postgres, Langfuse como extra opcional, Redis fora do core, `_resolve` em threadpool | Produção enxuta com runs auditáveis |
-| ~~**S2**~~ feito | Alembic, `config_hash` + `agent_versions`, `kuro eval` v0 determinístico, `@draft` + `promote` | Mudança de agente provada antes de ir para prod |
+| ~~**S2**~~ feito | Alembic, `config_hash` + `agent_versions`, `kuro eval` v0 determinístico, draft como agente comum + `promote` | Mudança de agente provada antes de ir para prod |
 | ~~**S3**~~ feito | Parâmetros do modelo, `enum`, timeout, limite de simultâneas, metadata, shadow (referência, concordância, export), `/ready`, agentes como código, guia de integração | O Regente integra sozinho |
 | **Regente**, contínuo | R8 shadow → prod, R4 shadow → prod, R6 shadow → assistido → autônomo | Regente fora do `ServiceLLM::chatJson()` |
-| **Depois** | `api_keys`/tenant/RLS, procedural, `tool_only`, cache com `LISTEN/NOTIFY`, sandbox Python, `kuro up/down`, MCP, GitOps, `kuro dash` | Plataforma completa, por necessidade |
+| **Depois** | `api_keys`/tenant/RLS, procedural, `tool_only`, cache com `LISTEN/NOTIFY`, lock de migração, sandbox Python, LLM-juiz no eval, `agente@versão`, `kuro up/down`, MCP, GitOps de tools/collections, `kuro dash` | Plataforma completa, por necessidade |
 
-A paridade CLI saiu desta linha: ela foi fechada junto com a §6 e está documentada como matriz no
-README.
+A paridade CLI × console está fechada e documentada como matriz no README (as exceções, com motivo,
+estão na §6). O console foi atualizado com o que os Sprints 2 e 3 trouxeram em 2026-09-25.

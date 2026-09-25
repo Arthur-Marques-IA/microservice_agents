@@ -24,7 +24,8 @@ uv run kuro runs list --agent suporte         # vê o que aconteceu, com tokens 
 | 🧩 **Um contrato, muitos agentes** | `POST /chat` é igual para qualquer agente. Criar ou editar um agente não exige deploy nem restart. |
 | 🔒 **O modelo não escolhe dado sensível** | O CPF usado numa chamada à sua API vem da requisição, injetado pelo servidor. O modelo não consegue inventar nem trocar o valor, nem ser induzido a consultar o CPF de outra pessoa. |
 | 🛠️ **Tools sem escrever código** | Descreva uma API HTTP em JSON e ela vira uma tool. Também há toolkits prontas do Agno. |
-| 🕰️ **Tudo versionado** | Cada mudança de prompt gera uma versão, com diff no console. Cada execução registra a versão que respondeu. |
+| 🕰️ **Tudo versionado** | Cada mudança de prompt, modelo, parâmetros, tools, schema ou regras gera uma versão da configuração. Cada execução registra a versão que respondeu. |
+| ✅ **Mudança provada antes de publicar** | Draft → `kuro eval` → promote, e modo shadow para comparar com o agente que já existe antes de trocar. |
 | 🔍 **Cada execução explicada** | Chamadas ao modelo, tools, tokens, latência e custo de cada run, pelo console, pela CLI ou pela API. |
 | 📈 **Melhora com o uso** | O feedback do admin sobre uma conversa vira uma regra que o agente segue nas próximas. |
 | 🤖 **Feito para agentes operarem** | CLI com `--json`, códigos de saída previsíveis e nenhum prompt interativo sem TTY. Receitas em [AGENTS.md](AGENTS.md). |
@@ -47,6 +48,11 @@ se configura pelo console dá para configurar pela CLI, e vice-versa:
 |---|---|---|---|
 | Agentes: listar, ver, criar, editar, excluir | `/agents` | `agents list\|get\|apply\|set\|delete` | Agentes |
 | Versões do prompt e rollback | `/agents/{t}/versions` | `agents versions\|rollback` | aba Versões |
+| Versões da configuração inteira | `/agents/{t}/revisions` | `agents revisions` | aba Versões |
+| Promover (draft → prod) | `/agents/{t}/promote` | `agents promote` | Promover |
+| Validar sem gravar | `POST`/`PUT /agents?dry_run=true` | `agents apply --dry-run` | — |
+| Agentes como código (diretório) | — | `agents export`, `agents apply -f <dir>` | — |
+| Avaliar contra um dataset | — | `eval` | — |
 | O que o agente aprendeu (regras de feedback) | `/agents/{t}/feedback` | `agents feedback` | aba Aprendizado |
 | Histórico das regras e rollback | `/agents/{t}/feedback/versions` | `agents feedback --versions\|--rollback` | aba Aprendizado |
 | Contrato de integração | `/agents/{t}/integration` | `agents integrate` | aba Integração |
@@ -60,14 +66,18 @@ se configura pelo console dá para configurar pela CLI, e vice-versa:
 | Listar e apagar documento indexado | `/collections/{n}/documents` | `collections docs\|rm-doc` | tabela da coleção |
 | Provedores e credenciais de modelo | `/model-providers`, `/model-credentials` | `providers`, `credentials` | Chaves de API |
 | Execuções, traces e scores | `/observability/*` | `runs ...` | Logs |
+| Shadow: referência e concordância | `/observability/references`, `/agreement` | `runs reference\|agreement` | aba Execuções (analistas) |
+| Dataset a partir do shadow | `/observability/export` | `runs export` | — |
 | Conversas salvas, renomear e apagar | `/sessions` | `sessions list\|show\|rename\|delete` | Conversas |
 
-Três exceções, e as três são limitações reais e não esquecimento:
+As exceções são limitações reais, não esquecimento:
 **indexar por URL** só funciona na coleção padrão (é o pipeline do AgentOS que
 não aceita escolher a coleção); **`runs tail`**, que acompanha execuções ao
-vivo, existe só na CLI (no console, a lista de Logs atualiza sozinha); e
+vivo, existe só na CLI (no console, a lista de Logs atualiza sozinha);
 **testar uma chave de API antes de salvá-la** existe só no console, porque na
-CLI o caminho é cadastrar e rodar `credentials test`.
+CLI o caminho é cadastrar e rodar `credentials test`; e o que é fluxo de CI —
+**`eval`, `runs export`, `agents export`/`apply -f <dir>` e `--dry-run`** — fica
+na CLI, porque trabalha com arquivos do repositório de quem mantém os agentes.
 
 ---
 
@@ -327,7 +337,7 @@ demais do catálogo (`calculator`, `hackernews`, `reasoning`, `email`, `files`,
 `pubmed`, `openweather`, `file_generation`, `sleep`) funcionam sem instalar nada.
 
 **Para onde uma tool pode falar.** Dentro do container, `http://postgres:5432`,
-o Redis e o metadata da nuvem (`http://169.254.169.254/`) estão a um pulo de
+os outros serviços do compose e o metadata da nuvem (`http://169.254.169.254/`) estão a um pulo de
 distância — e parte da URL pode vir do modelo, quando um parâmetro é
 `location: "path"`. Por isso o destino de toda tool é resolvido e conferido
 antes de cada chamada: só endereços públicos passam. Vale também para o
@@ -617,12 +627,12 @@ que nada fica esperando resposta. As receitas estão em **[AGENTS.md](AGENTS.md)
 |---|---|
 | **Playground** `/chat` | conversa em streaming com qualquer agente conversacional; URL por conversa, histórico reidratado; edição de `dependencies`; anexos; 👍/👎 — e o 👎 pergunta o que mudar e ensina o agente |
 | **Análise** `/analyze` | roda um agente analista: documento (ou anexo) entra, o objeto do `response_schema` sai |
-| **Agentes** `/agents` | configuração (só os campos alterados vão no `PUT`), tipo do agente e editor da saída estruturada, versões com diff, **Aprendizado** (as regras vindas de feedback, editáveis, com histórico e rollback), execuções, conversas e a aba Integração com o contrato vindo do backend |
+| **Agentes** `/agents` | configuração (só os campos alterados vão no `PUT`), tipo do agente, parâmetros de geração e tempo limite, editor da saída estruturada com valores permitidos (`enum`); **Versões** (configuração inteira e prompt com diff) e **Promover**; **Aprendizado** (as regras vindas de feedback, editáveis, com histórico e rollback); execuções, com a concordância do shadow nos analistas; conversas e a aba Integração com o contrato vindo do backend |
 | **Tools** `/tools` | criação e edição dos três tipos, com formulário próprio por tipo, campos de dentro de parâmetros `object`/`array`, botão **Testar** (com `dependencies`) e origem de cada parâmetro |
 | **Conhecimento** `/knowledge` | documentos com status, escolha do embedder na criação, upload por texto ou arquivo em qualquer coleção (URL só na padrão), teste de busca semântica |
 | **Modelos** `/models` | credenciais por provedor, teste de chave |
 | **Logs** `/logs` | sessões e execuções de todos os agentes, KPIs, gráfico diário; cada sessão e cada run abrem em detalhe |
-| **Trace** `/runs/[id]` | cascata de spans (agente → modelo → tools), prompt formatado, tokens, custo e avaliações |
+| **Trace** `/runs/[id]` | cascata de spans (agente → modelo → tools), versão da configuração, tokens, custo, avaliações, metadata de quem chamou e a referência do shadow |
 
 Atalhos: `Ctrl/⌘+K` (paleta de comandos) e `Ctrl/⌘+B` (recolher a sidebar).
 Tema claro, escuro ou do sistema.
@@ -641,11 +651,13 @@ console fica no `localStorage` do navegador.
   <img alt="Caminho dos traces da execução até o console, a CLI e outros módulos" src="docs/diagramas/observabilidade-claro.svg">
 </picture>
 
-Cada run registra a mensagem, as `dependencies`, cada chamada ao modelo
-(prompt, resposta, tokens, latência, custo) e cada tool call, com `user_id`,
-`session_id`, agente e `prompt-v{N}`. O `run_id` é gerado antes do run, então
-toda resposta aponta para o próprio trace. Tudo isso fica no trace store local
-(tabelas `runs`, `run_spans` e `run_scores` no Postgres do serviço), gravado
+Cada run registra a mensagem, as `dependencies`, a resposta, cada modelo
+chamado (tokens, latência, custo) e cada tool call (argumentos, resultado,
+erro), com `user_id`, `session_id`, agente, versão do prompt e a `metadata` que
+quem chamou mandou. O `run_id` é gerado antes do run, então toda resposta aponta
+para o próprio trace. Tudo isso fica no trace store local (tabelas `runs`,
+`run_spans`, `run_scores`, `run_metadata` e `run_references` no Postgres do
+serviço), gravado
 fora do caminho da resposta, com status sempre terminal (`success`, `error` ou
 `interrupted`), mais a versão da configuração que rodou (`agent_version`,
 `config_hash`). O custo vem do Agno quando ele informa; senão é estimado pelos
@@ -713,7 +725,6 @@ Tailwind, Docker Compose.
 | `ADMIN_API_KEY` / `RUNTIME_API_KEY` | — | chaves de API; **sem elas o serviço fica aberto** |
 | `KURO_API_DOMAIN` / `KURO_TLS_EMAIL` | `localhost` / — | domínio e e-mail do certificado (profile `tls`) |
 | `AGENT_SERVICE_BIND` | `127.0.0.1:58000` | onde a API é publicada no host |
-| `LANGFUSE_ENABLED` | `false` | ligue junto com o profile `observability` |
 | `TRACE_STORE_BACKEND` | `db` | de onde `kuro runs` e `/observability/*` leem: `db` ou `langfuse` |
 | `RUN_TIMEOUT_SECONDS` | `90` | tempo limite padrão de uma execução (o agente pode ter `timeout_seconds`); estourou, 504 |
 | `MAX_CONCURRENT_RUNS` | `16` | execuções simultâneas por processo; acima disso, 503 com `Retry-After` |
@@ -756,9 +767,6 @@ uv run kuro-migrate
 uv run pytest
 ```
 
-Não há migrações: o schema é criado no startup (`create_all`), e colunas novas
-entram por `ALTER TABLE` em cada `store.py`.
-
 **Diagramas:** as fontes ficam em `docs/diagramas/*.mmd` e o README exibe os
 SVGs gerados a partir delas (uma versão clara e uma escura), porque o
 renderizador de Mermaid do GitHub falha de forma intermitente. Depois de editar
@@ -785,19 +793,20 @@ Leia antes de expor o serviço fora de uma rede confiável:
 
   | Escopo | Alcança | Quem usa |
   |---|---|---|
-  | `RUNTIME_API_KEY` | `/chat`, `/chat/stream`, `/analyze`, scores | os outros módulos da plataforma |
+  | `RUNTIME_API_KEY` | `/chat`, `/chat/stream`, `/analyze`, scores, referência do shadow | os outros módulos da plataforma |
   | `ADMIN_API_KEY` | tudo: CRUD, traces, sessões, credenciais | console e CLI (`KURO_API_KEY`) |
 
   A chave de runtime é a que você entrega para fora: se vazar, o estrago é gastar
   token — não ler o histórico de todo mundo nem trocar o prompt. Rotacionar é
   trocar a variável e reiniciar; várias chaves com revogação é o passo seguinte.
 
-  O escopo `runtime` alcança exatamente quatro rotas: `/chat`, `/chat/stream`,
-  `/analyze` e `POST /observability/scores`. Todo o resto exige `admin`. Com auth
-  ligada, `/docs` e `/openapi.json` também exigem `admin` — publicar a superfície
-  inteira da API para quem alcança a porta seria entregar o mapa antes da
-  fechadura; para ler o OpenAPI, mande o header. `GET /health` fica sempre
-  aberta, porque é o healthcheck do container.
+  O escopo `runtime` alcança exatamente cinco rotas: `/chat`, `/chat/stream`,
+  `/analyze`, `POST /observability/scores` e `POST /observability/references`.
+  Todo o resto exige `admin`. Com auth ligada, `/docs` e `/openapi.json` também
+  exigem `admin` — publicar a superfície inteira da API para quem alcança a porta
+  seria entregar o mapa antes da fechadura; para ler o OpenAPI, mande o header.
+  `GET /health` e `GET /ready` ficam sempre abertas: são o healthcheck do
+  container e a readiness de quem chama.
 - **Tools `python` não são uma sandbox.** O namespace é restrito (imports
   liberados, nomes perigosos bloqueados), mas isso barra erro e abuso
   acidental, não um autor mal-intencionado. Por isso vêm desligadas.
@@ -824,14 +833,16 @@ O plano completo, com diagnóstico, prioridades e o que cortar, está em
 **[ROADMAP.md](ROADMAP.md)**. Os próximos passos:
 
 - **Migração dos agentes do Regente** (R8, depois R4, por último R6) em
-  shadow → assistido → autônomo, com a validação de negócio no Regente.
-- **Mais rápido:** thinking do Gemini configurável por agente (1,33 s → 0,86 s
-  medido), menos chamadas ao modelo no RAG, agentes montados no boot, import
-  preguiçoso na CLI.
+  shadow → assistido → autônomo, feita do lado do Regente com o
+  [guia de integração](docs/integracao.md).
+- **Mais rápido:** menos chamadas ao modelo no RAG, agentes montados no boot,
+  cache da configuração com `LISTEN/NOTIFY`, import preguiçoso na CLI.
 - **Agente procedural:** fluxos em etapas (coletar, confirmar, executar) com a
   máquina de estados no servidor e o estado da etapa devolvido no `/chat`.
-- **Validado de verdade:** `kuro eval` com replay de execuções reais e LLM-juiz para
-  a qualidade do texto, servidor MCP e agentes como código.
+- **Validado de verdade:** LLM-juiz no `kuro eval` para a qualidade do texto,
+  fixar versão por chamada (`r8@12`) e servidor MCP.
+- **Multi-cliente:** chaves de API por consumidor com revogação, `tenant_id` de
+  verdade e RBAC no console.
 - **Dependências privadas:** marcar campos de `dependencies` que as tools
   usam mas que nunca entram no prompt do modelo.
 - **Memória:** modos explícitos por agente (`none`, `auto`, `agentic`, `mem0`),
