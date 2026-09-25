@@ -465,7 +465,7 @@ class DbTraceStore:
             score_rows = list(
                 conn.execute(select(run_scores).where(run_scores.c.run_id == run_id).order_by(run_scores.c.timestamp))
             )
-            meta = _metadata_of(conn, [run_id])[run_id]
+            run_meta = _metadata_of(conn, [run_id])[run_id]
             reference = conn.execute(select(run_references.c.reference).where(run_references.c.run_id == run_id)).scalar()
         scores = [
             ScoreOut(
@@ -509,7 +509,7 @@ class DbTraceStore:
             )
         # Root primeiro, mesmo empatando no horário com o primeiro filho.
         spans.sort(key=lambda s: (s.parent_id is not None, s.started_at))
-        return RunTrace(run=_summary(row, [up, len(feedback) - up], meta), spans=spans, scores=scores, reference=reference)
+        return RunTrace(run=_summary(row, [up, len(feedback) - up], run_meta), spans=spans, scores=scores, reference=reference)
 
     def list_sessions(self, query: RunQuery) -> SessionPage:
         conditions = _filters(query, with_session=True)

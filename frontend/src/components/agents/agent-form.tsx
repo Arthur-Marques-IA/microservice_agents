@@ -14,6 +14,7 @@ import type {
   DependencyField,
   DependencyFieldType,
   MemoryBackend,
+  ModelParams,
   ModelProviderSummary,
   SchemaField,
   ToolSummary,
@@ -62,6 +63,53 @@ interface FormValues {
   dependencyFields: DependencyField[];
   memoryBackend: MemoryBackend;
   numHistoryRuns: number;
+  /** Parâmetros de geração como texto: "" = padrão do provedor. */
+  temperature: string;
+  topP: string;
+  maxTokens: string;
+  thinkingBudget: string;
+  /** "" = RUN_TIMEOUT_SECONDS do serviço. */
+  timeoutSeconds: string;
+}
+
+const asText = (value: number | null | undefined) => (value === null || value === undefined ? "" : String(value));
+
+/** Faixas iguais às do backend (`models/params.py`). */
+const PARAM_LIMITS = {
+  temperature: { min: 0, max: 2, integer: false, label: "Temperatura" },
+  topP: { min: 0, max: 1, integer: false, label: "top_p" },
+  maxTokens: { min: 1, max: 200000, integer: true, label: "Máx. de tokens" },
+  thinkingBudget: { min: 0, max: 32768, integer: true, label: "Orçamento de raciocínio" },
+  timeoutSeconds: { min: 1, max: 600, integer: true, label: "Tempo limite" },
+} as const;
+
+function numberProblem(key: keyof typeof PARAM_LIMITS, raw: string): string | null {
+  if (raw.trim() === "") return null;
+  const limits = PARAM_LIMITS[key];
+  const value = Number(raw);
+  if (Number.isNaN(value)) return `${limits.label}: use um número.`;
+  if (limits.integer && !Number.isInteger(value)) return `${limits.label}: use um número inteiro.`;
+  if (value < limits.min || value > limits.max) return `${limits.label}: entre ${limits.min} e ${limits.max}.`;
+  return null;
+}
+
+/** Os parâmetros do formulário no formato da API; `null` = padrão do provedor.
+ * `thinking_budget` só vai para o google — em outro provedor o backend recusa. */
+function paramsFrom(values: FormValues, provider: string | undefined): ModelParams | null {
+  const params: ModelParams = {};
+  if (values.temperature.trim()) params.temperature = Number(values.temperature);
+  if (values.topP.trim()) params.top_p = Number(values.topP);
+  if (values.maxTokens.trim()) params.max_tokens = Number(values.maxTokens);
+  if (values.thinkingBudget.trim() && (provider ?? "google") === "google") {
+    params.thinking_budget = Number(values.thinkingBudget);
+  }
+  return Object.keys(params).length ? params : null;
+}
+
+function sameParams(a: ModelParams | null | undefined, b: ModelParams | null | undefined) {
+  const norm = (p: ModelParams | null | undefined) =>
+    JSON.stringify(Object.entries(p ?? {}).sort(([x], [y]) => x.localeCompare(y)));
+  return norm(a) === norm(b);
 }
 
 function valuesFrom(agent?: AgentDefinition, instructions?: string[]): FormValues {
@@ -78,6 +126,11 @@ function valuesFrom(agent?: AgentDefinition, instructions?: string[]): FormValue
     dependencyFields: agent?.dependency_fields ?? [],
     memoryBackend: agent?.memory_backend ?? "common",
     numHistoryRuns: agent?.num_history_runs ?? 10,
+    temperature: asText(agent?.model_params?.temperature),
+    topP: asText(agent?.model_params?.top_p),
+    maxTokens: asText(agent?.model_params?.max_tokens),
+    thinkingBudget: asText(agent?.model_params?.thinking_budget),
+    timeoutSeconds: asText(agent?.timeout_seconds),
   };
 }
 
@@ -134,6 +187,11 @@ function buildUpdate(values: FormValues, agent: AgentDefinition, models: ModelOp
   if (JSON.stringify(values.responseSchema) !== JSON.stringify(agent.response_schema)) {
     payload.response_schema = values.responseSchema;
   }
+  const provider = models.find((m) => m.id === values.modelId)?.provider;
+  const params = paramsFrom(values, provider);
+  if (!sameParams(params, agent.model_params)) payload.model_params = params ?? {};
+  const timeout = values.timeoutSeconds.trim() ? Number(values.timeoutSeconds) : null;
+  if (timeout !== (agent.timeout_seconds ?? null)) payload.timeout_seconds = timeout;
   // `num_history_runs` e `memory_backend` não existem num agente analista: o
   // backend responde 422 se vierem com valor diferente do padrão.
   if (values.kind !== "analysis") {
@@ -216,6 +274,12 @@ export function AgentForm({
         : "Use letras minúsculas, números, '-' ou '_' (começando por letra ou número).",
     instructions: instructionLines.length > 0 ? null : "Escreva ao menos uma instrução.",
     numHistoryRuns: values.numHistoryRuns >= 0 ? null : "Use um número maior ou igual a zero.",
+    modelParams:
+      numberProblem("temperature", values.temperature) ??
+      numberProblem("topP", values.topP) ??
+      numberProblem("maxTokens", values.maxTokens) ??
+      numberProblem("thinkingBudget", values.thinkingBudget) ??
+      numberProblem("timeoutSeconds", values.timeoutSeconds),
     responseSchema:
       values.kind !== "analysis"
         ? null
@@ -276,6 +340,8 @@ export function AgentForm({
           knowledge_collection: values.knowledgeCollection || null,
           dependency_fields: values.dependencyFields,
           response_schema: analysis ? values.responseSchema : [],
+          model_params: paramsFrom(values, model.provider),
+          timeout_seconds: values.timeoutSeconds.trim() ? Number(values.timeoutSeconds) : null,
           // Omitidos em analysis: o backend recusa com 422 um campo que não
           // faz nada num agente one-shot, em vez de aceitá-lo calado.
           ...(analysis
@@ -511,6 +577,55 @@ export function AgentForm({
               </Field>
             )}
           </div>
+          <Field
+            label="Parâmetros de geração"
+            error={fieldError("modelParams")}
+            hint="Vazio = padrão do provedor. Mudar qualquer um gera uma nova versão da configuração."
+          >
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <ParamInput
+                id={`${id}-temperature`}
+                label="Temperatura"
+                placeholder="0–2"
+                step="0.1"
+                value={values.temperature}
+                onChange={(v) => update("temperature", v)}
+              />
+              <ParamInput
+                id={`${id}-top-p`}
+                label="top_p"
+                placeholder="0–1"
+                step="0.05"
+                value={values.topP}
+                onChange={(v) => update("topP", v)}
+              />
+              <ParamInput
+                id={`${id}-max-tokens`}
+                label="Máx. tokens"
+                placeholder="padrão"
+                value={values.maxTokens}
+                onChange={(v) => update("maxTokens", v)}
+              />
+              {currentProvider === "google" && (
+                <ParamInput
+                  id={`${id}-thinking`}
+                  label="Raciocínio"
+                  placeholder="0 = desliga"
+                  title="thinking_budget (Gemini 2.5): 0 desliga o raciocínio — mais rápido e barato em decisões simples."
+                  value={values.thinkingBudget}
+                  onChange={(v) => update("thinkingBudget", v)}
+                />
+              )}
+              <ParamInput
+                id={`${id}-timeout`}
+                label="Tempo limite (s)"
+                placeholder="padrão"
+                title="Passou disso, a execução para e a API responde 504 — quem chama cai no próprio fallback."
+                value={values.timeoutSeconds}
+                onChange={(v) => update("timeoutSeconds", v)}
+              />
+            </div>
+          </Field>
           {values.kind === "analysis" ? (
             <p className="rounded-lg border border-dashed border-border px-4 py-3 text-[13px] text-muted-foreground">
               Um agente analista é one-shot: sem sessão, sem histórico e sem memória de longo prazo. A base de
@@ -695,6 +810,40 @@ export function AgentForm({
         {buttons}
       </div>
     </form>
+  );
+}
+
+function ParamInput({
+  id,
+  label,
+  value,
+  onChange,
+  placeholder,
+  step,
+  title,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  step?: string;
+  title?: string;
+}) {
+  return (
+    <label htmlFor={id} className="flex flex-col gap-1 text-xs text-muted-foreground" title={title}>
+      {label}
+      <Input
+        id={id}
+        type="number"
+        inputMode="decimal"
+        step={step ?? "1"}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-8"
+      />
+    </label>
   );
 }
 

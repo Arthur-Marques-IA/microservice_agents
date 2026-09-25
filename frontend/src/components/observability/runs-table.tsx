@@ -205,7 +205,17 @@ function RunRow({ run, showAgentColumn }: { run: RunSummary; showAgentColumn: bo
         <RunStatusBadge status={run.status} title={run.status_message} />
       </td>
       <td className="px-3 py-2.5">
-        {run.prompt_version != null ? <Badge variant="outline">v{run.prompt_version}</Badge> : "—"}
+        {run.agent_version != null ? (
+          <Badge variant="outline" title={`configuração v${run.agent_version} · prompt v${run.prompt_version ?? "—"}`}>
+            v{run.agent_version}
+          </Badge>
+        ) : run.prompt_version != null ? (
+          <Badge variant="outline" title="prompt (run anterior ao versionamento da configuração)">
+            p{run.prompt_version}
+          </Badge>
+        ) : (
+          "—"
+        )}
       </td>
       <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{formatMs(run.latency_ms)}</td>
       <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{run.total_tokens ? formatNumber(run.total_tokens) : "—"}</td>

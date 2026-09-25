@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Copy, Ellipsis, FileSearch, MessageSquare, MessagesSquare, Trash } from "lucide-react";
+import { ArrowUpRight, Copy, Ellipsis, FileSearch, MessageSquare, MessagesSquare, Trash } from "lucide-react";
 import { errorMessage, requestJson } from "@/lib/http";
 import { formatNumber } from "@/lib/format";
 import { MEMORY_BACKENDS, modelLabel } from "@/lib/agent-meta";
@@ -21,6 +21,8 @@ import { useToast } from "@/components/ui/toast";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { AgentForm, type AgentFormPayload } from "@/components/agents/agent-form";
 import { VersionHistory } from "@/components/agents/version-history";
+import { PromoteDialog, RevisionsPanel } from "@/components/agents/revisions-panel";
+import { AgreementPanel } from "@/components/observability/agreement-panel";
 import { FeedbackPanel } from "@/components/agents/feedback-panel";
 import { IntegrationPanel } from "@/components/integration/integration-panel";
 import { AgentRuns } from "@/components/observability/agent-runs";
@@ -50,6 +52,7 @@ export function AgentDetail({
   const [tab, setTab] = useState<TabValue>(isTab(initialTab) ? initialTab : "config");
   // `key` remonta o formulário quando uma versão antiga é carregada no editor.
   const [draft, setDraft] = useState<{ key: number; instructions?: string[] }>({ key: 0 });
+  const [promoteOpen, setPromoteOpen] = useState(false);
   const agentSessions = sessions.filter((s) => s.agent_id === agent.agent_type);
   const slug = encodeURIComponent(agent.agent_type);
 
@@ -164,6 +167,9 @@ export function AgentDetail({
               <DropdownMenuItem icon={Copy} onSelect={() => void navigator.clipboard?.writeText(agent.agent_type)}>
                 Copiar slug
               </DropdownMenuItem>
+              <DropdownMenuItem icon={ArrowUpRight} onSelect={() => setPromoteOpen(true)}>
+                Promover configuração…
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 icon={Trash}
@@ -207,13 +213,20 @@ export function AgentDetail({
           />
         </TabsContent>
 
-        <TabsContent value="versions">
-          <VersionHistory
-            versions={versions}
-            currentVersion={agent.prompt_version}
-            currentInstructions={agent.instructions}
-            onRestore={handleRestore}
-          />
+        <TabsContent value="versions" className="flex flex-col gap-8">
+          <RevisionsPanel agentType={agent.agent_type} />
+          <div className="flex flex-col gap-3">
+            <SectionHeading
+              title="Prompt"
+              description="Só as instruções, com comparação entre versões e restauração no editor."
+            />
+            <VersionHistory
+              versions={versions}
+              currentVersion={agent.prompt_version}
+              currentInstructions={agent.instructions}
+              onRestore={handleRestore}
+            />
+          </div>
         </TabsContent>
 
         <TabsContent value="feedback">
@@ -227,7 +240,8 @@ export function AgentDetail({
           )}
         </TabsContent>
 
-        <TabsContent value="runs">
+        <TabsContent value="runs" className="flex flex-col gap-8">
+          {agent.kind === "analysis" && <AgreementPanel agentType={agent.agent_type} />}
           <AgentRuns agentType={agent.agent_type} versions={versions} />
         </TabsContent>
 
@@ -243,6 +257,7 @@ export function AgentDetail({
           <IntegrationPanel agentType={agent.agent_type} showReference />
         </TabsContent>
       </PageBody>
+      <PromoteDialog agentType={agent.agent_type} open={promoteOpen} onOpenChange={setPromoteOpen} />
     </Tabs>
   );
 }

@@ -32,6 +32,7 @@ from agent_service.api.observability_routes import (
     ReferenceIn,
     agreement,
     export_cases,
+    get_run_trace,
     list_runs,
     list_sessions,
     save_reference,
@@ -200,6 +201,8 @@ def test_metadata_and_session_tie_the_decision_to_the_conversation(monkeypatch, 
 
     runs = list_runs(agent_type=r8, meta=["lead_id=42", "vip=true"]).items
     assert len(runs) == 2 and runs[0].metadata == {"lead_id": "42", "vip": "true"}
+    # O trace completo também traz a metadata (o loop dos spans não pode sobrescrevê-la).
+    assert get_run_trace(runs[0].run_id).run.metadata == {"lead_id": "42", "vip": "true"}
     assert list_runs(agent_type=r8, meta=["lead_id=43"]).items == []
     [session] = list_sessions(agent_type=r8).items
     assert session.session_id == conversa and session.run_count == 2

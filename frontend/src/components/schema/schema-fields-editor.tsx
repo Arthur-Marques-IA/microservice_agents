@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Plus, Trash } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +16,9 @@ import type { FieldType, ItemType, SchemaField, SchemaItem } from "@/lib/types";
  * As regras que o backend cobra com 422, e que aqui aparecem antes do save:
  * `object` precisa de ao menos um campo, `array` precisa do tipo do item, e
  * um array não tem array dentro.
+ *
+ * Folhas (menos boolean) aceitam `enum`: os valores permitidos, que o provedor
+ * recebe no schema — é o que impede o modelo de inventar uma `acao`.
  */
 
 const FIELD_TYPES: FieldType[] = ["string", "integer", "number", "boolean", "object", "array"];
@@ -27,6 +31,30 @@ export function emptyField(): SchemaField {
   return { name: "", type: "string", required: false };
 }
 
+const ENUM_TYPES = new Set<string>(["string", "integer", "number"]);
+
+/** Texto "a, b, c" → valores do tipo do campo. Número inválido vira `NaN` (o
+ * `schemaProblem` aponta); vazio = sem enum. */
+export function parseEnum(text: string, type: string): (string | number)[] | undefined {
+  const parts = text
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return undefined;
+  return type === "string" ? parts : parts.map((p) => Number(p));
+}
+
+function enumProblem(name: string, type: string, values?: (string | number)[] | null): string | null {
+  if (!values?.length) return null;
+  if (!ENUM_TYPES.has(type)) return `enum de ${name}: não se aplica a ${type}`;
+  for (const v of values) {
+    if (type !== "string" && (typeof v !== "number" || Number.isNaN(v))) return `enum de ${name}: ${v} não é número`;
+    if (type === "integer" && !Number.isInteger(v)) return `enum de ${name}: ${v} não é inteiro`;
+  }
+  if (new Set(values.map(String)).size !== values.length) return `enum de ${name}: valores repetidos`;
+  return null;
+}
+
 /** Primeiro problema que faria o backend recusar o schema, ou `null`. */
 export function schemaProblem(fields: SchemaField[], depth = 1): string | null {
   if (depth > MAX_DEPTH) return `campos aninhados demais (máximo ${MAX_DEPTH} níveis)`;
@@ -35,6 +63,8 @@ export function schemaProblem(fields: SchemaField[], depth = 1): string | null {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(field.name)) {
       return `nome inválido: ${field.name} (letras, números e _, sem começar com número)`;
     }
+    const enumError = enumProblem(field.name, field.type, field.enum);
+    if (enumError) return enumError;
     if (field.type === "object") {
       if (!field.fields?.length) return `o campo ${field.name} é object e precisa de ao menos um campo dentro`;
       const dentro = schemaProblem(field.fields, depth + 1);
@@ -42,6 +72,8 @@ export function schemaProblem(fields: SchemaField[], depth = 1): string | null {
     }
     if (field.type === "array") {
       if (!field.items) return `o campo ${field.name} é array e precisa do tipo do item`;
+      const itemEnumError = enumProblem(`${field.name}[]`, field.items.type, field.items.enum);
+      if (itemEnumError) return itemEnumError;
       if (field.items.type === "object") {
         if (!field.items.fields?.length) {
           return `os itens de ${field.name} são object e precisam de ao menos um campo`;
@@ -66,7 +98,14 @@ export function SchemaFieldsEditor({
   addLabel?: string;
 }) {
   function patch(index: number, changes: Partial<SchemaField>) {
-    onChange(value.map((field, i) => (i === index ? normalize({ ...field, ...changes }) : field)));
+    onChange(
+      value.map((field, i) => {
+        if (i !== index) return field;
+        // Trocar o tipo invalida os valores permitidos do tipo anterior.
+        const typeChanged = changes.type !== undefined && changes.type !== field.type;
+        return normalize({ ...field, ...changes, ...(typeChanged ? { enum: undefined } : {}) });
+      })
+    );
   }
 
   return (
@@ -118,6 +157,14 @@ export function SchemaFieldsEditor({
               <Trash className="size-4" />
             </Button>
           </div>
+
+          {ENUM_TYPES.has(field.type) && (
+            <EnumInput
+              value={field.enum}
+              type={field.type}
+              onChange={(values) => patch(index, { enum: values })}
+            />
+          )}
 
           {field.type === "object" && (
             <Nested title="campos de dentro" depth={depth}>
@@ -175,6 +222,9 @@ function ItemEditor({
           </option>
         ))}
       </Select>
+      {ENUM_TYPES.has(value.type) && (
+        <EnumInput value={value.enum} type={value.type} onChange={(values) => onChange({ ...value, enum: values })} />
+      )}
       {value.type === "object" && (
         <SchemaFieldsEditor
           value={value.fields ?? []}
@@ -183,6 +233,30 @@ function ItemEditor({
         />
       )}
     </div>
+  );
+}
+
+/** Valores permitidos separados por vírgula. O texto é local e só vira lista ao
+ * sair do campo: converter a cada tecla engoliria a vírgula recém-digitada. */
+function EnumInput({
+  value,
+  type,
+  onChange,
+}: {
+  value?: (string | number)[] | null;
+  type: string;
+  onChange: (values: (string | number)[] | undefined) => void;
+}) {
+  const [text, setText] = useState((value ?? []).join(", "));
+  return (
+    <Input
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => onChange(parseEnum(text, type))}
+      placeholder="valores permitidos, separados por vírgula (opcional)"
+      className="mt-2 h-8 text-xs"
+      aria-label="Valores permitidos"
+    />
   );
 }
 
@@ -211,5 +285,5 @@ function normalize(field: SchemaField): SchemaField {
   if (field.type === "array") {
     return { ...field, fields: undefined, items: field.items ?? { type: "string" } };
   }
-  return { ...field, fields: undefined, items: undefined };
+  return { ...field, fields: undefined, items: undefined, ...(ENUM_TYPES.has(field.type) ? {} : { enum: undefined }) };
 }

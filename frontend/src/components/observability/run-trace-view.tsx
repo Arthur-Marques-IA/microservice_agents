@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState, Fragment } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -21,6 +21,7 @@ import { ApiError, errorMessage, requestJson } from "@/lib/http";
 import { formatCost, formatDateTime, formatMs, formatNumber } from "@/lib/format";
 import type { RunTrace, TraceScore, TraceSpan } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
+import { CodeBlock } from "@/components/ui/code-block";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -144,6 +145,11 @@ function TraceDetail({ trace, onReload }: { trace: RunTrace; onReload: () => voi
         description={
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <RunStatusBadge status={run.status} title={run.status_message} />
+            {run.agent_version != null && (
+              <Badge variant="outline" title={`config_hash ${run.config_hash ?? "—"}`}>
+                Config v{run.agent_version}
+              </Badge>
+            )}
             {run.prompt_version != null && <Badge variant="outline">Prompt v{run.prompt_version}</Badge>}
             {run.model && <Badge variant="outline">{run.model}</Badge>}
             {run.endpoint && <Badge variant="outline">{run.endpoint}</Badge>}
@@ -225,6 +231,27 @@ function TraceDetail({ trace, onReload }: { trace: RunTrace; onReload: () => voi
           </Card>
           {selected && <SpanDetail key={selected.id} span={selected} />}
         </div>
+
+        {(Object.keys(run.metadata ?? {}).length > 0 || trace.reference) && (
+          <div className="grid items-start gap-4 lg:grid-cols-2">
+            {Object.keys(run.metadata ?? {}).length > 0 && (
+              <Card className="flex flex-col gap-2 p-4">
+                <h2 className="text-sm font-semibold">Metadata de quem chamou</h2>
+                <dl className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-3 gap-y-1 font-mono text-[12px]">
+                  {Object.entries(run.metadata ?? {}).map(([key, value]) => (
+                    <Fragment key={key}>
+                      <dt className="truncate text-muted-foreground">{key}</dt>
+                      <dd className="truncate">{value}</dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              </Card>
+            )}
+            {trace.reference && (
+              <CodeBlock title="referência (shadow) — a decisão que deveria ter saído" code={JSON.stringify(trace.reference, null, 2)} />
+            )}
+          </div>
+        )}
 
         {scores.length > 0 && <Scores scores={scores} />}
       </PageBody>

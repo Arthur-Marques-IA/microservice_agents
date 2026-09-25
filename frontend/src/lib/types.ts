@@ -185,6 +185,8 @@ export interface DependencyField {
   description: string;
   required: boolean;
   default: unknown;
+  /** Valores permitidos (não vale para boolean). */
+  enum?: (string | number)[] | null;
 }
 
 export interface DependencyFieldInput {
@@ -214,6 +216,8 @@ export interface SchemaField {
   description?: string | null;
   required?: boolean;
   default?: unknown;
+  /** Valores permitidos: o modelo só pode devolver um deles (folhas, menos boolean). */
+  enum?: (string | number)[] | null;
   fields?: SchemaField[] | null;
   items?: SchemaItem | null;
 }
@@ -221,6 +225,16 @@ export interface SchemaField {
 export interface SchemaItem {
   type: ItemType;
   fields?: SchemaField[] | null;
+  enum?: (string | number)[] | null;
+}
+
+/** Parâmetros de geração (`models/params.py`); ausente = padrão do provedor. */
+export interface ModelParams {
+  temperature?: number;
+  top_p?: number;
+  max_tokens?: number;
+  /** Só Gemini 2.5: 0 desliga o raciocínio (mais rápido e barato). */
+  thinking_budget?: number;
 }
 
 export interface AgentDefinition {
@@ -240,6 +254,9 @@ export interface AgentDefinition {
   dependency_fields: DependencyField[];
   memory_backend: MemoryBackend;
   num_history_runs: number;
+  model_params?: ModelParams | null;
+  /** Tempo limite de uma execução; `null` = padrão do serviço (RUN_TIMEOUT_SECONDS). */
+  timeout_seconds?: number | null;
   is_seed: boolean;
   prompt_version: number;
   created_at: string;
@@ -262,12 +279,43 @@ export interface AgentDefinitionInput {
   dependency_fields?: DependencyFieldInput[];
   memory_backend?: MemoryBackend;
   num_history_runs?: number;
+  model_params?: ModelParams | null;
+  timeout_seconds?: number | null;
 }
 
 export interface PromptVersion {
   version: number;
   instructions: string[];
   created_at: string;
+}
+
+/** Versão da configuração inteira (`GET /agents/{t}/revisions`) — o `agent_version` de cada run. */
+export interface AgentRevision {
+  version: number;
+  config_hash: string;
+  config: {
+    instructions?: string[];
+    model_provider?: string;
+    model_id?: string;
+    model_params?: ModelParams;
+    timeout_seconds?: number;
+    tools?: { tool_name: string; kind?: string; config_hash?: string; missing?: boolean }[];
+    feedback_rules?: string[];
+    response_schema?: SchemaField[];
+    knowledge_collection?: string | null;
+    [key: string]: unknown;
+  };
+  created_at: string;
+  current: boolean;
+}
+
+export interface PromoteResult {
+  agent: AgentDefinition;
+  source: string;
+  source_version: number;
+  previous_version: number | null;
+  agent_version: number;
+  unchanged: boolean;
 }
 
 // -- Collections (bases de conhecimento) --------------------------------
@@ -496,6 +544,9 @@ export interface RunSummary {
   agent_type: string;
   agent_name?: string | null;
   prompt_version?: number | null;
+  /** Versão da configuração inteira que rodou; `null` em runs antigos. */
+  agent_version?: number | null;
+  config_hash?: string | null;
   endpoint?: string | null;
   user_id?: string | null;
   session_id?: string | null;
@@ -515,6 +566,8 @@ export interface RunSummary {
   /** `null` quando havia avaliações demais para contar na listagem — o trace tem a contagem exata. */
   feedback_up: number | null;
   feedback_down: number | null;
+  /** Correlação mandada por quem chamou (ex.: `conversation_id`). */
+  metadata?: Record<string, string>;
 }
 
 export interface RunPage {
@@ -559,6 +612,24 @@ export interface RunTrace {
   run: RunSummary;
   spans: TraceSpan[];
   scores: TraceScore[];
+  /** Decisão de referência (ex.: a do agente legado no modo shadow). */
+  reference?: Record<string, unknown> | null;
+}
+
+/** `GET /observability/agreement` — concordância com a referência (modo shadow). */
+export interface Agreement {
+  agent_type: string;
+  runs: number;
+  skipped: number;
+  full_match: number;
+  rate: number;
+  fields: { field: string; compared: number; matched: number; rate: number }[];
+  by_version: { agent_version: number | null; runs: number; full_match: number; rate: number }[];
+  disagreements: {
+    run_id: string;
+    agent_version: number | null;
+    mismatches: { field: string; expected: unknown; actual: unknown }[];
+  }[];
 }
 
 /** `GET /observability/config` — se as execuções são registradas, se o Langfuse está ligado e onde fica o projeto. */
