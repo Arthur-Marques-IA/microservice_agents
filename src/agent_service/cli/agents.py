@@ -5,6 +5,7 @@ Sem subcomando e com TTY, abre o seletor: escolhe o agente e depois a ação
 """
 
 import json
+from pathlib import Path
 from typing import Any
 
 import click
@@ -43,6 +44,8 @@ EDITABLE_FIELDS = (
     "num_history_runs",
     "kind",
     "response_schema",
+    "model_params",
+    "timeout_seconds",
 )
 
 
@@ -147,28 +150,99 @@ def get_agent(
         emit(st, definition, _render_agent)
 
 
+def _apply_one(st: State, body: dict[str, Any], source: str, existing: dict[str, dict[str, Any]], dry_run: bool) -> dict[str, Any]:
+    agent_type = body.get("agent_type")
+    if not isinstance(agent_type, str) or not agent_type:
+        fail(st, f"{source}: precisa do campo agent_type", EXIT_USAGE)
+    unknown = sorted(set(body) - set(EDITABLE_FIELDS) - {"agent_type"})
+    if unknown:
+        fail(st, f"{source}: campos não editáveis: {', '.join(unknown)}", EXIT_USAGE)
+
+    current = existing.get(agent_type)
+    if current is None:
+        result = call(st, st.client.create_agent, body, dry_run=dry_run)
+        return {"agent_type": agent_type, "action": "create", "changed": sorted(k for k in body if k != "agent_type"), "agent": result}
+    changes = {k: v for k, v in body.items() if k != "agent_type" and current.get(k) != v}
+    if not changes:
+        return {"agent_type": agent_type, "action": "unchanged", "changed": [], "agent": current}
+    result = call(st, st.client.update_agent, agent_type, changes, dry_run=dry_run)
+    return {"agent_type": agent_type, "action": "update", "changed": sorted(changes), "agent": result}
+
+
+def _render_apply(report: dict[str, Any]) -> None:
+    prefix = "[yellow](dry-run)[/] " if report["dry_run"] else ""
+    for item in report["items"]:
+        if item["action"] == "unchanged":
+            console.print(f"{prefix}[dim]= {item['agent_type']} sem mudanças[/]")
+        else:
+            verb = "criaria" if report["dry_run"] and item["action"] == "create" else (
+                "atualizaria" if report["dry_run"] else ("criado" if item["action"] == "create" else "atualizado")
+            )
+            console.print(f"{prefix}[green]✓[/] {item['agent_type']} {verb}: {', '.join(item['changed'])}")
+
+
 @app.command("apply")
 def apply_agent(
     ctx: typer.Context,
-    file: str = typer.Option(..., "--file", "-f", help="JSON da definição (`-` = stdin). Precisa de agent_type."),
+    file: str = typer.Option(
+        ..., "--file", "-f", help="JSON da definição (`-` = stdin), ou um diretório: aplica todo *.json dele."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Valida no servidor e mostra o que mudaria, sem gravar."),
 ) -> None:
-    """Cria o agente se não existir, senão atualiza só os campos do arquivo."""
-    st = state(ctx)
-    body = read_json_file(st, file)
-    agent_type = body.get("agent_type")
-    if not isinstance(agent_type, str) or not agent_type:
-        fail(st, "o arquivo precisa do campo agent_type", EXIT_USAGE)
+    """Cria o agente se não existir, senão atualiza só os campos que mudaram.
 
-    existing = {a["agent_type"] for a in call(st, st.client.list_agents)}
-    if agent_type in existing:
-        changes = {k: v for k, v in body.items() if k != "agent_type"}
-        unknown = sorted(set(changes) - set(EDITABLE_FIELDS))
-        if unknown:
-            fail(st, f"campos não editáveis: {', '.join(unknown)}", EXIT_USAGE)
-        result, action = call(st, st.client.update_agent, agent_type, changes), "atualizado"
+    Com um diretório, é o fluxo "agentes como código": o repositório que mantém
+    os agentes guarda um JSON por agente (`kuro agents export -o dir`) e a CI roda
+    `kuro agents apply -f dir --dry-run` no PR e `apply -f dir` no merge. Campos
+    iguais aos do servidor não são enviados, então aplicar de novo não gera versão."""
+    st = state(ctx)
+    path = Path(file)
+    if file != "-" and path.is_dir():
+        sources = sorted(path.glob("*.json"))
+        if not sources:
+            fail(st, f"{file}: nenhum *.json", EXIT_USAGE)
+        bodies = [(read_json_file(st, str(p)), str(p)) for p in sources]
     else:
-        result, action = call(st, st.client.create_agent, body), "criado"
-    emit(st, result, lambda a: console.print(f"[green]✓[/] {a['agent_type']} {action} (prompt v{a['prompt_version']})"))
+        bodies = [(read_json_file(st, file), file)]
+    existing = {a["agent_type"]: a for a in call(st, st.client.list_agents)}
+    items = [_apply_one(st, body, source, existing, dry_run) for body, source in bodies]
+    report = {"dry_run": dry_run, "items": items}
+    if bodies[0][1] == file and not st.json_mode:  # um arquivo só, no terminal
+        _render_apply(report)
+        return
+    # Diretório: o relatório (o que mudou em cada agente). Arquivo com --json: o
+    # agente resultante, como sempre foi — scripts antigos dependem disso.
+    emit(st, report if bodies[0][1] != file else items[0]["agent"], _render_apply)
+
+
+@app.command("export")
+def export_agents(
+    ctx: typer.Context,
+    agent_types: list[str] = typer.Argument(None, help="Agentes a exportar; sem nenhum, todos (menos os seed)."),
+    output: str = typer.Option(..., "--output", "-o", help="Diretório onde gravar um <agent_type>.json por agente."),
+) -> None:
+    """Grava a definição editável de cada agente como JSON — o ponto de partida
+    para manter os agentes num repositório e aplicar com `kuro agents apply -f dir`."""
+    st = state(ctx)
+    agents_list = call(st, st.client.list_agents)
+    wanted = set(agent_types or [])
+    if wanted:
+        chosen = [a for a in agents_list if a["agent_type"] in wanted]
+    else:
+        chosen = [a for a in agents_list if not a.get("is_seed")]
+    missing = wanted - {a["agent_type"] for a in agents_list}
+    if missing:
+        fail(st, f"agentes não encontrados: {', '.join(sorted(missing))}", EXIT_USAGE)
+    target = Path(output)
+    target.mkdir(parents=True, exist_ok=True)
+    written = []
+    for agent in chosen:
+        data = {k: v for k, v in editable(agent).items() if v is not None}
+        (target / f"{agent['agent_type']}.json").write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        written.append(agent["agent_type"])
+    emit(st, {"output": str(target), "agents": written}, lambda r: console.print(f"[green]✓[/] {len(r['agents'])} agente(s) em {r['output']}"))
 
 
 @app.command("set")

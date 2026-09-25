@@ -8,16 +8,18 @@ outro framework, etc. no futuro).
 Collections de documentos ficam em `api/collections_routes.py`.
 """
 
+import asyncio
 import json
 import logging
 import uuid
-from contextlib import aclosing
+from collections.abc import AsyncIterator
+from contextlib import aclosing, asynccontextmanager
 from typing import Any
 
 from agno.agent import Agent
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
 from agno.run.agent import RunEvent
@@ -27,12 +29,60 @@ from agent_service.agents.dependency_fields import DependencyValidationError, va
 from agent_service.agents.registry import UnknownAgentTypeError, get_agent_with_definition, list_agent_types
 from agent_service.config import get_settings
 from agent_service.documents.collections import EmbedderError
-from agent_service.observability.tracing import RUN_FAILED, RunContext, traced_run_events
+from agent_service.observability.tracing import RUN_FAILED, RunContext, RunTimeoutError, traced_run_events
 from agent_service.tools.registry import ToolBuildError, UnknownToolError
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_slots: asyncio.Semaphore | None = None
+
+
+@asynccontextmanager
+async def _run_slot() -> AsyncIterator[None]:
+    """Uma vaga de execução. Sem vaga, 503 com `Retry-After` na hora: quem chama
+    (o daemon do Regente, por exemplo) tenta no próximo ciclo, em vez de a
+    requisição esperar numa fila que ninguém vê. O limite é por processo
+    (`MAX_CONCURRENT_RUNS`)."""
+    global _slots
+    if _slots is None:
+        _slots = asyncio.Semaphore(get_settings().max_concurrent_runs)
+    if _slots.locked():
+        raise HTTPException(
+            status_code=503,
+            detail="Serviço no limite de execuções simultâneas. Tente de novo em instantes.",
+            headers={"Retry-After": "5"},
+        )
+    async with _slots:
+        yield
+
+
+def _timeout_for(definition: dict[str, Any]) -> float:
+    return float(definition.get("timeout_seconds") or get_settings().run_timeout_seconds)
+
+
+MetadataValue = str | int | float | bool
+
+
+def _normalize_metadata(value: dict[str, Any] | None) -> dict[str, str]:
+    """Correlação com o sistema que chama: chave/valor simples, poucos e curtos.
+    Valores viram texto — é o que se filtra depois (`?meta=conversation_id=123`)."""
+    if not value:
+        return {}
+    if len(value) > 20:
+        raise ValueError("metadata aceita no máximo 20 chaves")
+    normalized = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not key or len(key) > 64:
+            raise ValueError(f"chave de metadata inválida: {key!r}")
+        if isinstance(item, bool):
+            item = "true" if item else "false"
+        text = str(item)
+        if len(text) > 256:
+            raise ValueError(f"metadata.{key} passa de 256 caracteres")
+        normalized[key] = text
+    return normalized
 
 
 class ChatRequest(BaseModel):
@@ -47,6 +97,15 @@ class ChatRequest(BaseModel):
     """Imagem, áudio, vídeo ou arquivo (PDF etc.) em base64 (`content_base64`)
     ou por `url`, com `mime_type`/`filename` — o modelo do agente precisa
     suportar o tipo (ex.: Gemini)."""
+    metadata: dict[str, MetadataValue] | None = None
+    """Correlação com o sistema que chama (ex.: `{"conversation_id": "123"}`):
+    não vai para o modelo, fica gravada no run e serve de filtro em `/observability/runs`."""
+
+    @field_validator("metadata")
+    @classmethod
+    def _check_metadata(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        _normalize_metadata(value)
+        return value
 
 
 class ChatResponse(BaseModel):
@@ -93,6 +152,8 @@ def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
         prompt_version=definition["prompt_version"],
         agent_version=definition.get("agent_version"),
         config_hash=definition.get("config_hash"),
+        timeout_seconds=_timeout_for(definition),
+        metadata=_normalize_metadata(request.metadata),
         user_id=request.user_id,
         session_id=request.session_id,
         message=request.message,
@@ -126,6 +187,24 @@ def health() -> dict[str, str]:
     return {"status": "ok", "auth": "enabled" if auth_enabled() else "disabled"}
 
 
+@router.get("/ready")
+def ready() -> dict[str, str]:
+    """Pronto para executar: o processo está de pé **e** o banco responde. É o que
+    um circuit breaker de quem chama deve olhar — `/health` só diz que o processo
+    vive. 503 com o motivo quando o banco não responde. Aberta, como `/health`."""
+    from sqlalchemy import text
+
+    from agent_service.db import get_db
+
+    try:
+        with get_db().db_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:  # qualquer falha de conexão/consulta é "não pronto"
+        logger.warning("Readiness: banco indisponível", exc_info=True)
+        raise HTTPException(status_code=503, detail=f"Banco indisponível: {type(exc).__name__}") from exc
+    return {"status": "ready"}
+
+
 @router.get("/agent-types")
 def agent_types() -> dict[str, list[str]]:
     return {"agent_types": list_agent_types()}
@@ -151,14 +230,17 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     chunks: list[str] = []
     final_content: str | None = None
-    async with aclosing(traced_run_events(agent, run)) as events:
-        async for event in events:
-            if event.event == RunEvent.run_content.value and isinstance(event.content, str):
-                chunks.append(event.content)
-            elif event.event == RunEvent.run_completed.value and isinstance(event.content, str):
-                final_content = event.content
-            elif event.event == RunEvent.run_error.value:
-                raise HTTPException(status_code=502, detail=event.content or RUN_FAILED)
+    async with _run_slot(), aclosing(traced_run_events(agent, run)) as events:
+        try:
+            async for event in events:
+                if event.event == RunEvent.run_content.value and isinstance(event.content, str):
+                    chunks.append(event.content)
+                elif event.event == RunEvent.run_completed.value and isinstance(event.content, str):
+                    final_content = event.content
+                elif event.event == RunEvent.run_error.value:
+                    raise HTTPException(status_code=502, detail=event.content or RUN_FAILED)
+        except RunTimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
 
     return ChatResponse(
         agent_type=request.agent_type,
@@ -178,6 +260,19 @@ class AnalyzeRequest(BaseModel):
     attachments: list[AttachmentIn] = []
     """Mesmo formato do `/chat` — ex.: um PDF direto em vez de texto extraído
     (nesse caso `document` pode ser só uma instrução curta, como 'veja o anexo')."""
+    metadata: dict[str, MetadataValue] | None = None
+    """Correlação com o sistema que chama — ver `ChatRequest.metadata`."""
+    session_id: str | None = Field(default=None, max_length=200)
+    """Agrupa as decisões de uma mesma conversa em `/observability/sessions`
+    (ex.: o `conversation_id` do WhatsApp). Não cria histórico: o analista
+    continua one-shot."""
+    user_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("metadata")
+    @classmethod
+    def _check_metadata(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        _normalize_metadata(value)
+        return value
 
 
 class AnalyzeResponse(BaseModel):
@@ -224,8 +319,10 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         prompt_version=definition["prompt_version"],
         agent_version=definition.get("agent_version"),
         config_hash=definition.get("config_hash"),
-        user_id="analysis",
-        session_id=f"analyze-{uuid.uuid4().hex}",
+        timeout_seconds=_timeout_for(definition),
+        metadata=_normalize_metadata(request.metadata),
+        user_id=request.user_id or "analysis",
+        session_id=request.session_id or f"analyze-{uuid.uuid4().hex}",
         message=request.document,
         dependencies=dependencies,
         images=tuple(media["images"]),
@@ -235,12 +332,15 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     )
 
     final_content: Any = None
-    async with aclosing(traced_run_events(agent, run)) as events:
-        async for event in events:
-            if event.event == RunEvent.run_completed.value:
-                final_content = event.content
-            elif event.event == RunEvent.run_error.value:
-                raise HTTPException(status_code=502, detail=event.content or RUN_FAILED)
+    async with _run_slot(), aclosing(traced_run_events(agent, run)) as events:
+        try:
+            async for event in events:
+                if event.event == RunEvent.run_completed.value:
+                    final_content = event.content
+                elif event.event == RunEvent.run_error.value:
+                    raise HTTPException(status_code=502, detail=event.content or RUN_FAILED)
+        except RunTimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
 
     if not isinstance(final_content, BaseModel):
         # Dizer o que veio no lugar: com response_schema aninhado a saída inválida
@@ -278,17 +378,17 @@ async def chat_stream(request: ChatRequest) -> EventSourceResponse:
     agent, run = await run_in_threadpool(_resolve, request, "chat.stream")
     trace_id = run.trace_id
 
+    run_event = {
+        "run_id": run.run_id,
+        "trace_id": trace_id,
+        "agent_version": run.agent_version,
+        "config_hash": run.config_hash,
+    }
+
     async def event_generator():
-        yield {"event": "run", "data": json.dumps(
-                {
-                    "run_id": run.run_id,
-                    "trace_id": trace_id,
-                    "agent_version": run.agent_version,
-                    "config_hash": run.config_hash,
-                }
-            )}
-        async with aclosing(traced_run_events(agent, run)) as events:
-            try:
+        yield {"event": "run", "data": json.dumps(run_event)}
+        try:
+            async with _run_slot(), aclosing(traced_run_events(agent, run)) as events:
                 async for event in events:
                     if event.event == RunEvent.run_content.value and event.content:
                         yield {"event": "message", "data": json.dumps({"content": event.content})}
@@ -296,9 +396,13 @@ async def chat_stream(request: ChatRequest) -> EventSourceResponse:
                         yield {"event": "usage", "data": json.dumps(event.metrics.to_dict())}
                     elif event.event == RunEvent.run_error.value:
                         yield {"event": "error", "data": json.dumps({"message": event.content or RUN_FAILED})}
-            except Exception:
-                logger.exception("Falha no streaming do agente %r", request.agent_type)
-                yield {"event": "error", "data": json.dumps({"message": RUN_FAILED})}
+        except HTTPException as exc:  # sem vaga: o status já saiu (200), então vira evento
+            yield {"event": "error", "data": json.dumps({"message": exc.detail, "status": exc.status_code})}
+        except RunTimeoutError as exc:
+            yield {"event": "error", "data": json.dumps({"message": str(exc), "status": 504})}
+        except Exception:
+            logger.exception("Falha no streaming do agente %r", request.agent_type)
+            yield {"event": "error", "data": json.dumps({"message": RUN_FAILED})}
         yield {"event": "done", "data": "{}"}
 
     return EventSourceResponse(event_generator())

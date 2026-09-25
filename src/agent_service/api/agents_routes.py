@@ -9,7 +9,7 @@ módulos da plataforma consomem. Tools têm CRUD próprio em `tools_routes.py`
 
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
@@ -39,6 +39,7 @@ from agent_service.agents.store import (
     update_definition,
 )
 from agent_service.documents.collections import collection_exists
+from agent_service.models.params import ModelParamsError, validate_model_params
 from agent_service.tools.api_tool import required_dependencies
 from agent_service.tools.registry import ToolBuildError, UnknownToolError, tool_exists
 from agent_service.tools.store import get_tool
@@ -57,6 +58,8 @@ class DependencyFieldIn(BaseModel):
     description: str | None = None
     required: bool = False
     default: Any = None
+    enum: list[Any] | None = None
+    """Valores permitidos (não vale para boolean)."""
 
 
 class DependencyFieldOut(BaseModel):
@@ -66,6 +69,7 @@ class DependencyFieldOut(BaseModel):
     description: str
     required: bool
     default: Any
+    enum: list[Any] | None = None
 
 
 ResponseFieldType = Literal["string", "integer", "number", "boolean", "object", "array"]
@@ -77,6 +81,7 @@ class ResponseItemIn(BaseModel):
 
     type: ItemType = "string"
     fields: "list[ResponseFieldIn] | None" = None
+    enum: list[Any] | None = None
 
 
 class ResponseFieldIn(BaseModel):
@@ -89,6 +94,8 @@ class ResponseFieldIn(BaseModel):
     description: str | None = None
     required: bool = False
     default: Any = None
+    enum: list[Any] | None = None
+    """Valores permitidos: o modelo só pode devolver um deles (ex.: `acao`)."""
     fields: "list[ResponseFieldIn] | None" = None
     items: ResponseItemIn | None = None
 
@@ -96,6 +103,7 @@ class ResponseFieldIn(BaseModel):
 class ResponseItemOut(BaseModel):
     type: ItemType
     fields: "list[ResponseFieldOut] | None" = None
+    enum: list[Any] | None = None
 
 
 class ResponseFieldOut(BaseModel):
@@ -105,6 +113,7 @@ class ResponseFieldOut(BaseModel):
     description: str
     required: bool
     default: Any = None
+    enum: list[Any] | None = None
     fields: "list[ResponseFieldOut] | None" = None
     items: ResponseItemOut | None = None
 
@@ -132,6 +141,13 @@ class AgentDefinitionIn(BaseModel):
         default=[],
         description="Só para kind='analysis': campos da saída estruturada. Folhas iguais a "
         "dependency_fields, mais 'object' (com fields) e 'array' (com items).",
+    )
+    model_params: dict[str, Any] | None = Field(
+        default=None,
+        description="temperature, top_p, max_tokens, thinking_budget (Gemini). Vazio = padrão do provedor.",
+    )
+    timeout_seconds: int | None = Field(
+        default=None, ge=1, le=600, description="Tempo limite de uma execução; vazio = RUN_TIMEOUT_SECONDS."
     )
 
     @field_validator("agent_type")
@@ -161,6 +177,10 @@ class AgentDefinitionUpdate(BaseModel):
     num_history_runs: int | None = None
     kind: AgentKind | None = None
     response_schema: list[ResponseFieldIn] | None = None
+    model_params: dict[str, Any] | None = None
+    """`{}` ou `null` volta ao padrão do provedor."""
+    timeout_seconds: int | None = Field(default=None, ge=1, le=600)
+    """`null` volta ao RUN_TIMEOUT_SECONDS do serviço."""
 
     @field_validator("dependency_fields")
     @classmethod
@@ -184,6 +204,8 @@ class AgentDefinitionOut(BaseModel):
     num_history_runs: int
     kind: AgentKind
     response_schema: list[ResponseFieldOut]
+    model_params: dict[str, Any] | None = None
+    timeout_seconds: int | None = None
     is_seed: bool
     prompt_version: int
     created_at: datetime
@@ -229,6 +251,13 @@ def _normalize_dependency_fields(fields: list[DependencyFieldIn]) -> list[dict[s
         return validate_field_specs([f.model_dump() for f in fields])
     except DependencyFieldSpecError as exc:
         raise ValueError(str(exc)) from exc
+
+
+def _normalize_model_params(params: dict[str, Any] | None, provider: str | None) -> dict[str, Any] | None:
+    try:
+        return validate_model_params(params, provider)
+    except ModelParamsError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _normalize_response_schema(fields: list[ResponseFieldIn]) -> list[dict[str, Any]]:
@@ -333,7 +362,9 @@ def list_agents() -> list[dict[str, Any]]:
 
 
 @router.post("", response_model=AgentDefinitionOut, status_code=201)
-def create_agent(body: AgentDefinitionIn) -> dict[str, Any]:
+def create_agent(body: AgentDefinitionIn, dry_run: bool = False) -> dict[str, Any]:
+    """`?dry_run=true` valida tudo e devolve o agente como ficaria, sem gravar —
+    é o que a CI de quem mantém os agentes como código roda antes do merge."""
     if get_definition(body.agent_type) is not None:
         raise HTTPException(status_code=409, detail=f"Agente {body.agent_type!r} já existe")
     payload = body.model_dump()
@@ -343,6 +374,10 @@ def create_agent(body: AgentDefinitionIn) -> dict[str, Any]:
     _validate_collection(body.knowledge_collection)
     _validate_kind(body.kind, payload["response_schema"])
     _validate_inert_fields(body.kind, body)
+    payload["model_params"] = _normalize_model_params(body.model_params, body.model_provider)
+    if dry_run:
+        now = datetime.now(timezone.utc)
+        return {**payload, "is_seed": False, "prompt_version": 1, "created_at": now, "updated_at": now}
     return create_definition(**payload)
 
 
@@ -355,7 +390,8 @@ def get_agent_definition(agent_type: str) -> dict[str, Any]:
 
 
 @router.put("/{agent_type}", response_model=AgentDefinitionOut)
-def update_agent(agent_type: str, body: AgentDefinitionUpdate) -> dict[str, Any]:
+def update_agent(agent_type: str, body: AgentDefinitionUpdate, dry_run: bool = False) -> dict[str, Any]:
+    """`?dry_run=true` valida e devolve o agente como ficaria, sem gravar."""
     current = get_definition(agent_type)
     if current is None:
         raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
@@ -380,6 +416,17 @@ def update_agent(agent_type: str, body: AgentDefinitionUpdate) -> dict[str, Any]
             payload.get("response_schema", current["response_schema"] or []),
         )
     _validate_inert_fields(payload.get("kind", current["kind"]), body)
+    if "model_params" in payload or "model_provider" in payload:
+        # Revalida contra o provedor final: thinking_budget só vale no google.
+        payload["model_params"] = _normalize_model_params(
+            payload.get("model_params", current.get("model_params")),
+            payload.get("model_provider", current.get("model_provider")),
+        )
+    if dry_run:
+        preview = {**current, **payload}
+        if payload.get("instructions") not in (None, current["instructions"]):
+            preview["prompt_version"] = current["prompt_version"] + 1
+        return preview
     try:
         updated = update_definition(agent_type, **payload)
     except DefinitionNotFoundError as exc:
@@ -435,6 +482,8 @@ _PROMOTED_FIELDS = (
     "num_history_runs",
     "kind",
     "response_schema",
+    "model_params",
+    "timeout_seconds",
 )
 
 

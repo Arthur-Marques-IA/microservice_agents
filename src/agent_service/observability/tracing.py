@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 FEEDBACK = "feedback"
 RUN_FAILED = "Falha ao executar o agente."
 RUN_INTERRUPTED = "Execução interrompida antes de terminar (cliente desconectou ou cancelou)."
+
+
+class RunTimeoutError(RuntimeError):
+    """A execução passou do tempo limite do agente — 504 para quem chama."""
 PROJECT_LOOKUP_RETRY_SECONDS = 60
 
 _client: "Langfuse | None" = None
@@ -75,6 +79,10 @@ class RunContext:
     agent_version: int | None = None
     """Versão da configuração inteira (`agents/versions.py`)."""
     config_hash: str | None = None
+    timeout_seconds: float | None = None
+    """Tempo limite da execução inteira; `None` = sem limite."""
+    metadata: dict[str, str] = field(default_factory=dict)
+    """Correlação de quem chamou (ex.: `conversation_id`), gravada com o run."""
 
     @property
     def trace_id(self) -> str:
@@ -268,6 +276,7 @@ async def _recorded_events(agent: Agent, run: RunContext) -> AsyncIterator[RunOu
         session_id=run.session_id,
         message=run.message,
         started_at=datetime.now(timezone.utc),
+        metadata=dict(run.metadata),
         input={
             "message": run.message,
             "dependencies": run.dependencies,
@@ -276,8 +285,25 @@ async def _recorded_events(agent: Agent, run: RunContext) -> AsyncIterator[RunOu
     )
     chunks: list[str] = []
     final_content: str | None = None
+    events = _agent_events(agent, run)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + run.timeout_seconds if run.timeout_seconds else None
     try:
-        async for event in _agent_events(agent, run):
+        while True:
+            try:
+                if deadline is None:
+                    event = await anext(events)
+                else:
+                    # O prazo vale por evento, dentro deste generator: um `asyncio.timeout`
+                    # em volta do consumo atravessaria os `yield` e cancelaria o código
+                    # de quem consome (ex. o envio do SSE).
+                    event = await asyncio.wait_for(anext(events), max(deadline - loop.time(), 0))
+            except StopAsyncIteration:
+                break
+            except TimeoutError:
+                message = f"Tempo limite de {run.timeout_seconds:g}s excedido."
+                record.status, record.status_message = "error", message
+                raise RunTimeoutError(message) from None
             if event.event == RunEvent.run_content.value and isinstance(event.content, str):
                 chunks.append(event.content)
             elif event.event == RunEvent.run_completed.value:
@@ -307,11 +333,17 @@ async def _recorded_events(agent: Agent, run: RunContext) -> AsyncIterator[RunOu
         record.status = "interrupted"
         record.status_message = RUN_INTERRUPTED
         raise
+    except RunTimeoutError:
+        raise
     except Exception as exc:
         record.status = "error"
         record.status_message = str(exc) or type(exc).__name__
         raise
     finally:
+        try:
+            await events.aclose()
+        except (Exception, asyncio.CancelledError):
+            pass  # o run do Agno já terminou ou foi cancelado; fechar é só limpeza
         output = final_content if final_content is not None else "".join(chunks)
         record.output = output or None
         if record.model is None:

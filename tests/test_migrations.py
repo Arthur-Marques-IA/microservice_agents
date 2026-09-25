@@ -1,8 +1,11 @@
 """Migrações (Alembic): banco vazio e banco criado pelo antigo `create_all`."""
 
 import sqlalchemy as sa
+from alembic.script import ScriptDirectory
 
-from agent_service.migrations import upgrade_database
+from agent_service.migrations import _config, upgrade_database
+
+HEAD = ScriptDirectory.from_config(_config()).get_current_head()
 
 
 def _columns(engine: sa.Engine, table: str) -> set[str]:
@@ -23,7 +26,7 @@ def test_empty_database_goes_to_head(tmp_path):
     tables = set(sa.inspect(engine).get_table_names())
     assert {"agent_definitions", "tool_definitions", "runs", "run_spans", "agent_versions"} <= tables
     assert "agent_version" in _columns(engine, "runs")
-    assert _head(engine) == "0002"
+    assert _head(engine) == HEAD
 
 
 def test_database_from_before_alembic_gets_missing_columns_and_keeps_data(tmp_path):
@@ -61,4 +64,4 @@ def test_database_from_before_alembic_gets_missing_columns_and_keeps_data(tmp_pa
         # A nota em markdown virou regras, com a v1 no histórico.
         versions = conn.execute(sa.text("SELECT version FROM agent_feedback_versions WHERE agent_type = 'antigo'")).all()
         assert [v[0] for v in versions] == [1]
-    assert _head(engine) == "0002"
+    assert _head(engine) == HEAD

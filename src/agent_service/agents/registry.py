@@ -55,6 +55,7 @@ def _build_from_definition(definition: dict[str, Any]) -> tuple[Agent, tuple[dat
         model_provider=definition["model_provider"],
         model_id=definition["model_id"],
         model_credential_id=definition.get("model_credential_id"),
+        model_params=definition.get("model_params"),
         knowledge_collection=definition.get("knowledge_collection"),
         num_history_runs=definition["num_history_runs"],
         memory_backend=definition["memory_backend"],

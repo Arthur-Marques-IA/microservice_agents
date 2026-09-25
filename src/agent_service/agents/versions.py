@@ -69,6 +69,12 @@ def effective_config(definition: dict[str, Any]) -> dict[str, Any]:
     config["kind"] = config["kind"] or "conversational"
     config["model_provider"] = (definition.get("model_provider") or settings.default_model_provider).lower()
     config["model_id"] = definition.get("model_id") or settings.default_model_id
+    # Só entram quando definidos: com a chave sempre presente, todo agente que já
+    # existia ganharia uma versão nova sem ter mudado nada.
+    if definition.get("model_params"):
+        config["model_params"] = definition["model_params"]
+    if definition.get("timeout_seconds"):
+        config["timeout_seconds"] = definition["timeout_seconds"]
 
     tools = []
     for name in definition.get("tools") or []:

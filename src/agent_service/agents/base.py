@@ -29,6 +29,7 @@ def build_agent(
     model_provider: str | None = None,
     model_id: str | None = None,
     model_credential_id: str | None = None,
+    model_params: dict[str, Any] | None = None,
     knowledge_collection: str | None = None,
     num_history_runs: int = 10,
     memory_backend: MemoryBackendName = "common",
@@ -66,7 +67,9 @@ def build_agent(
     return Agent(
         id=agent_id,
         name=name,
-        model=get_model(provider=model_provider, model_id=model_id, credential_id=model_credential_id),
+        model=get_model(
+            provider=model_provider, model_id=model_id, credential_id=model_credential_id, params=model_params
+        ),
         # Sem `db` em analysis: ele é one-shot e cada chamada criaria uma linha de
         # sessão `analyze-<uuid>` no Postgres, com o documento inteiro dentro, que
         # ninguém lê depois — o trace já registra tudo. O Agno guarda todo acesso a

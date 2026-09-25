@@ -78,6 +78,8 @@ class RunSummary(BaseModel):
     feedback_up: int | None = 0
     feedback_down: int | None = 0
     """`None` quando havia avaliações demais para contar com segurança na listagem — veja o trace."""
+    metadata: dict[str, str] = {}
+    """Correlação mandada por quem chamou (ex.: `conversation_id`)."""
 
 
 class RunPage(BaseModel):
@@ -121,6 +123,8 @@ class RunTrace(BaseModel):
     spans: list[SpanOut]
     """Todas as observações do trace, em ordem de início; a árvore sai de `parent_id`."""
     scores: list[ScoreOut]
+    reference: Any = None
+    """Decisão de referência gravada para o run (ex.: a do agente legado no shadow)."""
 
 
 class SessionSummary(BaseModel):
@@ -180,6 +184,8 @@ class RunQuery:
     cursor: str | None = None
     tenant_id: str | None = None
     """Reservado para isolar clientes da API: filtra `metadata.tenant_id`."""
+    metadata: tuple[tuple[str, str], ...] = ()
+    """Pares chave/valor que o run precisa ter (todos) — só no trace store local."""
 
 
 class TraceStore(Protocol):

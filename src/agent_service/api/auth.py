@@ -8,7 +8,8 @@ credencial nenhuma.
 
 Dois escopos, porque são dois públicos com riscos diferentes:
 
-- `runtime`: só executa — `/chat`, `/chat/stream`, `/analyze` e registrar score.
+- `runtime`: só executa — `/chat`, `/chat/stream`, `/analyze`, registrar score e a
+  decisão de referência de um run (modo shadow).
   É a chave que vai para o outro módulo da plataforma. Se vazar, o estrago é
   gastar tokens, não ler o histórico de todo mundo nem trocar o prompt.
 - `admin`: todo o resto — CRUD de agentes, tools, credenciais, collections,
@@ -39,7 +40,7 @@ from agent_service.config import get_settings
 
 Scope = Literal["runtime", "admin"]
 
-PUBLIC_PATHS = frozenset({"/health"})
+PUBLIC_PATHS = frozenset({"/health", "/ready"})
 """Aberto sempre, e só isto: é o healthcheck do container e de qualquer load
 balancer na frente, que não têm como mandar header.
 
@@ -50,7 +51,7 @@ continuam acessíveis: `curl -H "Authorization: Bearer $ADMIN_API_KEY"
 http://.../openapi.json`. Com o serviço aberto (sem chave configurada), abrir
 `/docs` no navegador segue funcionando como antes."""
 
-RUNTIME_PATHS = frozenset({"/chat", "/chat/stream", "/analyze", "/observability/scores"})
+RUNTIME_PATHS = frozenset({"/chat", "/chat/stream", "/analyze", "/observability/scores", "/observability/references"})
 """O que a chave `runtime` alcança — executar um agente e avaliar a execução.
 Tudo que não está aqui (nem em PUBLIC_PATHS) exige `admin`."""
 

@@ -23,7 +23,7 @@ que é específica daqui: virar um modelo pydantic.
 de `field_schema.py`.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, create_model
 
@@ -54,6 +54,14 @@ def _model_name(*parts: str) -> str:
     ) or "Analysis"
 
 
+def _leaf_type(field: dict[str, Any]) -> Any:
+    """`enum` vira `Literal[...]`: o provedor recebe o enum no schema da saída
+    estruturada e a validação recusa qualquer valor fora dele."""
+    if field.get("enum"):
+        return Literal[tuple(field["enum"])]  # type: ignore[valid-type]
+    return _PY_TYPES[field["type"]]
+
+
 def _annotation(field: dict[str, Any], prefix: str) -> Any:
     field_type = field["type"]
     if field_type == "object":
@@ -62,8 +70,8 @@ def _annotation(field: dict[str, Any], prefix: str) -> Any:
         items = field["items"]
         if items["type"] == "object":
             return list[_model(items["fields"], _model_name(prefix, field["name"], "item"))]  # type: ignore[misc]
-        return list[_PY_TYPES[items["type"]]]  # type: ignore[misc]
-    return _PY_TYPES[field_type]
+        return list[_leaf_type(items)]  # type: ignore[misc]
+    return _leaf_type(field)
 
 
 def _model(fields: list[dict[str, Any]], name: str) -> type[BaseModel]:

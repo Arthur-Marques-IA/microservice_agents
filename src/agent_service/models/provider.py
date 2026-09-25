@@ -15,8 +15,11 @@ console saber pedir a chave certa e validar).
 
 from agno.models.base import Model
 
+from typing import Any
+
 from agent_service.config import get_settings
 from agent_service.models import store
+from agent_service.models.params import provider_kwargs
 
 
 class UnknownModelProviderError(ValueError):
@@ -37,16 +40,23 @@ def _credentials(provider: str, credential_id: str | None) -> tuple[str | None, 
     return api_key, credential["base_url"]
 
 
-def get_model(provider: str | None = None, model_id: str | None = None, credential_id: str | None = None) -> Model:
+def get_model(
+    provider: str | None = None,
+    model_id: str | None = None,
+    credential_id: str | None = None,
+    params: dict[str, Any] | None = None,
+) -> Model:
+    """`params`: temperatura etc. no vocabulário de `models/params.py`."""
     settings = get_settings()
     provider = (provider or settings.default_model_provider).lower()
     model_id = model_id or settings.default_model_id
+    extra = provider_kwargs(provider, params)
 
     if provider == "google":
         from agno.models.google import Gemini
 
         api_key, _ = _credentials("google", credential_id)
-        return Gemini(id=model_id, api_key=api_key or settings.google_api_key)
+        return Gemini(id=model_id, api_key=api_key or settings.google_api_key, **extra)
 
     if provider == "openai":
         from agno.models.openai import OpenAIChat
@@ -54,7 +64,7 @@ def get_model(provider: str | None = None, model_id: str | None = None, credenti
         api_key, base_url = _credentials("openai", credential_id)
         if not api_key:
             raise ProviderNotConfiguredError("openai: nenhuma chave cadastrada em /model-credentials")
-        return OpenAIChat(id=model_id, api_key=api_key, base_url=base_url or None)
+        return OpenAIChat(id=model_id, api_key=api_key, base_url=base_url or None, **extra)
 
     if provider == "anthropic":
         from agno.models.anthropic import Claude
@@ -62,13 +72,13 @@ def get_model(provider: str | None = None, model_id: str | None = None, credenti
         api_key, _ = _credentials("anthropic", credential_id)
         if not api_key:
             raise ProviderNotConfiguredError("anthropic: nenhuma chave cadastrada em /model-credentials")
-        return Claude(id=model_id, api_key=api_key)
+        return Claude(id=model_id, api_key=api_key, **extra)
 
     if provider == "ollama":
         from agno.models.ollama import Ollama
 
         _, base_url = _credentials("ollama", credential_id)
-        return Ollama(id=model_id, host=base_url or None)
+        return Ollama(id=model_id, host=base_url or None, **extra)
 
     raise UnknownModelProviderError(
         f"Provedor de modelo desconhecido: {provider!r}. "

@@ -35,6 +35,7 @@ from sqlalchemy import (
     and_,
     case,
     delete,
+    exists,
     func,
     insert,
     or_,
@@ -114,6 +115,23 @@ run_spans = Table(
     Column("metadata", JSON, nullable=True),
 )
 
+run_metadata = Table(
+    "run_metadata",
+    metadata,
+    Column("run_id", String, primary_key=True),
+    Column("key", String, primary_key=True),
+    Column("value", String, nullable=False),
+)
+
+run_references = Table(
+    "run_references",
+    metadata,
+    Column("run_id", String, primary_key=True),
+    Column("reference", JSON, nullable=False),
+    Column("source", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
 run_scores = Table(
     "run_scores",
     metadata,
@@ -176,6 +194,7 @@ class RunRecord:
     tenant_id: str = DEFAULT_TENANT
     agent_version: int | None = None
     config_hash: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 def _write_run(record: RunRecord) -> None:
@@ -254,6 +273,11 @@ def _write_run(record: RunRecord) -> None:
             )
         )
         conn.execute(insert(run_spans), span_rows)
+        if record.metadata:
+            conn.execute(
+                insert(run_metadata),
+                [{"run_id": record.run_id, "key": k, "value": v} for k, v in record.metadata.items()],
+            )
 
 
 def _submit(fn: Callable[[], None]) -> None:
@@ -333,7 +357,21 @@ def _filters(query: RunQuery, *, with_session: bool = False) -> list[Any]:
         conditions.append(runs.c.started_at < query.until)
     if with_session:
         conditions.append(runs.c.session_id.is_not(None))
+    for key, value in query.metadata:
+        conditions.append(
+            exists().where(run_metadata.c.run_id == runs.c.run_id, run_metadata.c.key == key, run_metadata.c.value == value)
+        )
     return conditions
+
+
+def _metadata_of(conn: Any, run_ids: list[str]) -> dict[str, dict[str, str]]:
+    found: dict[str, dict[str, str]] = {run_id: {} for run_id in run_ids}
+    if run_ids:
+        for run_id, key, value in conn.execute(
+            select(run_metadata.c.run_id, run_metadata.c.key, run_metadata.c.value).where(run_metadata.c.run_id.in_(run_ids))
+        ):
+            found[run_id][key] = value
+    return found
 
 
 def _encode_cursor(started_at: datetime, run_id: str) -> str:
@@ -362,7 +400,7 @@ def _feedback_votes(conn: Any, run_ids: list[str]) -> dict[str, list[int]]:
     return votes
 
 
-def _summary(row: Any, votes: list[int] | None = None) -> RunSummary:
+def _summary(row: Any, votes: list[int] | None = None, meta: dict[str, str] | None = None) -> RunSummary:
     up, down = votes or (0, 0)
     return RunSummary(
         run_id=row.run_id,
@@ -389,6 +427,7 @@ def _summary(row: Any, votes: list[int] | None = None) -> RunSummary:
         cost_usd=row.cost_usd,
         feedback_up=up,
         feedback_down=down,
+        metadata=meta or {},
     )
 
 
@@ -407,7 +446,8 @@ class DbTraceStore:
             rows = list(conn.execute(stmt))
             page, more = rows[: query.limit], len(rows) > query.limit
             votes = _feedback_votes(conn, [r.run_id for r in page])
-        items = [_summary(r, votes[r.run_id]) for r in page]
+            meta = _metadata_of(conn, [r.run_id for r in page])
+        items = [_summary(r, votes[r.run_id], meta[r.run_id]) for r in page]
         next_cursor = _encode_cursor(page[-1].started_at, page[-1].run_id) if more else None
         return RunPage(items=items, next_cursor=next_cursor)
 
@@ -425,6 +465,8 @@ class DbTraceStore:
             score_rows = list(
                 conn.execute(select(run_scores).where(run_scores.c.run_id == run_id).order_by(run_scores.c.timestamp))
             )
+            meta = _metadata_of(conn, [run_id])[run_id]
+            reference = conn.execute(select(run_references.c.reference).where(run_references.c.run_id == run_id)).scalar()
         scores = [
             ScoreOut(
                 id=s.id,
@@ -467,7 +509,7 @@ class DbTraceStore:
             )
         # Root primeiro, mesmo empatando no horário com o primeiro filho.
         spans.sort(key=lambda s: (s.parent_id is not None, s.started_at))
-        return RunTrace(run=_summary(row, [up, len(feedback) - up]), spans=spans, scores=scores)
+        return RunTrace(run=_summary(row, [up, len(feedback) - up], meta), spans=spans, scores=scores, reference=reference)
 
     def list_sessions(self, query: RunQuery) -> SessionPage:
         conditions = _filters(query, with_session=True)
@@ -570,3 +612,63 @@ class DbTraceStore:
             avg_latency_ms=round(float(avg_latency), 1) if avg_latency is not None else None,
             scanned=total_runs,
         )
+
+
+# -- referência (shadow), concordância e export ---------------------------------------
+
+
+class RunNotFoundError(LookupError):
+    pass
+
+
+def save_reference(run_id: str, reference: dict[str, Any], *, source: str = "legacy") -> None:
+    """Grava (ou substitui) a decisão de referência de um run."""
+    with get_db().db_engine.begin() as conn:
+        if conn.execute(select(runs.c.run_id).where(runs.c.run_id == run_id)).first() is None:
+            raise RunNotFoundError(run_id)
+        conn.execute(delete(run_references).where(run_references.c.run_id == run_id))
+        conn.execute(insert(run_references).values(run_id=run_id, reference=reference, source=source))
+
+
+def _parse_output(output: str | None) -> dict[str, Any] | None:
+    import json
+
+    if not output:
+        return None
+    try:
+        parsed = json.loads(output)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def referenced_runs(query: RunQuery, *, limit: int = 5000) -> list[dict[str, Any]]:
+    """Runs com referência gravada, mais recentes primeiro: saída, referência,
+    entrada (`message` + `dependencies`) e versão — o material da concordância e do export."""
+    stmt = (
+        select(runs, run_references.c.reference, run_spans.c.input.label("root_input"))
+        .join(run_references, run_references.c.run_id == runs.c.run_id)
+        .outerjoin(run_spans, run_spans.c.id == runs.c.run_id + ":root")
+        .where(*_filters(query))
+        .order_by(runs.c.started_at.desc())
+        .limit(limit)
+    )
+    with get_db().db_engine.connect() as conn:
+        rows = list(conn.execute(stmt))
+    items = []
+    for row in rows:
+        root_input = row.root_input or {}
+        items.append(
+            {
+                "run_id": row.run_id,
+                "agent_version": row.agent_version,
+                "status": row.status,
+                "message": row.message,
+                "dependencies": root_input.get("dependencies") if isinstance(root_input, dict) else None,
+                "output": _parse_output(row.output),
+                "reference": row.reference,
+                "started_at": row.started_at,
+            }
+        )
+    return items
+

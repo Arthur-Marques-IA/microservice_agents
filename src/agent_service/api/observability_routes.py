@@ -7,7 +7,7 @@ de um `run_id` e registrar avaliações (feedback do usuário final, notas de ev
 """
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
@@ -80,6 +80,16 @@ def _store() -> TraceStore:
     return store
 
 
+def _parse_meta(meta: list[str] | None) -> tuple[tuple[str, str], ...]:
+    pairs = []
+    for item in meta or []:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise HTTPException(status_code=422, detail=f"meta deve ser chave=valor, veio {item!r}")
+        pairs.append((key, value))
+    return tuple(pairs)
+
+
 def _list_runs(
     *,
     agent_type: str | None,
@@ -91,10 +101,13 @@ def _list_runs(
     until: datetime | None,
     limit: int,
     cursor: str | None,
+    agent_version: int | None = None,
+    meta: list[str] | None = None,
 ) -> RunPage:
     query = RunQuery(
         agent_type=agent_type,
         prompt_version=prompt_version,
+        agent_version=agent_version,
         status=status,
         user_id=user_id,
         session_id=session_id,
@@ -102,6 +115,7 @@ def _list_runs(
         until=until,
         limit=limit,
         cursor=cursor,
+        metadata=_parse_meta(meta),
     )
     try:
         return _store().list_runs(query)
@@ -120,6 +134,8 @@ def list_runs(
     until: datetime | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: str | None = None,
+    agent_version: Annotated[int | None, Query(ge=1)] = None,
+    meta: Annotated[list[str] | None, Query(description="Filtro por metadata, `chave=valor` (repetível).")] = None,
 ) -> RunPage:
     """Execuções de todos os agentes (ou de um só, com `agent_type`), mais recentes
     primeiro, com tokens, custo e feedback — a página `/observability` do console usa isto.
@@ -136,6 +152,8 @@ def list_runs(
         until=until,
         limit=limit,
         cursor=cursor,
+        agent_version=agent_version,
+        meta=meta,
     )
 
 
@@ -150,6 +168,8 @@ def list_agent_runs(
     until: datetime | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: str | None = None,
+    agent_version: Annotated[int | None, Query(ge=1)] = None,
+    meta: Annotated[list[str] | None, Query(description="Filtro por metadata, `chave=valor` (repetível).")] = None,
 ) -> RunPage:
     """Execuções do agente, mais recentes primeiro, com tokens, custo e feedback.
 
@@ -165,6 +185,8 @@ def list_agent_runs(
         until=until,
         limit=limit,
         cursor=cursor,
+        agent_version=agent_version,
+        meta=meta,
     )
 
 
@@ -270,3 +292,171 @@ def create_score(body: ScoreIn) -> ScoreOut:
         user_id=body.user_id,
     )
     return ScoreOut(run_id=body.run_id, trace_id=trace_id, name=body.name, value=body.value)
+
+
+# -- modo shadow: referência, concordância e export -----------------------------------
+
+
+class ReferenceIn(BaseModel):
+    run_id: str = Field(..., min_length=1, max_length=200)
+    reference: dict[str, Any]
+    """A decisão que deveria ter saído — no shadow, a do agente legado, no mesmo
+    formato do `result` do `/analyze`."""
+    source: str = Field("legacy", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+class ReferenceOut(BaseModel):
+    run_id: str
+    source: str
+
+
+class FieldAgreement(BaseModel):
+    field: str
+    compared: int
+    matched: int
+    rate: float
+
+
+class VersionAgreement(BaseModel):
+    agent_version: int | None
+    runs: int
+    full_match: int
+    rate: float
+
+
+class Disagreement(BaseModel):
+    run_id: str
+    agent_version: int | None
+    mismatches: list[dict[str, Any]]
+
+
+class AgreementOut(BaseModel):
+    agent_type: str
+    runs: int
+    """Runs com referência e saída estruturada — os que entram na conta."""
+    skipped: int
+    """Runs com referência mas sem saída comparável (erro, timeout)."""
+    full_match: int
+    rate: float
+    """Fração de runs em que todos os campos compararam iguais."""
+    fields: list[FieldAgreement]
+    by_version: list[VersionAgreement]
+    disagreements: list[Disagreement]
+    """Os mais recentes em que discordou (até 20)."""
+
+
+class ExportCase(BaseModel):
+    id: str
+    input: str
+    dependencies: dict[str, Any] | None = None
+    expected: dict[str, Any]
+    agent_version: int | None = None
+
+
+@router.post("/references", response_model=ReferenceOut, status_code=201)
+def save_reference(body: ReferenceIn) -> ReferenceOut:
+    """Grava a decisão de referência de um run (substitui se já houver).
+
+    No shadow, quem chama executa o agente legado e o Kuro na mesma entrada e
+    manda aqui a decisão do legado, com o `run_id` que o `/analyze` devolveu.
+    Escopo `runtime`, como os scores."""
+    from agent_service.observability import run_store
+
+    try:
+        run_store.save_reference(body.run_id, body.reference, source=body.source)
+    except run_store.RunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Run {body.run_id!r} não encontrado (a gravação leva um instante após a resposta)."
+        ) from exc
+    return ReferenceOut(run_id=body.run_id, source=body.source)
+
+
+def _referenced(agent_type: str, since: datetime | None, until: datetime | None, agent_version: int | None):
+    from agent_service.observability import run_store
+
+    return run_store.referenced_runs(
+        RunQuery(agent_type=agent_type, since=since, until=until, agent_version=agent_version)
+    )
+
+
+@router.get("/agreement", response_model=AgreementOut)
+def agreement(
+    agent_type: str,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    agent_version: Annotated[int | None, Query(ge=1)] = None,
+    fields: Annotated[str | None, Query(description="Só estes campos, separados por vírgula.")] = None,
+    tolerance: Annotated[float, Query(ge=0)] = 0.01,
+) -> AgreementOut:
+    """Quanto a decisão do agente concorda com a referência (ex.: o legado no shadow),
+    campo a campo e por versão da configuração — a mesma comparação do `kuro eval`.
+
+    É o número que diz quando promover: "a v7 concorda em 97% com o legado"."""
+    from agent_service.evaluation import compare, flatten
+
+    wanted = [f.strip() for f in fields.split(",") if f.strip()] if fields else None
+    per_field: dict[str, list[int]] = {}
+    per_version: dict[int | None, list[int]] = {}
+    disagreements: list[Disagreement] = []
+    compared = skipped = full = 0
+    for item in _referenced(agent_type, since, until, agent_version):
+        if item["output"] is None:
+            skipped += 1
+            continue
+        compared += 1
+        mismatches = compare(item["reference"], item["output"], wanted, tolerance)
+        wrong = {m["field"] for m in mismatches}
+        for field in wanted or flatten(item["reference"]).keys():
+            counts = per_field.setdefault(field, [0, 0])
+            counts[0] += 1
+            counts[1] += field not in wrong
+        version = per_version.setdefault(item["agent_version"], [0, 0])
+        version[0] += 1
+        if not mismatches:
+            full += 1
+            version[1] += 1
+        elif len(disagreements) < 20:
+            disagreements.append(
+                Disagreement(run_id=item["run_id"], agent_version=item["agent_version"], mismatches=mismatches)
+            )
+    return AgreementOut(
+        agent_type=agent_type,
+        runs=compared,
+        skipped=skipped,
+        full_match=full,
+        rate=round(full / compared, 4) if compared else 0.0,
+        fields=[
+            FieldAgreement(field=f, compared=c, matched=m, rate=round(m / c, 4))
+            for f, (c, m) in sorted(per_field.items())
+        ],
+        by_version=[
+            VersionAgreement(agent_version=v, runs=c, full_match=m, rate=round(m / c, 4))
+            for v, (c, m) in sorted(per_version.items(), key=lambda kv: (kv[0] is None, kv[0] or 0), reverse=True)
+        ],
+        disagreements=disagreements,
+    )
+
+
+@router.get("/export", response_model=list[ExportCase])
+def export_cases(
+    agent_type: str,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    agent_version: Annotated[int | None, Query(ge=1)] = None,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+) -> list[ExportCase]:
+    """Runs com referência no formato de caso do `kuro eval`: a entrada real e a
+    decisão de referência como `expected`. `kuro runs export` grava isto em JSONL."""
+    cases = []
+    for item in _referenced(agent_type, since, until, agent_version)[:limit]:
+        cases.append(
+            ExportCase(
+                id=item["run_id"],
+                input=item["message"] or "",
+                dependencies=item["dependencies"],
+                expected=item["reference"],
+                agent_version=item["agent_version"],
+            )
+        )
+    return cases
+

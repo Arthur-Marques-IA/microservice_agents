@@ -1,5 +1,6 @@
 """`kuro runs`: execuções registradas no trace store do serviço (via /observability) e feedback."""
 
+import json
 import time
 from typing import Any
 
@@ -8,7 +9,7 @@ from rich.table import Table
 from rich.tree import Tree
 
 from agent_service.cli.client import ApiError, ServiceUnavailable
-from agent_service.cli.common import call, console, emit, fail_from, print_json, state
+from agent_service.cli.common import EXIT_USAGE, call, console, emit, fail, fail_from, print_json, read_json_file, state
 
 app = typer.Typer(help="Execuções: listar, acompanhar ao vivo, ver trace, resumir, registrar score.")
 
@@ -60,7 +61,7 @@ def _render_trace(trace: dict[str, Any]) -> None:
 @app.callback(invoke_without_command=True)
 def runs(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is None:  # defaults explícitos: chamar direto não resolve os typer.Option
-        list_runs(ctx, agent=None, status=None, session_id=None, user_id=None, limit=20, cursor=None)
+        list_runs(ctx, agent=None, status=None, session_id=None, user_id=None, limit=20, cursor=None, meta=[], version=None)
 
 
 @app.command("list")
@@ -72,8 +73,10 @@ def list_runs(
     user_id: str | None = typer.Option(None, "--user-id"),
     limit: int = typer.Option(20, "--limit", "-n", min=1, max=100),
     cursor: str | None = typer.Option(None, "--cursor"),
+    meta: list[str] = typer.Option([], "--meta", "-m", help="Filtro por metadata chave=valor (repetível), ex.: conversation_id=123."),
+    version: int | None = typer.Option(None, "--version", help="Só runs desta versão da configuração (agent_version)."),
 ) -> None:
-    """Execuções mais recentes. Runs novos levam alguns segundos para aparecer."""
+    """Execuções mais recentes."""
     st = state(ctx)
     page = call(
         st,
@@ -84,6 +87,8 @@ def list_runs(
         user_id=user_id,
         limit=limit,
         cursor=cursor,
+        meta=meta or None,
+        agent_version=version,
     )
     emit(st, page, _render_runs)
 
@@ -230,3 +235,84 @@ def score(
     st = state(ctx)
     body = {"run_id": run_id, "name": name, "value": value, "comment": comment}
     emit(st, call(st, st.client.score, body), lambda s: console.print(f"[green]✓[/] {s['name']}={s['value']} em {s['run_id']}"))
+
+
+# -- shadow: referência, concordância e export -----------------------------------------
+
+
+@app.command("reference")
+def reference(
+    ctx: typer.Context,
+    run_id: str,
+    file: str = typer.Option(..., "--file", "-f", help="JSON com a decisão de referência (ex.: a do agente legado)."),
+    source: str = typer.Option("legacy", "--source", help="De onde veio a referência."),
+) -> None:
+    """Grava a decisão de referência de um run — no shadow, quem faz isso é o
+    próprio sistema integrado (`POST /observability/references`)."""
+    st = state(ctx)
+    body = {"run_id": run_id, "reference": read_json_file(st, file), "source": source}
+    emit(st, call(st, st.client.save_reference, body), lambda r: console.print(f"[green]✓[/] referência gravada em {r['run_id']}"))
+
+
+def _render_agreement(r: dict[str, Any]) -> None:
+    console.print(
+        f"[bold]{r['agent_type']}[/]  {r['full_match']}/{r['runs']} runs concordam em tudo ({r['rate']:.0%})"
+        + (f"  [dim]{r['skipped']} sem saída comparável[/]" if r["skipped"] else "")
+    )
+    if r["fields"]:
+        table = Table(show_edge=False, header_style="bold")
+        for column in ("campo", "concorda", "taxa"):
+            table.add_column(column)
+        for f in sorted(r["fields"], key=lambda f: f["rate"]):
+            color = "green" if f["rate"] >= 0.95 else "yellow" if f["rate"] >= 0.8 else "red"
+            table.add_row(f["field"], f"{f['matched']}/{f['compared']}", f"[{color}]{f['rate']:.0%}[/]")
+        console.print(table)
+    for v in r["by_version"]:
+        label = f"v{v['agent_version']}" if v["agent_version"] else "sem versão"
+        console.print(f"  {label}: {v['full_match']}/{v['runs']} ({v['rate']:.0%})")
+    for d in r["disagreements"][:5]:
+        diffs = "; ".join(f"{m['field']}: {m['expected']!r} × {m['actual']!r}" for m in d["mismatches"])
+        console.print(f"  [dim]{d['run_id']}[/] {diffs}", highlight=False)
+
+
+@app.command("agreement")
+def agreement(
+    ctx: typer.Context,
+    agent: str = typer.Option(..., "--agent", "-a", help="agent_type."),
+    since: str | None = typer.Option(None, "--since", help="ISO 8601, ex.: 2026-09-01."),
+    version: int | None = typer.Option(None, "--version", help="Só esta versão da configuração."),
+    fields: str | None = typer.Option(None, "--fields", help="Só estes campos (vírgula)."),
+) -> None:
+    """Concordância entre a decisão do agente e a referência (o legado, no shadow),
+    campo a campo e por versão. É o número que diz quando promover."""
+    st = state(ctx)
+    result = call(st, st.client.agreement, agent_type=agent, since=since, agent_version=version, fields=fields)
+    emit(st, result, _render_agreement)
+
+
+@app.command("export")
+def export(
+    ctx: typer.Context,
+    agent: str = typer.Option(..., "--agent", "-a", help="agent_type."),
+    output: str | None = typer.Option(None, "--output", "-o", help="Arquivo JSONL; sem isto, stdout."),
+    since: str | None = typer.Option(None, "--since", help="ISO 8601."),
+    version: int | None = typer.Option(None, "--version", help="Só esta versão da configuração."),
+    limit: int = typer.Option(1000, "--limit", "-n", min=1, max=5000),
+) -> None:
+    """Runs com referência como dataset do `kuro eval` (JSONL: id, input,
+    dependencies, expected). Ex.: `kuro runs export -a r8 -o casos.jsonl`."""
+    st = state(ctx)
+    cases = call(st, st.client.export_cases, agent_type=agent, since=since, agent_version=version, limit=limit)
+    lines = "".join(json.dumps(case, ensure_ascii=False) + "\n" for case in cases)
+    if output:
+        try:
+            with open(output, "w", encoding="utf-8") as fh:
+                fh.write(lines)
+        except OSError as exc:
+            fail(st, f"não consegui gravar {output}: {exc}", EXIT_USAGE)
+        emit(st, {"output": output, "cases": len(cases)}, lambda r: console.print(f"[green]✓[/] {r['cases']} casos em {r['output']}"))
+        return
+    import sys
+
+    sys.stdout.write(lines)
+

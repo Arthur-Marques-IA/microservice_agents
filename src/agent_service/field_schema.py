@@ -26,7 +26,7 @@ novo que apareça só precisa ser tratado aqui para não reabrir o mesmo buraco.
 
 from typing import Any
 
-from agent_service.agents.dependency_fields import DependencyFieldSpecError, validate_field_specs
+from agent_service.agents.dependency_fields import DependencyFieldSpecError, validate_enum, validate_field_specs
 
 LEAF_TYPES = frozenset({"string", "integer", "number", "boolean"})
 ALL_TYPES = LEAF_TYPES | {"object", "array"}
@@ -110,6 +110,13 @@ def validate_composite(field: dict[str, Any], *, path: str, depth: int = 0) -> d
     if item_type not in ITEM_TYPES:
         raise FieldSchemaError(f"{path}.items: tipo inválido {item_type!r} (use {sorted(ITEM_TYPES)})")
     normalized: dict[str, Any] = {"type": item_type}
+    if items.get("enum") is not None:
+        if item_type == "object":
+            raise FieldSchemaError(f"{path}.items: enum não se aplica a object")
+        try:
+            normalized["enum"] = validate_enum(items["enum"], item_type, where=f"{path}.items")
+        except DependencyFieldSpecError as exc:
+            raise FieldSchemaError(str(exc)) from exc
     if item_type == "object":
         if not items.get("fields"):
             raise FieldSchemaError(f"{path}.items: type='object' exige `fields`")
@@ -149,6 +156,8 @@ def json_schema_for(field: dict[str, Any]) -> dict[str, Any]:
     """A propriedade de um campo, em JSON Schema. Único lugar que monta isto."""
     field_type = field["type"]
     schema: dict[str, Any] = {"type": field_type, "description": field.get("description") or ""}
+    if field.get("enum"):
+        schema["enum"] = field["enum"]
     if field_type == "object":
         schema.update(_properties(field["fields"]))
     elif field_type == "array":
@@ -159,7 +168,7 @@ def json_schema_for(field: dict[str, Any]) -> dict[str, Any]:
 def _item_schema(items: dict[str, Any]) -> dict[str, Any]:
     if items["type"] == "object":
         return {"type": "object", **_properties(items["fields"])}
-    return {"type": items["type"]}
+    return {"type": items["type"], **({"enum": items["enum"]} if items.get("enum") else {})}
 
 
 def _properties(fields: list[dict[str, Any]]) -> dict[str, Any]:

@@ -6,7 +6,7 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from agent_service.cli import eval as kuro_eval
+from agent_service import evaluation as kuro_eval
 from agent_service.cli import main as cli_main
 from agent_service.cli.client import Client
 

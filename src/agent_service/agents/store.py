@@ -73,6 +73,11 @@ agent_definitions = Table(
     # ({name, type, label, description, required, default}), validada pela
     # mesma `dependency_fields.validate_field_specs`.
     Column("response_schema", JSON, nullable=False, default=list),
+    # Temperatura, top_p, max_tokens, thinking_budget (`models/params.py`);
+    # None = padrão do provedor.
+    Column("model_params", JSON, nullable=True),
+    # Tempo limite de uma execução; None = RUN_TIMEOUT_SECONDS do serviço.
+    Column("timeout_seconds", Integer, nullable=True),
     Column("is_seed", Boolean, nullable=False, default=False),
     Column("prompt_version", Integer, nullable=False, default=1),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
@@ -170,6 +175,8 @@ def create_definition(
     num_history_runs: int = 10,
     kind: str = "conversational",
     response_schema: list[dict[str, Any]] | None = None,
+    model_params: dict[str, Any] | None = None,
+    timeout_seconds: int | None = None,
     is_seed: bool = False,
 ) -> dict[str, Any]:
     engine = get_db().db_engine
@@ -189,6 +196,8 @@ def create_definition(
                 num_history_runs=num_history_runs,
                 kind=kind,
                 response_schema=response_schema or [],
+                model_params=model_params or None,
+                timeout_seconds=timeout_seconds,
                 is_seed=is_seed,
                 prompt_version=1,
             )
@@ -230,6 +239,8 @@ def update_definition(
     num_history_runs: int | None = None,
     kind: str | None = None,
     response_schema: list[dict[str, Any]] | None = None,
+    model_params: dict[str, Any] | None = _UNSET,
+    timeout_seconds: int | None = _UNSET,
 ) -> dict[str, Any]:
     current = get_definition(agent_type)
     if current is None:
@@ -258,6 +269,10 @@ def update_definition(
         values["kind"] = kind
     if response_schema is not None:
         values["response_schema"] = response_schema
+    if model_params is not _UNSET:
+        values["model_params"] = model_params or None
+    if timeout_seconds is not _UNSET:
+        values["timeout_seconds"] = timeout_seconds
 
     prompt_changed = instructions is not None and instructions != current["instructions"]
     if prompt_changed:

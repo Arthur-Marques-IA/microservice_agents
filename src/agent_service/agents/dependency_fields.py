@@ -54,17 +54,35 @@ def validate_field_specs(specs: list[dict[str, Any]] | None) -> list[dict[str, A
         field_type = raw.get("type", "string")
         if field_type not in _VALID_TYPES:
             raise DependencyFieldSpecError(f"tipo inválido em {name!r}: {field_type!r} (use {sorted(_VALID_TYPES)})")
-        normalized.append(
-            {
-                "name": name,
-                "type": field_type,
-                "label": raw.get("label") or name,
-                "description": raw.get("description") or "",
-                "required": bool(raw.get("required", False)),
-                "default": raw.get("default"),
-            }
-        )
+        field = {
+            "name": name,
+            "type": field_type,
+            "label": raw.get("label") or name,
+            "description": raw.get("description") or "",
+            "required": bool(raw.get("required", False)),
+            "default": raw.get("default"),
+        }
+        if raw.get("enum") is not None:
+            field["enum"] = validate_enum(raw["enum"], field_type, where=repr(name))
+            if field["default"] is not None and field["default"] not in field["enum"]:
+                raise DependencyFieldSpecError(f"default de {name!r} fora de enum: {field['default']!r}")
+        normalized.append(field)
     return normalized
+
+
+def validate_enum(values: Any, field_type: str, *, where: str) -> list[Any]:
+    """Valores permitidos de um campo. Só entra na definição quando declarado —
+    um `"enum": null` em todos os campos mudaria o hash de todo agente existente."""
+    if field_type == "boolean":
+        raise DependencyFieldSpecError(f"enum em {where}: não se aplica a boolean")
+    if not isinstance(values, list) or not values:
+        raise DependencyFieldSpecError(f"enum em {where} deve ser uma lista não vazia")
+    for value in values:
+        if not _type_ok(field_type, value):
+            raise DependencyFieldSpecError(f"enum em {where}: {value!r} não é do tipo {field_type}")
+    if len(set(map(repr, values))) != len(values):
+        raise DependencyFieldSpecError(f"enum em {where}: valores repetidos")
+    return list(values)
 
 
 def _type_ok(field_type: str, value: Any) -> bool:
@@ -97,4 +115,6 @@ def validate_dependencies(
             continue
         if not _type_ok(field_type, result[name]):
             raise DependencyValidationError(f"dependencies.{name} deve ser do tipo {field_type}")
+        if field.get("enum") and result[name] not in field["enum"]:
+            raise DependencyValidationError(f"dependencies.{name} deve ser um de {field['enum']}")
     return result

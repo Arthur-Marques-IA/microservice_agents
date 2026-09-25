@@ -36,6 +36,8 @@ kuro --json agents list
 kuro --json agents get suporte
 kuro --json agents get suporte --editable > suporte.json   # só os campos editáveis
 kuro --json agents apply -f suporte.json                  # cria ou atualiza (também aceita -f - para stdin)
+kuro --json agents apply -f agentes/ --dry-run            # diretório: um JSON por agente; valida no servidor sem gravar
+kuro --json agents export -o agentes/                     # um <agent_type>.json por agente (sem os seed)
 kuro --json agents set suporte num_history_runs=5 tools='["calculator"]'   # altera só esses campos
 kuro --json agents versions suporte
 kuro --json agents rollback suporte 3 --yes                # reaplica as instructions da v3 (vira uma versão nova)
@@ -77,6 +79,10 @@ kuro --json analyze extrator-contrato -f contrato.txt        # ou stdin; devolve
 kuro --json analyze classificador -m '{"mensagens": [...]}'  # texto direto, sem arquivo temporário
 cat conversa.json | kuro --json analyze classificador        # texto/JSON por stdin
 # /chat e /analyze devolvem `agent_version` e `config_hash`: a configuração que decidiu.
+# /analyze aceita `session_id` (agrupa por conversa) e `metadata` (correlação; não vai ao modelo).
+# Campos do agente: `model_params` {temperature, top_p, max_tokens, thinking_budget}, `timeout_seconds`
+# (504 ao estourar) e `enum` em qualquer campo de response_schema/dependency_fields.
+# Integração de outro sistema (erros, fallback, shadow): docs/integracao.md.
 
 # Mudar um agente em produção sem risco: draft → eval → promote
 kuro --json agents promote r8 --to r8-draft --yes            # cria/atualiza o draft (cópia do prod)
@@ -121,6 +127,13 @@ kuro --json runs score <run_id> 1 --comment "resposta correta"
 kuro --json runs stats --agent suporte          # total, erros, tokens, custo e série diária
 kuro --json runs tail --agent suporte           # acompanha ao vivo; um objeto JSON por execução, Ctrl+C sai
 kuro --json runs sessions --agent suporte       # execuções agrupadas por sessão (tokens, custo, erros)
+kuro --json runs list --agent r8 --meta conversation_id=98231   # pela metadata que quem chamou mandou
+kuro --json runs list --agent r8 --version 7    # só runs de uma versão da configuração
+
+# Modo shadow (o legado responde; o Kuro decide em silêncio e é comparado)
+kuro --json runs reference <run_id> -f decisao_legado.json   # o sistema integrado usa POST /observability/references
+kuro --json runs agreement -a r8                # concordância com a referência, por campo e por versão
+kuro --json runs export -a r8 -o casos.jsonl    # runs com referência viram dataset do kuro eval
 
 # Conversas guardadas (a transcrição em si)
 # O user_id é o mesmo do chat: `cli` por padrão, ou KURO_USER_ID.

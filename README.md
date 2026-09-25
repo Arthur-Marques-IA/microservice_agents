@@ -429,6 +429,10 @@ fica no histórico da sessão, então para arquivos grandes prefira `analyze`.
 
 ## Integrar com outro módulo
 
+**O guia completo está em [docs/integracao.md](docs/integracao.md):** contrato do `/analyze`,
+erros e fallback, agentes como código, draft → eval → promote, modo shadow e um cliente PHP de
+exemplo.
+
 Cada agente publica o próprio contrato: endpoint, corpo, `dependencies`
 obrigatórias e exemplos. A documentação sai dos dados e não fica desatualizada.
 
@@ -711,6 +715,8 @@ Tailwind, Docker Compose.
 | `AGENT_SERVICE_BIND` | `127.0.0.1:58000` | onde a API é publicada no host |
 | `LANGFUSE_ENABLED` | `false` | ligue junto com o profile `observability` |
 | `TRACE_STORE_BACKEND` | `db` | de onde `kuro runs` e `/observability/*` leem: `db` ou `langfuse` |
+| `RUN_TIMEOUT_SECONDS` | `90` | tempo limite padrão de uma execução (o agente pode ter `timeout_seconds`); estourou, 504 |
+| `MAX_CONCURRENT_RUNS` | `16` | execuções simultâneas por processo; acima disso, 503 com `Retry-After` |
 | `MODEL_PRICES` | tabela embutida | JSON `{"modelo": [USD/1M entrada, USD/1M saída]}` para o custo estimado sem Langfuse |
 | `GOOGLE_API_KEY` | — | chave do Gemini (provedor padrão) |
 | `CREDENTIALS_ENCRYPTION_KEY` | — | chave Fernet que cifra as credenciais de modelo; **obrigatória** para cadastrar chaves |

@@ -64,12 +64,35 @@ então entram como `kind="analysis"` via `/analyze`. Não dependem do procedural
 5. **Extra:** custo estimado por modelo (`models/pricing.py`, sobrescrito por `MODEL_PRICES`).
    Sem o Langfuse o `cost_usd` vinha vazio para o Gemini.
 
-**Sprint 3+, migração em ondas (shadow → assistido → autônomo)**
-- R8 em shadow: o Regente usa `KuroClient` com `LLM_PROVIDER=legacy|kuro|shadow` e grava a decisão
-  do legado e a do Kuro lado a lado. O shadow vira o dataset do `kuro eval`. O R8 é promovido
-  quando a equivalência de decisão atingir a meta.
-- Depois vem o R4 (shadow → prod) e por último o R6 (shadow → assistido com
-  `R6_AUTO_EFFECT_ENABLED=false` → autônomo). A revalidação financeira fica 100% no Regente.
+**Sprint 3, infraestrutura para o Regente integrar sozinho — feito**
+
+Decisão de 2026-09-25: os agentes são criados e mantidos **no repositório do Regente**. O Kuro
+entrega a infraestrutura, e o guia para o time de lá é o [docs/integracao.md](docs/integracao.md).
+1. ~~Parâmetros do modelo por agente~~ **Feito** (`models/params.py`, migração 0003):
+   `model_params` = temperature, top_p, max_tokens, thinking_budget (só Gemini), traduzidos por
+   provedor e contados na versão da configuração.
+2. ~~`enum` nos campos~~ **Feito**: em `response_schema`, `items` e `dependency_fields`. Vira
+   `Literal` no schema do provedor, e um valor fora dele dá 502, nunca uma `acao` inventada.
+3. ~~Tempo limite e limite de simultâneas~~ **Feito**: `timeout_seconds` por agente
+   (`RUN_TIMEOUT_SECONDS` = 90 por padrão) dá 504 e grava o run como erro. `MAX_CONCURRENT_RUNS`
+   por processo dá 503 com `Retry-After`. **Sem fila no Kuro**, de propósito: a fila é o
+   claim/daemon do Regente. Se um dia houver execução assíncrona, ela vai para o Postgres
+   (`SKIP LOCKED`), não de volta para o Redis.
+4. ~~Correlação~~ **Feito** (migração 0004): `metadata` no `/chat`/`/analyze` (não vai para o
+   modelo), filtro `--meta`/`?meta=`, e `session_id` opcional no `/analyze` para agrupar por
+   conversa.
+5. ~~Shadow~~ **Feito**: `POST /observability/references` (escopo runtime) grava a decisão do
+   legado; `/observability/agreement` e `kuro runs agreement` dão a concordância por campo e por
+   versão; `kuro runs export` gera o dataset do `kuro eval`. A comparação é a mesma do eval
+   (`agent_service/evaluation.py`).
+6. ~~Readiness~~ **Feito**: `GET /ready` (aberta) confere o banco.
+7. ~~Contrato de erro~~ **Feito**: a tabela de status → ação fica em `docs/integracao.md` §4.
+8. ~~Agentes como código~~ **Feito**: `?dry_run=true` no `POST`/`PUT /agents`,
+   `kuro agents apply -f <dir> [--dry-run]` (só envia o que mudou) e `kuro agents export -o <dir>`.
+
+**Depois, do lado do Regente** (fora deste repositório): `KuroClient`, `LLM_PROVIDER=legacy|kuro|shadow`,
+R8 em shadow → prod, depois R4, e por último R6 (shadow → assistido com
+`R6_AUTO_EFFECT_ENABLED=false` → autônomo), com a revalidação financeira 100% no Regente.
 
 **Adiado de propósito** (há um consumidor só): tabela `api_keys` multi-chave, multi-tenancy
 estrutural/RLS, RBAC no console, snapshot com cache e `LISTEN/NOTIFY`, dependências `tool_only`,
@@ -397,7 +420,8 @@ Os prazos são estimativas grosseiras para dar ordem de grandeza, não compromis
 |---|---|---|
 | ~~**S1**~~ feito | Trace store em Postgres, Langfuse como extra opcional, Redis fora do core, `_resolve` em threadpool | Produção enxuta com runs auditáveis |
 | ~~**S2**~~ feito | Alembic, `config_hash` + `agent_versions`, `kuro eval` v0 determinístico, `@draft` + `promote` | Mudança de agente provada antes de ir para prod |
-| **S3+**, contínuo | R8 shadow → prod, R4 shadow → prod, R6 shadow → assistido → autônomo | Regente fora do `ServiceLLM::chatJson()` |
+| ~~**S3**~~ feito | Parâmetros do modelo, `enum`, timeout, limite de simultâneas, metadata, shadow (referência, concordância, export), `/ready`, agentes como código, guia de integração | O Regente integra sozinho |
+| **Regente**, contínuo | R8 shadow → prod, R4 shadow → prod, R6 shadow → assistido → autônomo | Regente fora do `ServiceLLM::chatJson()` |
 | **Depois** | `api_keys`/tenant/RLS, procedural, `tool_only`, cache com `LISTEN/NOTIFY`, sandbox Python, `kuro up/down`, MCP, GitOps, `kuro dash` | Plataforma completa, por necessidade |
 
 A paridade CLI saiu desta linha: ela foi fechada junto com a §6 e está documentada como matriz no

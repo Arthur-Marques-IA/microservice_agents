@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     # `runs`/`run_spans`/`run_scores` no Postgres do serviço, sempre gravadas) ou
     # "langfuse" (a API do Langfuse — exige o Langfuse ligado).
     trace_store_backend: Literal["db", "langfuse"] = "db"
+    run_timeout_seconds: int = 90
+    """Tempo limite padrão de uma execução (o agente pode ter o seu,
+    `timeout_seconds`). Estourou: 504, e quem chama cai no próprio fallback."""
+    max_concurrent_runs: int = 16
+    """Execuções simultâneas por processo. Acima disso a chamada recebe 503 com
+    `Retry-After` na hora, em vez de esperar numa fila que ninguém vê."""
     model_prices: str | None = None
     """JSON `{"modelo": [USD/1M entrada, USD/1M saída]}` que sobrescreve a tabela
     de `models/pricing.py` — o custo estimado das execuções sem Langfuse."""
