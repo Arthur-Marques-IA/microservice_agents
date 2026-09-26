@@ -242,6 +242,17 @@ def _model_spans(metrics: Any, started_at: datetime) -> list[Any]:
     return spans
 
 
+def _tool_output(tool: Any) -> Any:
+    result = getattr(tool, "result", None)
+    # O gerenciador de memória do Agno devolve "No response from model" quando o
+    # modelo só chamou as funções de gravar — é o caso de sucesso, não um erro.
+    if getattr(tool, "tool_name", None) == "update_user_memory" and result == "No response from model":
+        from agent_service.memory.managers import MEMORY_TOOL_OUTPUT
+
+        return MEMORY_TOOL_OUTPUT
+    return result
+
+
 def _tool_span(event: Any, now: datetime) -> Any:
     from agent_service.observability.run_store import SpanRecord
 
@@ -256,7 +267,7 @@ def _tool_span(event: Any, now: datetime) -> Any:
         level="ERROR" if failed else "DEFAULT",
         status_message=getattr(event, "error", None) if failed else None,
         input=getattr(tool, "tool_args", None),
-        output=getattr(tool, "result", None),
+        output=_tool_output(tool),
         latency_ms=_ms(getattr(tool_metrics, "duration", None)),
     )
 

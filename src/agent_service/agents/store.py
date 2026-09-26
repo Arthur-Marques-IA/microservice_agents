@@ -64,7 +64,9 @@ agent_definitions = Table(
     # `agents/dependency_fields.py`. Lista de {name, type, label, description,
     # required, default}; [] (default) = sem validação, qualquer dependencies passa.
     Column("dependency_fields", JSON, nullable=False, default=list),
-    Column("memory_backend", String, nullable=False, default="common"),
+    Column("memory_backend", String, nullable=False, default="none"),
+    # Resumo incremental do que sai da janela de histórico (`memory/managers.py`).
+    Column("session_summary", Boolean, nullable=False, default=False),
     Column("num_history_runs", Integer, nullable=False, default=10),
     # "conversational" (padrão, com histórico/memória) ou "analysis" (one-shot,
     # devolve `response_schema` validado em vez de texto — ver `agents/response_model.py`).
@@ -171,7 +173,8 @@ def create_definition(
     model_credential_id: str | None = None,
     knowledge_collection: str | None = None,
     dependency_fields: list[dict[str, Any]] | None = None,
-    memory_backend: str = "common",
+    memory_backend: str = "none",
+    session_summary: bool = False,
     num_history_runs: int = 10,
     kind: str = "conversational",
     response_schema: list[dict[str, Any]] | None = None,
@@ -193,6 +196,7 @@ def create_definition(
                 knowledge_collection=knowledge_collection,
                 dependency_fields=dependency_fields or [],
                 memory_backend=memory_backend,
+                session_summary=session_summary,
                 num_history_runs=num_history_runs,
                 kind=kind,
                 response_schema=response_schema or [],
@@ -236,6 +240,7 @@ def update_definition(
     knowledge_collection: str | None = _UNSET,
     dependency_fields: list[dict[str, Any]] | None = None,
     memory_backend: str | None = None,
+    session_summary: bool | None = None,
     num_history_runs: int | None = None,
     kind: str | None = None,
     response_schema: list[dict[str, Any]] | None = None,
@@ -263,6 +268,8 @@ def update_definition(
         values["dependency_fields"] = dependency_fields
     if memory_backend is not None:
         values["memory_backend"] = memory_backend
+    if session_summary is not None:
+        values["session_summary"] = session_summary
     if num_history_runs is not None:
         values["num_history_runs"] = num_history_runs
     if kind is not None:

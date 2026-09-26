@@ -41,6 +41,7 @@ EDITABLE_FIELDS = (
     "knowledge_collection",
     "dependency_fields",
     "memory_backend",
+    "session_summary",
     "num_history_runs",
     "kind",
     "response_schema",
@@ -52,7 +53,7 @@ EDITABLE_FIELDS = (
 # Num agente `analysis` estes campos não têm efeito (ele é one-shot, sem sessão
 # nem memória) e a API recusa configurá-los — oferecê-los no JSON editável seria
 # convidar a mexer num campo que só devolve 422.
-INERTES_EM_ANALYSIS = ("num_history_runs", "memory_backend")
+INERTES_EM_ANALYSIS = ("num_history_runs", "memory_backend", "session_summary")
 
 
 def editable(definition: dict[str, Any]) -> dict[str, Any]:

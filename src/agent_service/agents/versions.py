@@ -75,6 +75,11 @@ def effective_config(definition: dict[str, Any]) -> dict[str, Any]:
         config["model_params"] = definition["model_params"]
     if definition.get("timeout_seconds"):
         config["timeout_seconds"] = definition["timeout_seconds"]
+    if definition.get("session_summary"):
+        config["session_summary"] = True
+    if config.get("memory_backend") == "common":
+        # `common` é o nome antigo de `agentic`: o mesmo comportamento, a mesma versão.
+        config["memory_backend"] = "agentic"
 
     tools = []
     for name in definition.get("tools") or []:

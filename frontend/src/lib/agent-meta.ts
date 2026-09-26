@@ -32,15 +32,31 @@ export function modelLabel(modelId?: string | null): string {
 }
 
 export const MEMORY_BACKENDS: Record<MemoryBackend, { label: string; description: string }> = {
-  common: {
-    label: "Comum",
-    description: "Histórico de sessão e memórias do usuário no Postgres, gerenciados pelo Agno.",
+  none: { label: "Desligada", description: "Só o histórico da sessão." },
+  auto: {
+    label: "Automática",
+    description:
+      "Depois de cada resposta, o que vale lembrar do usuário é extraído em paralelo, com o modelo auxiliar. O modelo do agente não ganha tool nem rodada extra.",
   },
-  mem0: {
-    label: "Mem0",
-    description: "Soma memória semântica via Mem0 à memória comum. Requer MEM0_ENABLED no backend.",
+  agentic: {
+    label: "Agêntica",
+    description:
+      "O próprio modelo decide quando gravar, pela tool update_user_memory. Mais controle, mas cada gravação é uma chamada extra no meio da resposta.",
   },
+  common: { label: "Agêntica", description: "Nome antigo da memória agêntica." },
+  mem0: { label: "Mem0", description: "Memória semântica via Mem0 (serviço externo). Requer MEM0_ENABLED no backend." },
 };
+
+/** Os modos oferecidos quando a memória de longo prazo está ligada (`common` é legado de `agentic`). */
+export const MEMORY_MODES = ["auto", "agentic", "mem0"] as const;
+
+export const REASONING_LEVELS: { value: "" | "off" | "low" | "medium" | "high"; label: string }[] = [
+  { value: "", label: "Padrão do modelo" },
+  { value: "off", label: "Desligado" },
+  { value: "low", label: "Baixo" },
+  { value: "medium", label: "Médio" },
+  { value: "high", label: "Alto" },
+];
 
 export const TOOL_KIND_META: Record<ToolKind, { label: string; description: string }> = {
   builtin: { label: "Padrão", description: "Uma toolkit pronta do Agno (busca, calculadora...)." },

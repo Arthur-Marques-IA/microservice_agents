@@ -134,7 +134,12 @@ class AgentDefinitionIn(BaseModel):
         default=None, description="Collection de documentos que o agente pode consultar (GET /collections)"
     )
     dependency_fields: list[DependencyFieldIn] = []
-    memory_backend: Literal["common", "mem0"] = "common"
+    memory_backend: Literal["none", "auto", "agentic", "common", "mem0"] = "none"
+    """Memória de longo prazo: `none` (padrão), `auto` (extraída em paralelo, modelo
+    auxiliar), `agentic` (o modelo decide quando gravar; `common` é o nome antigo)
+    ou `mem0`."""
+    session_summary: bool = False
+    """Resume o que sai da janela de histórico, em vez de perdê-lo."""
     num_history_runs: int = 10
     kind: AgentKind = "conversational"
     response_schema: list[ResponseFieldIn] = Field(
@@ -173,7 +178,8 @@ class AgentDefinitionUpdate(BaseModel):
     model_credential_id: str | None = None
     knowledge_collection: str | None = None
     dependency_fields: list[DependencyFieldIn] | None = None
-    memory_backend: Literal["common", "mem0"] | None = None
+    memory_backend: Literal["none", "auto", "agentic", "common", "mem0"] | None = None
+    session_summary: bool | None = None
     num_history_runs: int | None = None
     kind: AgentKind | None = None
     response_schema: list[ResponseFieldIn] | None = None
@@ -201,6 +207,7 @@ class AgentDefinitionOut(BaseModel):
     knowledge_collection: str | None = None
     dependency_fields: list[DependencyFieldOut]
     memory_backend: str
+    session_summary: bool = False
     num_history_runs: int
     kind: AgentKind
     response_schema: list[ResponseFieldOut]
@@ -287,7 +294,14 @@ class PromptVersionOut(BaseModel):
 _INERTES_EM_ANALYSIS = {
     "num_history_runs": "analysis é one-shot: não há histórico para reaproveitar",
     "memory_backend": "analysis não usa memória de longo prazo (nem a do Agno, nem o mem0)",
+    "session_summary": "analysis não tem sessão para resumir",
 }
+
+
+_PADROES_ANTIGOS = {("memory_backend", "common")}
+"""Valores que já foram o padrão: um agente criado antes de 2026-09-26 tem
+`memory_backend="common"` gravado, e reenviar a definição dele (`get --editable`
+→ `apply`) não configurou nada."""
 
 
 def _validate_kind(kind: str, response_schema: list[dict[str, Any]]) -> None:
@@ -320,7 +334,9 @@ def _validate_inert_fields(kind: str, body: BaseModel) -> None:
     configurados = [
         campo
         for campo in body.model_fields_set
-        if campo in _INERTES_EM_ANALYSIS and getattr(body, campo) != _default_de(campo)
+        if campo in _INERTES_EM_ANALYSIS
+        and getattr(body, campo) != _default_de(campo)
+        and (campo, getattr(body, campo)) not in _PADROES_ANTIGOS
     ]
     if configurados:
         detalhe = "; ".join(f"{campo} ({_INERTES_EM_ANALYSIS[campo]})" for campo in sorted(configurados))
@@ -483,6 +499,7 @@ _PROMOTED_FIELDS = (
     "knowledge_collection",
     "dependency_fields",
     "memory_backend",
+    "session_summary",
     "num_history_runs",
     "kind",
     "response_schema",

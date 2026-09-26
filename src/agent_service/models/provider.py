@@ -50,7 +50,7 @@ def get_model(
     settings = get_settings()
     provider = (provider or settings.default_model_provider).lower()
     model_id = model_id or settings.default_model_id
-    extra = provider_kwargs(provider, params)
+    extra = provider_kwargs(provider, params, model_id)
 
     if provider == "google":
         from agno.models.google import Gemini

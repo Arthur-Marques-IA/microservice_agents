@@ -6,7 +6,15 @@ import { Plus, Trash, Wrench } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { errorMessage } from "@/lib/http";
 import { formatNumber, slugify } from "@/lib/format";
-import { DEFAULT_MODEL, MEMORY_BACKENDS, MODEL_OPTIONS, TOOL_KIND_META, type ModelOption } from "@/lib/agent-meta";
+import {
+  DEFAULT_MODEL,
+  MEMORY_BACKENDS,
+  MEMORY_MODES,
+  MODEL_OPTIONS,
+  REASONING_LEVELS,
+  TOOL_KIND_META,
+  type ModelOption,
+} from "@/lib/agent-meta";
 import type {
   AgentDefinition,
   AgentDefinitionInput,
@@ -68,7 +76,10 @@ interface FormValues {
   temperature: string;
   topP: string;
   maxTokens: string;
+  /** Ajuste fino antigo (Gemini); só é preservado, não se edita mais pela tela. */
   thinkingBudget: string;
+  reasoning: "" | "off" | "low" | "medium" | "high";
+  sessionSummary: boolean;
   /** "" = RUN_TIMEOUT_SECONDS do serviço. */
   timeoutSeconds: string;
 }
@@ -101,7 +112,10 @@ function paramsFrom(values: FormValues, provider: string | undefined): ModelPara
   if (values.temperature.trim()) params.temperature = Number(values.temperature);
   if (values.topP.trim()) params.top_p = Number(values.topP);
   if (values.maxTokens.trim()) params.max_tokens = Number(values.maxTokens);
-  if (values.thinkingBudget.trim() && (provider ?? "google") === "google") {
+  const supportsReasoning = ["google", "openai"].includes(provider ?? "google");
+  if (values.reasoning && supportsReasoning) {
+    params.reasoning = values.reasoning;
+  } else if (values.thinkingBudget.trim() && (provider ?? "google") === "google") {
     params.thinking_budget = Number(values.thinkingBudget);
   }
   return Object.keys(params).length ? params : null;
@@ -125,7 +139,10 @@ function valuesFrom(agent?: AgentDefinition, instructions?: string[]): FormValue
     credentialId: agent?.model_credential_id ?? "",
     knowledgeCollection: agent?.knowledge_collection ?? "",
     dependencyFields: agent?.dependency_fields ?? [],
-    memoryBackend: agent?.memory_backend ?? "common",
+    // Agente novo nasce sem memória de longo prazo: liga quem precisa.
+    memoryBackend: agent?.memory_backend ?? "none",
+    reasoning: agent?.model_params?.reasoning ?? "",
+    sessionSummary: agent?.session_summary ?? false,
     numHistoryRuns: agent?.num_history_runs ?? 10,
     temperature: asText(agent?.model_params?.temperature),
     topP: asText(agent?.model_params?.top_p),
@@ -198,6 +215,7 @@ function buildUpdate(values: FormValues, agent: AgentDefinition, models: ModelOp
   if (values.kind !== "analysis") {
     if (values.memoryBackend !== agent.memory_backend) payload.memory_backend = values.memoryBackend;
     if (values.numHistoryRuns !== agent.num_history_runs) payload.num_history_runs = values.numHistoryRuns;
+    if (values.sessionSummary !== (agent.session_summary ?? false)) payload.session_summary = values.sessionSummary;
   }
   return payload;
 }
@@ -280,7 +298,6 @@ export function AgentForm({
       numberProblem("temperature", values.temperature) ??
       numberProblem("topP", values.topP) ??
       numberProblem("maxTokens", values.maxTokens) ??
-      numberProblem("thinkingBudget", values.thinkingBudget) ??
       numberProblem("timeoutSeconds", values.timeoutSeconds),
     responseSchema:
       values.kind !== "analysis"
@@ -348,7 +365,11 @@ export function AgentForm({
           // faz nada num agente one-shot, em vez de aceitá-lo calado.
           ...(analysis
             ? {}
-            : { memory_backend: values.memoryBackend, num_history_runs: values.numHistoryRuns }),
+            : {
+                memory_backend: values.memoryBackend,
+                num_history_runs: values.numHistoryRuns,
+                session_summary: values.sessionSummary,
+              }),
         });
       }
       setShowErrors(false);
@@ -583,6 +604,19 @@ export function AgentForm({
                   value={Number.isNaN(values.numHistoryRuns) ? "" : values.numHistoryRuns}
                   onChange={(e) => update("numHistoryRuns", e.target.valueAsNumber)}
                 />
+                <label className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={values.sessionSummary}
+                    onChange={(e) => update("sessionSummary", e.target.checked)}
+                    className="mt-0.5 accent-primary"
+                  />
+                  <span>
+                    <span className="font-medium text-foreground">Resumir o que sai do histórico</span> — a conversa
+                    longa mantém o contexto sem reenviar todas as trocas. O resumo é atualizado uma vez a cada janela,
+                    com o modelo auxiliar.
+                  </span>
+                </label>
               </Field>
             )}
           </div>
@@ -615,15 +649,26 @@ export function AgentForm({
                 value={values.maxTokens}
                 onChange={(v) => update("maxTokens", v)}
               />
-              {currentProvider === "google" && (
-                <ParamInput
-                  id={`${id}-thinking`}
-                  label="Raciocínio"
-                  placeholder="0 = desliga"
-                  title="thinking_budget (Gemini 2.5): 0 desliga o raciocínio — mais rápido e barato em decisões simples."
-                  value={values.thinkingBudget}
-                  onChange={(v) => update("thinkingBudget", v)}
-                />
+              {(currentProvider === "google" || currentProvider === "openai") && (
+                <label
+                  htmlFor={`${id}-reasoning`}
+                  className="flex flex-col gap-1 text-xs text-muted-foreground"
+                  title="Quanto o modelo pensa antes de responder. Baixo mantém o planejamento das tools com menos latência e custo; desligado só para respostas diretas."
+                >
+                  Raciocínio
+                  <Select
+                    id={`${id}-reasoning`}
+                    value={values.reasoning}
+                    onChange={(e) => update("reasoning", e.target.value as FormValues["reasoning"])}
+                    className="h-8"
+                  >
+                    {REASONING_LEVELS.map((level) => (
+                      <option key={level.value} value={level.value}>
+                        {level.label}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
               )}
               <ParamInput
                 id={`${id}-timeout`}
@@ -641,11 +686,28 @@ export function AgentForm({
               conhecimento continua valendo.
             </p>
           ) : (
-          <fieldset className="flex flex-col gap-1.5">
-            <legend className="mb-1.5 text-[13px] font-medium">Memória</legend>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {(Object.keys(MEMORY_BACKENDS) as MemoryBackend[]).map((backend) => {
-                const selected = values.memoryBackend === backend;
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-1.5 text-[13px] font-medium">Memória de longo prazo</legend>
+            <label className="flex items-start gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                checked={values.memoryBackend !== "none"}
+                onChange={(e) => update("memoryBackend", e.target.checked ? "auto" : "none")}
+                className="mt-0.5 accent-primary"
+              />
+              <span>
+                <span className="font-medium">Lembrar do usuário entre conversas</span>
+                <span className="block text-xs text-muted-foreground">
+                  Desligada, o agente só conta com o histórico da sessão — sem tool de memória no prompt e sem chamadas
+                  extras. Ligue quando o mesmo usuário volta em sessões diferentes e o agente precisa lembrar dele.
+                </span>
+              </span>
+            </label>
+            {values.memoryBackend !== "none" && (
+            <div className="grid gap-2 sm:grid-cols-3">
+              {MEMORY_MODES.map((backend) => {
+                const current = values.memoryBackend === "common" ? "agentic" : values.memoryBackend;
+                const selected = current === backend;
                 return (
                   <label
                     key={backend}
@@ -670,6 +732,7 @@ export function AgentForm({
                 );
               })}
             </div>
+            )}
           </fieldset>
           )}
         </div>

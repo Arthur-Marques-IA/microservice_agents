@@ -54,6 +54,14 @@ class Settings(BaseSettings):
     max_concurrent_runs: int = 16
     """Execuções simultâneas por processo. Acima disso a chamada recebe 503 com
     `Retry-After` na hora, em vez de esperar numa fila que ninguém vê."""
+    aux_model_id: str | None = None
+    """Modelo das tarefas de apoio — extrair memória de longo prazo e resumir a
+    sessão. Vazio = o modelo do próprio agente. Um modelo barato aqui (ex.:
+    `gemini-flash-lite-latest`) corta o custo dessas chamadas extras."""
+    aux_model_provider: str | None = None
+    """Provedor de `aux_model_id`; vazio = o do agente."""
+    memory_context_limit: int = 10
+    """Quantas memórias de longo prazo (as mais recentes) entram no prompt."""
     model_prices: str | None = None
     """JSON `{"modelo": [USD/1M entrada, USD/1M saída]}` que sobrescreve a tabela
     de `models/pricing.py` — o custo estimado das execuções sem Langfuse."""

@@ -132,7 +132,9 @@ export function AgentDetail({
               <Badge variant="outline">Analista</Badge>
             ) : (
               <Badge variant="outline">
-                Memória {MEMORY_BACKENDS[agent.memory_backend]?.label ?? agent.memory_backend}
+                {agent.memory_backend === "none"
+                  ? "Sem memória longa"
+                  : `Memória ${MEMORY_BACKENDS[agent.memory_backend]?.label ?? agent.memory_backend}`}
               </Badge>
             )}
             <Badge variant="outline">Prompt v{agent.prompt_version}</Badge>

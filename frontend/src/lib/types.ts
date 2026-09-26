@@ -191,7 +191,9 @@ export interface SessionRun {
   } | null;
 }
 
-export type MemoryBackend = "common" | "mem0";
+/** `none` = sem memória de longo prazo; `auto` = extraída em paralelo; `agentic` = o
+ * modelo decide quando gravar (`common` é o nome antigo dele); `mem0` = Mem0. */
+export type MemoryBackend = "none" | "auto" | "agentic" | "common" | "mem0";
 
 export type DependencyFieldType = "string" | "integer" | "number" | "boolean";
 
@@ -251,8 +253,10 @@ export interface ModelParams {
   temperature?: number;
   top_p?: number;
   max_tokens?: number;
-  /** Só Gemini 2.5: 0 desliga o raciocínio (mais rápido e barato). */
+  /** Ajuste fino do Gemini (orçamento em tokens); quando existe, vale no lugar de `reasoning`. */
   thinking_budget?: number;
+  /** Nível de raciocínio, traduzido para cada modelo; ausente = padrão do modelo. */
+  reasoning?: "off" | "low" | "medium" | "high";
 }
 
 export interface AgentDefinition {
@@ -275,6 +279,8 @@ export interface AgentDefinition {
   model_params?: ModelParams | null;
   /** Tempo limite de uma execução; `null` = padrão do serviço (RUN_TIMEOUT_SECONDS). */
   timeout_seconds?: number | null;
+  /** Resume o que sai da janela de histórico, em vez de perdê-lo. */
+  session_summary?: boolean;
   is_seed: boolean;
   prompt_version: number;
   created_at: string;
@@ -299,6 +305,7 @@ export interface AgentDefinitionInput {
   num_history_runs?: number;
   model_params?: ModelParams | null;
   timeout_seconds?: number | null;
+  session_summary?: boolean;
 }
 
 export interface PromptVersion {

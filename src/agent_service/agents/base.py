@@ -13,10 +13,12 @@ from pydantic import BaseModel
 
 from agent_service.db import get_db
 from agent_service.documents.collections import get_collection
-from agent_service.memory.common import CommonMemoryBackend
 from agent_service.models.provider import get_model
 
-MemoryBackendName = Literal["common", "mem0"]
+MemoryBackendName = Literal["none", "auto", "agentic", "common", "mem0"]
+"""`none` = sem memória de longo prazo; `auto` = extraída em paralelo, com o
+modelo auxiliar; `agentic` = o modelo decide quando gravar (`common` é o nome
+antigo dele); `mem0` = Mem0. Ver `memory/managers.py`."""
 AgentKind = Literal["conversational", "analysis"]
 
 
@@ -32,7 +34,8 @@ def build_agent(
     model_params: dict[str, Any] | None = None,
     knowledge_collection: str | None = None,
     num_history_runs: int = 10,
-    memory_backend: MemoryBackendName = "common",
+    memory_backend: MemoryBackendName = "none",
+    session_summary: bool = False,
     kind: AgentKind = "conversational",
     output_schema: type[BaseModel] | None = None,
 ) -> Agent:
@@ -42,8 +45,19 @@ def build_agent(
     # Um backend de memória de longo prazo por vez: com "mem0", o Mem0 substitui
     # a memória do Agno (sem memory_manager, sem a tool `update_user_memory` e sem
     # as memórias do Agno no prompt). O histórico da sessão continua valendo.
-    use_agno_memory = not is_analysis and memory_backend == "common"
-    memory = CommonMemoryBackend() if use_agno_memory else None
+    from agent_service.memory.managers import aux_model, memory_kwargs, summary_manager
+
+    helper_model = aux_model(model_provider, model_id, model_credential_id)
+    memory = memory_kwargs("none" if is_analysis else memory_backend, helper_model)
+    summary = (
+        {
+            "enable_session_summaries": True,
+            "add_session_summary_to_context": True,
+            "session_summary_manager": summary_manager(helper_model, num_history_runs),
+        }
+        if session_summary and not is_analysis
+        else {}
+    )
     # `search_knowledge=True` dá ao agente uma tool de busca na collection (RAG
     # agêntico): ele decide quando consultar, em vez de injetarmos tudo no prompt.
     knowledge = get_collection(knowledge_collection) if knowledge_collection else None
@@ -76,15 +90,14 @@ def build_agent(
         # sessão com `if agent.db is not None`, e a busca na collection não usa
         # `agent.db` (a collection tem a própria), então o RAG continua valendo.
         db=None if is_analysis else get_db(),
-        memory_manager=memory.manager if memory else None,
+        **memory,
+        **summary,
         knowledge=knowledge,
         search_knowledge=knowledge is not None,
         instructions=instructions,
         tools=tools or [],
         add_history_to_context=not is_analysis,
         num_history_runs=num_history_runs,
-        add_memories_to_context=use_agno_memory,
-        enable_agentic_memory=use_agno_memory,
         pre_hooks=pre_hooks or None,
         post_hooks=post_hooks or None,
         add_dependencies_to_context=add_dependencies_to_context,

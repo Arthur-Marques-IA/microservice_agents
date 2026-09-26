@@ -80,7 +80,9 @@ kuro --json analyze classificador -m '{"mensagens": [...]}'  # texto direto, sem
 cat conversa.json | kuro --json analyze classificador        # texto/JSON por stdin
 # /chat e /analyze devolvem `agent_version` e `config_hash`: a configuração que decidiu.
 # /analyze aceita `session_id` (agrupa por conversa) e `metadata` (correlação; não vai ao modelo).
-# Campos do agente: `model_params` {temperature, top_p, max_tokens, thinking_budget}, `timeout_seconds`
+# Memória de longo prazo: `memory_backend` = none (padrão) | auto (extraída em paralelo, modelo auxiliar AUX_MODEL_ID)
+#   | agentic (o modelo decide, tool update_user_memory) | mem0. `session_summary: true` resume o que sai de num_history_runs.
+# Campos do agente: `model_params` {temperature, top_p, max_tokens, reasoning: off|low|medium|high}, `timeout_seconds`
 # (504 ao estourar) e `enum` em qualquer campo de response_schema/dependency_fields.
 # Integração de outro sistema (erros, fallback, shadow): docs/integracao.md.
 
