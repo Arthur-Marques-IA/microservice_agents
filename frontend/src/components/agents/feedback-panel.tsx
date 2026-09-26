@@ -1,13 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { History, Plus, RotateCcw, Trash } from "lucide-react";
+import { GraduationCap, History, Plus, RotateCcw, Trash } from "lucide-react";
 import { errorMessage, requestJson } from "@/lib/http";
 import type { FeedbackNote, FeedbackRule, FeedbackVersion } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { sessionTitle } from "@/lib/sessions";
+import { useWorkspace } from "@/components/workspace/workspace-provider";
 import { EmptyState, RelativeTime, SectionHeading, Skeleton } from "@/components/ui/primitives";
 import { useConfirm } from "@/components/ui/confirm";
 import { useToast } from "@/components/ui/toast";
@@ -17,8 +21,10 @@ import { useToast } from "@/components/ui/toast";
  * concatenadas às instructions em runtime, sem virar uma versão de prompt —
  * por isso ficam aqui e não no histórico de versões.
  *
- * Editar aqui não passa pelo modelo (`PUT`): é a saída quando um merge sai
- * errado. O merge em si acontece no chat, pelo polegar para baixo.
+ * Duas formas de ensinar: o feedback em texto sobre uma conversa (`POST`), que
+ * a IA mescla nas regras que já existem — aqui ou no chat, pelo polegar para
+ * baixo —, e a regra escrita à mão (`PUT`), que não passa pelo modelo e é a
+ * saída quando um merge sai errado.
  */
 export function FeedbackPanel({ agentType }: { agentType: string }) {
   const toast = useToast();
@@ -28,6 +34,11 @@ export function FeedbackPanel({ agentType }: { agentType: string }) {
   const [versions, setVersions] = useState<FeedbackVersion[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [nova, setNova] = useState("");
+  const { sessions } = useWorkspace();
+  const conversas = sessions.filter((s) => s.agent_id === agentType);
+  const [sessaoEscolhida, setSessaoEscolhida] = useState("");
+  const sessao = sessaoEscolhida || conversas[0]?.session_id || "";
+  const [comentario, setComentario] = useState("");
 
   const base = `/api/agents/${encodeURIComponent(agentType)}/feedback`;
 
@@ -57,6 +68,34 @@ export function FeedbackPanel({ agentType }: { agentType: string }) {
       toast({ title: mensagem, description: "Vale a partir da próxima mensagem.", variant: "success" });
     } catch (err) {
       toast({ title: "Não deu para salvar", description: errorMessage(err), variant: "error" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function ensinar() {
+    const feedback = comentario.trim();
+    if (!feedback || !sessao) return;
+    setSaving(true);
+    try {
+      const atualizada = await requestJson<FeedbackNote>(base, {
+        method: "POST",
+        json: { session_id: sessao, feedback },
+        fallbackError: "Falha ao ensinar o agente",
+      });
+      setNote(atualizada);
+      setVersions(null);
+      setComentario("");
+      const mudou = Object.entries(atualizada.diff ?? {}).flatMap(([tipo, itens]) =>
+        (itens ?? []).map((item) => `${tipo}: ${item}`)
+      );
+      toast({
+        title: `Agente ajustado (v${atualizada.version})`,
+        description: mudou.length > 0 ? mudou.join(" · ") : "Nenhuma regra mudou — o feedback já estava coberto.",
+        variant: "success",
+      });
+    } catch (err) {
+      toast({ title: "Não deu para ensinar", description: errorMessage(err), variant: "error" });
     } finally {
       setSaving(false);
     }
@@ -199,6 +238,47 @@ export function FeedbackPanel({ agentType }: { agentType: string }) {
           ))}
         </Card>
       )}
+
+      <Card className="flex flex-col gap-3 p-4">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <GraduationCap className="size-4" /> Dar feedback sobre uma conversa
+        </div>
+        {conversas.length === 0 ? (
+          <p className="text-[13px] text-muted-foreground">
+            Converse com o agente no Playground primeiro: o feedback é sobre uma conversa, e a IA lê a transcrição
+            para transformar o comentário em regra. (No chat, o 👎 de uma resposta faz o mesmo.)
+          </p>
+        ) : (
+          <>
+            <Select
+              aria-label="Conversa"
+              value={sessao}
+              onChange={(e) => setSessaoEscolhida(e.target.value)}
+            >
+              {conversas.map((s) => (
+                <option key={s.session_id} value={s.session_id}>
+                  {sessionTitle(s)}
+                </option>
+              ))}
+            </Select>
+            <Textarea
+              value={comentario}
+              onChange={(e) => setComentario(e.target.value)}
+              rows={3}
+              placeholder="O que o agente deveria ter feito diferente nessa conversa? (ex.: confirmar o CPF antes de dar detalhes da fatura)"
+              className="text-[13px]"
+            />
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                A IA mescla o comentário nas regras atuais (edita, remove ou acrescenta) e mostra o que mudou.
+              </p>
+              <Button disabled={!comentario.trim() || !sessao || saving} onClick={() => void ensinar()}>
+                <GraduationCap /> Ensinar
+              </Button>
+            </div>
+          </>
+        )}
+      </Card>
 
       <Card className="flex items-start gap-2 p-4">
         <Input

@@ -93,12 +93,13 @@ export function MessageBubble({
         {showFooter && (
           <div className="mt-1.5 flex h-6 items-center gap-1.5">
             {message.usage && <UsageSummary usage={message.usage} />}
-            {/* Ações aparecem no hover — menos o voto já dado, que fica visível. */}
-            <div className="flex items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 has-[[data-voted]]:opacity-100 [@media(hover:none)]:opacity-100">
+            {/* O feedback fica sempre visível: é por ele que se ensina o agente, e
+                escondido no hover ninguém achava. Copiar aparece só no hover. */}
+            {message.runId && (
+              <MessageFeedback runId={message.runId} agentType={agentType} sessionId={sessionId ?? null} />
+            )}
+            <div className="flex items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
               {message.content && <CopyButton value={message.content} label="Copiar resposta" />}
-              {message.runId && (
-                <MessageFeedback runId={message.runId} agentType={agentType} sessionId={sessionId ?? null} />
-              )}
             </div>
           </div>
         )}

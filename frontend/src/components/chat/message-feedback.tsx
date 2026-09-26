@@ -99,7 +99,7 @@ export function MessageFeedback({
       <div className={cn("flex items-center", className)} data-voted={vote === null ? undefined : true}>
         {([1, 0] as const).map((value) => {
           const active = vote === value;
-          const label = value === 1 ? "Resposta útil" : "Resposta ruim — diga o que mudar";
+          const label = value === 1 ? "Resposta útil" : "Resposta ruim — ensinar o agente";
           return (
             <Button
               key={value}
