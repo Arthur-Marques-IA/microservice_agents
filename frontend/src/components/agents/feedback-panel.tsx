@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import { TeachAgent } from "@/components/agents/teach-agent";
 import { sessionTitle } from "@/lib/sessions";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
 import { EmptyState, RelativeTime, SectionHeading, Skeleton } from "@/components/ui/primitives";
@@ -38,7 +38,6 @@ export function FeedbackPanel({ agentType }: { agentType: string }) {
   const conversas = sessions.filter((s) => s.agent_id === agentType);
   const [sessaoEscolhida, setSessaoEscolhida] = useState("");
   const sessao = sessaoEscolhida || conversas[0]?.session_id || "";
-  const [comentario, setComentario] = useState("");
 
   const base = `/api/agents/${encodeURIComponent(agentType)}/feedback`;
 
@@ -68,34 +67,6 @@ export function FeedbackPanel({ agentType }: { agentType: string }) {
       toast({ title: mensagem, description: "Vale a partir da próxima mensagem.", variant: "success" });
     } catch (err) {
       toast({ title: "Não deu para salvar", description: errorMessage(err), variant: "error" });
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function ensinar() {
-    const feedback = comentario.trim();
-    if (!feedback || !sessao) return;
-    setSaving(true);
-    try {
-      const atualizada = await requestJson<FeedbackNote>(base, {
-        method: "POST",
-        json: { session_id: sessao, feedback },
-        fallbackError: "Falha ao ensinar o agente",
-      });
-      setNote(atualizada);
-      setVersions(null);
-      setComentario("");
-      const mudou = Object.entries(atualizada.diff ?? {}).flatMap(([tipo, itens]) =>
-        (itens ?? []).map((item) => `${tipo}: ${item}`)
-      );
-      toast({
-        title: `Agente ajustado (v${atualizada.version})`,
-        description: mudou.length > 0 ? mudou.join(" · ") : "Nenhuma regra mudou — o feedback já estava coberto.",
-        variant: "success",
-      });
-    } catch (err) {
-      toast({ title: "Não deu para ensinar", description: errorMessage(err), variant: "error" });
     } finally {
       setSaving(false);
     }
@@ -261,21 +232,14 @@ export function FeedbackPanel({ agentType }: { agentType: string }) {
                 </option>
               ))}
             </Select>
-            <Textarea
-              value={comentario}
-              onChange={(e) => setComentario(e.target.value)}
-              rows={3}
-              placeholder="O que o agente deveria ter feito diferente nessa conversa? (ex.: confirmar o CPF antes de dar detalhes da fatura)"
-              className="text-[13px]"
+            <TeachAgent
+              agentType={agentType}
+              sessionId={sessao}
+              onTaught={(atualizada) => {
+                setNote(atualizada);
+                setVersions(null);
+              }}
             />
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs text-muted-foreground">
-                A IA mescla o comentário nas regras atuais (edita, remove ou acrescenta) e mostra o que mudou.
-              </p>
-              <Button disabled={!comentario.trim() || !sessao || saving} onClick={() => void ensinar()}>
-                <GraduationCap /> Ensinar
-              </Button>
-            </div>
           </>
         )}
       </Card>

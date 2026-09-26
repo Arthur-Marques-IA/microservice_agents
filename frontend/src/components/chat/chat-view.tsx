@@ -126,7 +126,7 @@ function ExistingConversation({ sessionId }: { sessionId: string }) {
           title={notFound ? "Conversa não encontrada" : "Não foi possível abrir a conversa"}
           description={
             notFound
-              ? "Ela pode ter sido excluída ou pertencer a outro usuário."
+              ? "O Playground só abre conversas deste navegador. Ela pode pertencer a outro usuário (CLI, API, outro navegador), ser de um agente analista, que não guarda conversa, ou ter sido excluída — em Logs dá para ver qualquer sessão."
               : state.message
           }
           action={
@@ -141,6 +141,11 @@ function ExistingConversation({ sessionId }: { sessionId: string }) {
                 >
                   <RotateCcw /> Tentar de novo
                 </Button>
+              )}
+              {notFound && (
+                <Link href={`/logs/sessions/${encodeURIComponent(sessionId)}`} className={buttonVariants({ variant: "outline" })}>
+                  Ver em Logs
+                </Link>
               )}
               <Link href="/chat" className={buttonVariants({ variant: notFound ? "default" : "ghost" })}>
                 <SquarePen /> Nova conversa

@@ -29,6 +29,7 @@ import { EmptyState, RelativeTime, SectionHeading, Skeleton, Spinner } from "@/c
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { FeedbackCount, RunStatusBadge } from "@/components/observability/run-status";
 import { PageBody, PageHeader } from "@/components/workspace/page-header";
+import { useWorkspace } from "@/components/workspace/workspace-provider";
 
 /** A gravação é assíncrona: um run recém-terminado pode levar um instante para aparecer. */
 const INDEXING_RETRIES = 10;
@@ -121,6 +122,7 @@ export function RunTraceView({ runId }: { runId: string }) {
 }
 
 function TraceDetail({ trace, onReload }: { trace: RunTrace; onReload: () => void }) {
+  const { userId, getAgent } = useWorkspace();
   const { run, spans, scores } = trace;
   const rows = useMemo(() => flattenTree(spans), [spans]);
   const [selectedId, setSelectedId] = useState<string | null>(rows[0]?.span.id ?? null);
@@ -174,7 +176,7 @@ function TraceDetail({ trace, onReload }: { trace: RunTrace; onReload: () => voi
                 <span className="hidden sm:inline">Ver sessão</span>
               </Link>
             )}
-            {run.session_id && (
+            {run.session_id && run.user_id === userId && getAgent(run.agent_type)?.kind === "conversational" && (
               <Link
                 href={`/chat/${encodeURIComponent(run.session_id)}`}
                 className={buttonVariants({ variant: "ghost", size: "icon" })}
