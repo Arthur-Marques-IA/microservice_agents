@@ -672,3 +672,16 @@ def referenced_runs(query: RunQuery, *, limit: int = 5000) -> list[dict[str, Any
         )
     return items
 
+
+def session_turns(session_id: str, agent_type: str) -> list[dict[str, Any]]:
+    """As trocas de uma sessão com um agente, em ordem: `{run_id, message,
+    output, status, status_message}`. É a conversa como ela chegou ao agente,
+    de qualquer origem (console, CLI, API) — base da transcrição do feedback."""
+    with get_db().db_engine.connect() as conn:
+        rows = conn.execute(
+            select(runs.c.run_id, runs.c.message, runs.c.output, runs.c.status, runs.c.status_message)
+            .where(runs.c.session_id == session_id, runs.c.agent_type == agent_type)
+            .order_by(runs.c.started_at)
+        ).all()
+    return [dict(r._mapping) for r in rows]
+

@@ -215,6 +215,10 @@ class AgentDefinitionOut(BaseModel):
 class FeedbackIn(BaseModel):
     session_id: str
     feedback: str
+    run_id: str | None = None
+    """A resposta que motivou o feedback (o 👎 numa mensagem). Ela vai marcada na
+    transcrição, para o merge saber de qual trecho se trata; sem isto o feedback
+    vale para a conversa inteira."""
 
 
 class FeedbackRule(BaseModel):
@@ -581,9 +585,40 @@ def get_prompt_versions(agent_type: str) -> list[dict[str, Any]]:
     return list_prompt_versions(agent_type)
 
 
-def _transcript(agent_type: str, session_id: str) -> str:
-    """Últimas mensagens da sessão, direto do storage do próprio agente
-    (`Agent.get_chat_history` do Agno) — sem reimplementar leitura de sessão."""
+_TRANSCRIPT_TURNS = 20
+"""Quantas trocas da sessão vão para o merge — o bastante para o contexto, sem
+transformar uma conversa longa num prompt gigante."""
+
+
+def _transcript(agent_type: str, session_id: str, run_id: str | None = None) -> str:
+    """A conversa que o merge do feedback lê.
+
+    Vem das execuções registradas da sessão (`run_store.session_turns`): vale para
+    qualquer origem — console, CLI, sistema integrado —, e não depende do
+    histórico do Agno, que só guarda as últimas trocas. Com `run_id`, a janela
+    termina na resposta avaliada e ela vai marcada. Sessão anterior ao trace store
+    local (sem runs gravados) cai no histórico do Agno, como antes."""
+    from agent_service.observability.run_store import session_turns
+
+    turns = session_turns(session_id, agent_type)
+    if run_id is not None:
+        position = next((i for i, t in enumerate(turns) if t["run_id"] == run_id), None)
+        if position is None:
+            raise HTTPException(
+                status_code=422, detail=f"O run {run_id!r} não é desta sessão com {agent_type!r}."
+            )
+        turns = turns[: position + 1]
+    turns = turns[-_TRANSCRIPT_TURNS:]
+    if turns:
+        blocks = []
+        for index, turn in enumerate(turns, start=1):
+            reply = turn["output"] or f"(sem resposta: {turn['status_message'] or turn['status']})"
+            block = f"[{index}] Usuário: {turn['message'] or ''}\n    Agente: {reply}"
+            if run_id is not None and turn["run_id"] == run_id:
+                block += "\n    ↑ ESTA é a resposta sobre a qual o feedback foi dado."
+            blocks.append(block)
+        return "\n".join(blocks)
+
     try:
         agent, _ = get_agent_with_definition(agent_type)
     except (ToolBuildError, UnknownToolError) as exc:
@@ -610,7 +645,7 @@ def send_feedback(agent_type: str, body: FeedbackIn) -> dict[str, Any]:
     A resposta traz o `diff`: o merge mexe em regras que ninguém releu, então
     dizer o que mudou é parte do resultado, não enfeite."""
     definition = _feedback_target(agent_type)
-    transcript = _transcript(agent_type, body.session_id)
+    transcript = _transcript(agent_type, body.session_id, body.run_id)
     try:
         note, diff = merge_feedback(
             agent_type,

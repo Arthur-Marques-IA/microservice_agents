@@ -3,13 +3,14 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { GraduationCap, MessageSquare } from "lucide-react";
-import type { RunSummary } from "@/lib/types";
+import type { ChatMessage, RunSummary } from "@/lib/types";
 import { CopyButton } from "@/components/ui/copy-button";
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { EmptyState, RelativeTime, SectionHeading, Skeleton } from "@/components/ui/primitives";
+import { EmptyState, SectionHeading, Skeleton } from "@/components/ui/primitives";
 import { Select } from "@/components/ui/select";
 import { TeachAgent } from "@/components/agents/teach-agent";
+import { MessageBubble } from "@/components/chat/message-bubble";
 import { RunsTable, useRunsPager } from "@/components/observability/runs-table";
 import { StatsPanel } from "@/components/observability/stats-panel";
 import { PageBody, PageHeader } from "@/components/workspace/page-header";
@@ -65,9 +66,12 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
         }
       />
       <PageBody className="flex flex-col gap-6">
-        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-          <Transcript runs={runs} loading={runsPager.state === "loading"} />
-          {conversationalAgents.length > 0 && <TeachCard sessionId={sessionId} agentTypes={conversationalAgents} />}
+        <div className="flex flex-col gap-3">
+          <SectionHeading
+            title="Conversa"
+            description="As mensagens da sessão como no chat. Cada resposta leva ao trace dela; a tabela abaixo tem todas as execuções."
+          />
+          <Conversation runs={runs} loading={runsPager.state === "loading"} sessionId={sessionId} />
         </div>
         {observability.enabled && <StatsPanel params={params} showTrend={false} />}
         <RunsTable
@@ -86,23 +90,56 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
   );
 }
 
-/** Saída de analista é JSON: vira um bloco formatado em vez de uma linha só. */
-function formatOutput(output: string): { text: string; json: boolean } {
+/** Saída de analista é JSON: vai como bloco ```json para o markdown formatar. */
+function asMarkdown(output: string): string {
   const trimmed = output.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
-      return { text: JSON.stringify(JSON.parse(trimmed), null, 2), json: true };
+      return "```json\n" + JSON.stringify(JSON.parse(trimmed), null, 2) + "\n```";
     } catch {
       // não era JSON de verdade — mostra como veio
     }
   }
-  return { text: output, json: false };
+  return output;
 }
 
-function Transcript({ runs, loading }: { runs: RunSummary[]; loading: boolean }) {
-  const ordered = useMemo(() => [...runs].reverse(), [runs]);
+function toMessages(run: RunSummary): ChatMessage[] {
+  const messages: ChatMessage[] = [];
+  if (run.message) {
+    messages.push({ id: `${run.run_id}:u`, role: "user", content: run.message });
+  }
+  messages.push({
+    id: `${run.run_id}:a`,
+    role: "assistant",
+    content: run.output ? asMarkdown(run.output) : "",
+    error: run.status === "success" ? undefined : run.status_message || run.status,
+    runId: run.run_id,
+    usage: {
+      input_tokens: run.input_tokens,
+      output_tokens: run.output_tokens,
+      total_tokens: run.total_tokens,
+      duration: run.latency_ms != null ? run.latency_ms / 1000 : undefined,
+    },
+  });
+  return messages;
+}
 
-  if (loading) return <Skeleton className="h-48" />;
+/**
+ * A sessão como chat — as mesmas bolhas do Playground, só leitura. Cada resposta
+ * mantém o link para o trace dela (spans, tokens, custo) e, em agente
+ * conversacional, o 👎 abre "ensinar": o feedback vai com a conversa inteira
+ * como contexto e esta resposta marcada.
+ */
+function Conversation({ runs, loading, sessionId }: { runs: RunSummary[]; loading: boolean; sessionId: string }) {
+  const { getAgent } = useWorkspace();
+  const ordered = useMemo(() => [...runs].reverse(), [runs]);
+  const conversational = [...new Set(ordered.map((r) => r.agent_type))].filter(
+    (type) => getAgent(type)?.kind === "conversational"
+  );
+  const [teachTarget, setTeachTarget] = useState<string | null>(null);
+  const teachAgent = conversational.includes(teachTarget ?? "") ? teachTarget! : conversational[0];
+
+  if (loading) return <Skeleton className="h-64" />;
   if (ordered.length === 0) {
     return (
       <Card>
@@ -112,83 +149,54 @@ function Transcript({ runs, loading }: { runs: RunSummary[]; loading: boolean })
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <SectionHeading
-        title="Conversa"
-        description="Cada mensagem recebida e o que o agente respondeu, na ordem — das execuções registradas."
-      />
-      <Card className="flex flex-col gap-4 p-4">
-        {ordered.map((run) => {
-          const output = run.output ? formatOutput(run.output) : null;
-          return (
-            <div key={run.run_id} className="flex flex-col gap-2">
-              {run.message && (
-                <div className="self-end max-w-[85%] whitespace-pre-wrap rounded-xl bg-muted px-3 py-2 text-[13px]">
-                  {run.message}
-                </div>
-              )}
-              <div className="flex max-w-[92%] flex-col gap-1">
-                {output ? (
-                  output.json ? (
-                    <pre className="overflow-x-auto rounded-lg border border-border bg-surface p-3 font-mono text-[12px]">
-                      {output.text}
-                    </pre>
-                  ) : (
-                    <p className="whitespace-pre-wrap text-[13px]">{output.text}</p>
-                  )
-                ) : (
-                  <p className="text-[13px] text-muted-foreground">
-                    {run.status === "success" ? "(sem resposta registrada)" : run.status_message || run.status}
-                  </p>
-                )}
-                <Link
-                  href={`/runs/${encodeURIComponent(run.run_id)}`}
-                  className="text-[11px] text-muted-foreground hover:underline"
-                >
-                  {run.agent_name ?? run.agent_type} · <RelativeTime date={run.started_at} /> · ver trace
-                </Link>
-              </div>
-            </div>
-          );
-        })}
-      </Card>
-    </div>
-  );
-}
-
-function TeachCard({ sessionId, agentTypes }: { sessionId: string; agentTypes: string[] }) {
-  const { getAgent } = useWorkspace();
-  const [chosen, setChosen] = useState(agentTypes[0]);
-  const agentType = agentTypes.includes(chosen) ? chosen : agentTypes[0];
-
-  return (
-    <div className="flex flex-col gap-3">
-      <SectionHeading
-        title={
-          <span className="flex items-center gap-2">
-            <GraduationCap className="size-4" /> Ensinar o agente
-          </span>
-        }
-        description="Diga o que deveria ter sido diferente nesta conversa; vira uma regra do agente."
-      />
-      <Card className="flex flex-col gap-3 p-4">
-        {agentTypes.length > 1 && (
-          <Select aria-label="Agente" value={agentType} onChange={(e) => setChosen(e.target.value)}>
-            {agentTypes.map((type) => (
-              <option key={type} value={type}>
-                {getAgent(type)?.name ?? type}
-              </option>
-            ))}
-          </Select>
+    <Card className="flex flex-col">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6">
+        {ordered.flatMap((run) =>
+          toMessages(run).map((message) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              agentType={run.agent_type}
+              agentName={run.agent_name ?? getAgent(run.agent_type)?.name}
+              sessionId={sessionId}
+              canTeach={getAgent(run.agent_type)?.kind === "conversational"}
+            />
+          ))
         )}
-        <TeachAgent agentType={agentType} sessionId={sessionId} />
-        <Link
-          href={`/agents/${encodeURIComponent(agentType)}?tab=feedback`}
-          className="text-xs text-muted-foreground hover:underline"
-        >
-          Ver as regras de {getAgent(agentType)?.name ?? agentType}
-        </Link>
-      </Card>
-    </div>
+      </div>
+      {teachAgent && (
+        <div className="border-t border-border bg-surface/60 px-4 py-4">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="flex items-center gap-2 text-sm font-semibold">
+                <GraduationCap className="size-4" /> Feedback sobre a conversa inteira
+              </p>
+              {conversational.length > 1 && (
+                <Select
+                  aria-label="Agente"
+                  value={teachAgent}
+                  onChange={(e) => setTeachTarget(e.target.value)}
+                  wrapperClassName="w-52"
+                >
+                  {conversational.map((type) => (
+                    <option key={type} value={type}>
+                      {getAgent(type)?.name ?? type}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Para uma resposta específica, use o 👎 embaixo dela. Aqui o comentário vale para a conversa toda — a IA lê
+              as mensagens acima e transforma em regra do agente.{" "}
+              <Link href={`/agents/${encodeURIComponent(teachAgent)}?tab=feedback`} className="hover:underline">
+                Ver as regras
+              </Link>
+            </p>
+            <TeachAgent agentType={teachAgent} sessionId={sessionId} />
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }

@@ -90,7 +90,8 @@ def _prompt(rules: list[dict[str, Any]], transcript: str, feedback: str) -> str:
     atuais = "\n".join(f"[{r['id']}] {r['texto']}" for r in rules) or "(nenhuma regra ainda)"
     return (
         f"Regras atuais:\n{atuais}\n\n"
-        f"Trecho da conversa:\n{transcript}\n\n"
+        f"Conversa (a mais recente por último; se uma resposta estiver marcada, o feedback é sobre ela):\n"
+        f"{transcript}\n\n"
         f"Feedback do usuário sobre essa conversa:\n{feedback}"
     )
 

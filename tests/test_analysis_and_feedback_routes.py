@@ -339,3 +339,54 @@ def test_reenviar_os_defaults_nao_e_erro():
         assert criado["agent_type"] == "rt_default"
     finally:
         delete_agent("rt_default")
+
+
+def _grava_troca(agent_type: str, session_id: str, message: str, output: str | None, status: str = "success") -> str:
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from agent_service.observability import run_store
+
+    run_id = str(uuid4())
+    run_store._write_run(
+        run_store.RunRecord(
+            run_id=run_id,
+            trace_id=run_id.replace("-", ""),
+            agent_type=agent_type,
+            agent_name="Conv",
+            prompt_version=1,
+            endpoint="chat",
+            user_id="alguem-da-api",
+            session_id=session_id,
+            message=message,
+            output=output,
+            status=status,
+            status_message=None if status == "success" else "provedor fora",
+            started_at=datetime.now(timezone.utc),
+        )
+    )
+    return run_id
+
+
+def test_transcricao_do_feedback_vem_das_execucoes_e_marca_a_resposta(conversational_agent):
+    """A conversa chegou pela API (outro user_id, sem histórico no Agno): o
+    feedback continua tendo o contexto, e a resposta do 👎 vai marcada."""
+    from agent_service.api.agents_routes import _transcript
+
+    sessao = "sessao-da-api"
+    primeira = _grava_troca(conversational_agent, sessao, "oi", "Olá!")
+    avaliada = _grava_troca(conversational_agent, sessao, "qual o prazo de troca?", "Depende da loja.")
+    _grava_troca(conversational_agent, sessao, "e depois?", None, status="error")
+
+    inteira = _transcript(conversational_agent, sessao)
+    assert "[1] Usuário: oi\n    Agente: Olá!" in inteira
+    assert "(sem resposta: provedor fora)" in inteira
+    assert "ESTA é a resposta" not in inteira
+
+    marcada = _transcript(conversational_agent, sessao, avaliada)
+    assert marcada.endswith("↑ ESTA é a resposta sobre a qual o feedback foi dado.")
+    assert "e depois?" not in marcada  # a janela termina na resposta avaliada
+
+    with pytest.raises(HTTPException) as exc:
+        _transcript(conversational_agent, "outra-sessao", primeira)
+    assert exc.value.status_code == 422

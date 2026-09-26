@@ -29,11 +29,14 @@ export function MessageFeedback({
   runId,
   agentType,
   sessionId,
+  canTeach = true,
   className,
 }: {
   runId: string;
   agentType: string;
   sessionId: string | null;
+  /** `false` em agente analista: a nota de feedback não se aplica a ele. */
+  canTeach?: boolean;
   className?: string;
 }) {
   const { observability, userId } = useWorkspace();
@@ -44,7 +47,7 @@ export function MessageFeedback({
   const [texto, setTexto] = useState("");
 
   async function sendVote(value: Vote) {
-    if (value === 0 && sessionId) setEnsinando(true);
+    if (value === 0 && sessionId && canTeach) setEnsinando(true);
     const previous = vote;
     setVote(value);
     if (!observability.enabled) return; // sem Langfuse não há score para registrar
@@ -74,7 +77,9 @@ export function MessageFeedback({
     try {
       const note = await requestJson<FeedbackNote>(`/api/agents/${encodeURIComponent(agentType)}/feedback`, {
         method: "POST",
-        json: { session_id: sessionId, feedback },
+        // `run_id` marca esta resposta na transcrição que o merge lê: o feedback
+        // é sobre ela, com o resto da conversa como contexto.
+        json: { session_id: sessionId, feedback, run_id: runId },
         fallbackError: "Falha ao ensinar o agente",
       });
       const mudou = Object.entries(note.diff ?? {}).flatMap(([tipo, itens]) =>
@@ -95,7 +100,9 @@ export function MessageFeedback({
   }
 
   return (
-    <div className="flex flex-col gap-1.5">
+    // Ensinando, o bloco ocupa a linha inteira do rodapé: o campo de texto precisa
+    // de espaço, e na altura de uma linha de ícones ele ficava cortado.
+    <div className={cn("flex flex-col gap-1.5", ensinando && "basis-full")}>
       <div className={cn("flex items-center", className)} data-voted={vote === null ? undefined : true}>
         {([1, 0] as const).map((value) => {
           const active = vote === value;
@@ -138,7 +145,7 @@ export function MessageFeedback({
             value={texto}
             onChange={(e) => setTexto(e.target.value)}
             placeholder="O que deveria ter sido diferente?"
-            className="h-8 max-w-md text-[13px]"
+            className="h-8 max-w-xl flex-1 text-[13px]"
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();

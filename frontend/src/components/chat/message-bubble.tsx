@@ -40,6 +40,7 @@ export function MessageBubble({
   agentType,
   agentName,
   sessionId,
+  canTeach = true,
   onRetry,
 }: {
   message: ChatMessage;
@@ -47,6 +48,8 @@ export function MessageBubble({
   agentName?: string;
   /** Necessário para ensinar o agente a partir desta conversa. */
   sessionId?: string | null;
+  /** `false` em agente analista (a nota de feedback não se aplica). */
+  canTeach?: boolean;
   onRetry?: () => void;
 }) {
   if (message.role === "user") {
@@ -91,12 +94,17 @@ export function MessageBubble({
         )}
 
         {showFooter && (
-          <div className="mt-1.5 flex h-6 items-center gap-1.5">
+          <div className="mt-1.5 flex min-h-6 flex-wrap items-center gap-1.5">
             {message.usage && <UsageSummary usage={message.usage} />}
             {/* O feedback fica sempre visível: é por ele que se ensina o agente, e
                 escondido no hover ninguém achava. Copiar aparece só no hover. */}
             {message.runId && (
-              <MessageFeedback runId={message.runId} agentType={agentType} sessionId={sessionId ?? null} />
+              <MessageFeedback
+                runId={message.runId}
+                agentType={agentType}
+                sessionId={sessionId ?? null}
+                canTeach={canTeach}
+              />
             )}
             <div className="flex items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
               {message.content && <CopyButton value={message.content} label="Copiar resposta" />}
