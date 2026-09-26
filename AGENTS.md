@@ -164,6 +164,7 @@ kuro --json agents set suporte knowledge_collection=manuais
 
 # Modelos: provedores suportados e credenciais
 kuro --json providers list
+kuro --json providers models google          # modelos que o provedor oferece AGORA (lidos da API dele; cache 15 min, --refresh)
 kuro --json credentials list --provider google
 kuro --json credentials test <credential_id>    # valida a chave sem gastar tokens; sai com 1 se falhar
 KEY=... kuro --json credentials add -p google -l "Produção" --api-key-env KEY

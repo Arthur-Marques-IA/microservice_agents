@@ -29,6 +29,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Field, Spinner } from "@/components/ui/primitives";
 import { CopyButton } from "@/components/ui/copy-button";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
+import { useProviderModels } from "@/lib/use-provider-models";
 
 export type AgentFormPayload = Partial<AgentDefinitionInput>;
 
@@ -238,12 +239,13 @@ export function AgentForm({
     () => new Set(["google", ...modelCredentials.filter((c) => c.configured && c.enabled).map((c) => c.provider)]),
     [modelCredentials]
   );
+  const providerModels = useProviderModels([...availableProviders], MODEL_OPTIONS);
   const models = useMemo<ModelOption[]>(() => {
-    const base = MODEL_OPTIONS.filter((m) => availableProviders.has(m.provider));
+    const base = providerModels.models;
     return agent?.model_id && !base.some((m) => m.id === agent.model_id)
       ? [...base, { provider: agent.model_provider ?? "", id: agent.model_id, label: agent.model_id }]
       : base;
-  }, [agent, availableProviders]);
+  }, [agent, providerModels.models]);
 
   const currentProvider = models.find((m) => m.id === values.modelId)?.provider;
   const credentialsForProvider = useMemo(
@@ -493,11 +495,18 @@ export function AgentForm({
               label="Modelo"
               htmlFor={`${id}-model`}
               hint={
-                availableProviders.size <= 1 ? (
-                  <Link href="/models" className="hover:underline">
-                    Configure outros provedores em Chaves de API
-                  </Link>
-                ) : undefined
+                <>
+                  {providerModels.loading
+                    ? "Buscando os modelos disponíveis nos provedores…"
+                    : Object.keys(providerModels.errors).length > 0
+                      ? `Lista fixa para ${Object.keys(providerModels.errors).join(", ")} (o provedor não respondeu). `
+                      : "Lista lida agora dos provedores. "}
+                  {availableProviders.size <= 1 && (
+                    <Link href="/models" className="hover:underline">
+                      Configure outros provedores em Chaves de API
+                    </Link>
+                  )}
+                </>
               }
             >
               <Select id={`${id}-model`} value={values.modelId} onChange={(e) => handleModelChange(e.target.value)}>
@@ -582,7 +591,7 @@ export function AgentForm({
             error={fieldError("modelParams")}
             hint="Vazio = padrão do provedor. Mudar qualquer um gera uma nova versão da configuração."
           >
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-5">
               <ParamInput
                 id={`${id}-temperature`}
                 label="Temperatura"

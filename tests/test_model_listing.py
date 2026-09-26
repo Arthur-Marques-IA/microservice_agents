@@ -1,0 +1,88 @@
+"""Modelos disponíveis lidos do provedor (`models/listing.py`) e a rota que os expõe."""
+
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
+
+from agent_service.api.model_providers_routes import list_provider_models
+from agent_service.models import listing
+from agent_service.models.catalog import ProviderProbeError
+
+
+@pytest.fixture(autouse=True)
+def cache_limpo():
+    listing.clear_cache()
+    yield
+    listing.clear_cache()
+
+
+def test_openai_keeps_only_chat_models_newest_first(monkeypatch):
+    class Models:
+        def list(self):
+            return [
+                SimpleNamespace(id=i, created=c)
+                for i, c in [
+                    ("gpt-4.1-mini", 1), ("gpt-5", 3), ("text-embedding-3-small", 2),
+                    ("gpt-4o-realtime-preview", 4), ("o4-mini", 2), ("whisper-1", 5), ("gpt-image-1", 6),
+                ]
+            ]
+
+    import openai
+
+    monkeypatch.setattr(openai, "OpenAI", lambda **kw: SimpleNamespace(models=Models()))
+    models, _ = listing.list_models("openai", api_key="k", base_url=None, cache_key="c1")
+
+    assert [m.id for m in models] == ["gpt-5", "o4-mini", "gpt-4.1-mini"]
+
+
+def test_google_keeps_gemini_that_generate_content(monkeypatch):
+    class Models:
+        def list(self, config):
+            def m(name, actions=("generateContent",)):
+                return SimpleNamespace(name=f"models/{name}", display_name=name.title(), supported_actions=list(actions))
+
+            return [
+                m("gemini-3.5-flash"), m("gemini-2.5-flash"), m("gemini-embedding-001", ("embedContent",)),
+                m("gemini-3.5-transcribe"), m("gemini-2.5-flash-preview-tts"), m("imagen-4.0-generate"),
+            ]
+
+    import google.genai
+
+    monkeypatch.setattr(google.genai, "Client", lambda **kw: SimpleNamespace(models=Models()))
+    models, _ = listing.list_models("google", api_key="k", base_url=None, cache_key="g1")
+
+    assert [m.id for m in models] == ["gemini-3.5-flash", "gemini-2.5-flash"]
+
+
+def test_result_is_cached_until_refresh(monkeypatch):
+    calls = []
+
+    def fake(api_key, base_url):
+        calls.append(1)
+        return [listing.ModelInfo(id=f"m{len(calls)}", label="m")]
+
+    monkeypatch.setitem(listing._LISTERS, "ollama", fake)
+    first, _ = listing.list_models("ollama", api_key=None, base_url=None, cache_key=None)
+    again, _ = listing.list_models("ollama", api_key=None, base_url=None, cache_key=None)
+    fresh, _ = listing.list_models("ollama", api_key=None, base_url=None, cache_key=None, refresh=True)
+
+    assert [first[0].id, again[0].id, fresh[0].id] == ["m1", "m1", "m2"]
+
+
+def test_route_maps_provider_failure_and_missing_key(monkeypatch):
+    def broken(api_key, base_url):
+        raise ProviderProbeError("chave sem permissão")
+
+    monkeypatch.setitem(listing._LISTERS, "ollama", broken)
+    with pytest.raises(HTTPException) as exc:
+        list_provider_models("ollama")
+    assert exc.value.status_code == 502 and "chave sem permissão" in exc.value.detail
+
+    with pytest.raises(HTTPException) as exc:
+        list_provider_models("anthropic")  # nenhuma credencial cadastrada nos testes
+    assert exc.value.status_code == 422
+
+    with pytest.raises(HTTPException) as exc:
+        list_provider_models("inexistente")
+    assert exc.value.status_code == 404

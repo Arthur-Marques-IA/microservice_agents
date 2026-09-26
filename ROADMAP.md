@@ -95,6 +95,14 @@ entrega a infraestrutura, e o guia para o time de lá é o [docs/integracao.md](
 R8 em shadow → prod, depois R4, e por último R6 (shadow → assistido com
 `R6_AUTO_EFFECT_ENABLED=false` → autônomo), com a revalidação financeira 100% no Regente.
 
+**Depois do Sprint 3 (2026-09-26), pedidos do uso do console:** sessão dos Logs como chat (com o trace
+de cada mensagem mantido), feedback por resposta e da conversa inteira com a transcrição vinda das
+execuções, anexos visíveis na conversa (só nome/tipo/tamanho gravados, nunca o conteúdo) e **modelos
+lidos ao vivo do provedor** (`/model-providers/{p}/models`), em vez da lista fixa — o Gemini 2.5 está
+saindo, e a lista já traz os 3.x. Pendente: a tabela de preço (`models/pricing.py`) não conhece os
+modelos novos (custo `null` até entrarem lá ou em `MODEL_PRICES`), e o modelo padrão do serviço ainda é
+`gemini-2.5-flash` (`DEFAULT_MODEL_ID`).
+
 **Adiado de propósito** (há um consumidor só): tabela `api_keys` multi-chave, multi-tenancy
 estrutural/RLS, RBAC no console, snapshot com cache e `LISTEN/NOTIFY`, dependências `tool_only`,
 procedural (§4.2, que migra depois a ficha do R8 e o reset do R4), sandbox Python (manter

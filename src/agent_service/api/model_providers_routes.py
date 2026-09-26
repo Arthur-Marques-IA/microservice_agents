@@ -43,3 +43,54 @@ def list_model_providers() -> list[ModelProviderOut]:
             )
         )
     return result
+
+
+class ProviderModelOut(BaseModel):
+    id: str
+    label: str
+    created: int | None = None
+
+
+class ProviderModelsOut(BaseModel):
+    provider: str
+    models: list[ProviderModelOut]
+    default_model_id: str
+    fetched_at: float
+    """Quando a lista foi lida do provedor (epoch) — ela fica em cache por 15 min."""
+
+
+@router.get("/{provider}/models", response_model=ProviderModelsOut)
+def list_provider_models(provider: str, credential_id: str | None = None, refresh: bool = False) -> ProviderModelsOut:
+    """Modelos que o provedor oferece **agora**, lidos da API dele com a credencial
+    (a informada, ou a padrão do provedor). Não gasta tokens. `refresh=true`
+    ignora o cache. 502 com a mensagem do provedor se a chave não funcionar."""
+    from fastapi import HTTPException
+
+    from agent_service.config import get_settings
+    from agent_service.models.catalog import ProviderProbeError
+    from agent_service.models.listing import as_dict, list_models
+
+    spec = PROVIDERS.get(provider)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"Provedor desconhecido: {provider!r}")
+    credential = store.get_credential(credential_id) if credential_id else store.resolve_default_credential(provider)
+    if credential_id and credential is None:
+        raise HTTPException(status_code=404, detail=f"Credencial {credential_id!r} não encontrada")
+    api_key = store.get_decrypted_api_key(credential["id"]) if credential else None
+    base_url = credential["base_url"] if credential else None
+    if provider == "google" and not api_key:
+        api_key = get_settings().google_api_key  # o fallback antigo, como em `provider.get_model`
+    if spec.requires_api_key and not api_key:
+        raise HTTPException(status_code=422, detail=f"{spec.label}: nenhuma chave cadastrada em /model-credentials")
+    try:
+        models, fetched_at = list_models(
+            provider, api_key=api_key, base_url=base_url, cache_key=credential["id"] if credential else None, refresh=refresh
+        )
+    except ProviderProbeError as exc:
+        raise HTTPException(status_code=502, detail=f"{spec.label} não listou os modelos: {exc}") from exc
+    return ProviderModelsOut(
+        provider=provider,
+        models=[ProviderModelOut(**as_dict(m)) for m in models],
+        default_model_id=spec.default_model_id,
+        fetched_at=fetched_at,
+    )

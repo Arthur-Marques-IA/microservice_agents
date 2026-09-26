@@ -173,6 +173,25 @@ def providers(ctx: typer.Context) -> None:
         list_providers(ctx)
 
 
+@providers_app.command("models")
+def provider_models(
+    ctx: typer.Context,
+    provider: str = typer.Argument(..., help="google | openai | anthropic | ollama"),
+    credential_id: str | None = typer.Option(None, "--credential", help="Credencial a usar; sem isto, a padrão do provedor."),
+    refresh: bool = typer.Option(False, "--refresh", help="Ignora o cache de 15 min e pergunta de novo ao provedor."),
+) -> None:
+    """Modelos que o provedor oferece agora, lidos da API dele — o que vale em `model_id`."""
+    st = state(ctx)
+    result = call(st, st.client.provider_models, provider, credential_id=credential_id, refresh="true" if refresh else None)
+
+    def render(r: dict[str, Any]) -> None:
+        for m in r["models"]:
+            default = " [dim](padrão do catálogo)[/]" if m["id"] == r["default_model_id"] else ""
+            console.print(f"[cyan]{m['id']}[/]  {m['label']}{default}", highlight=False)
+
+    emit(st, result, render)
+
+
 @providers_app.command("list")
 def list_providers(ctx: typer.Context) -> None:
     """Provedores suportados e quantas credenciais cada um tem."""

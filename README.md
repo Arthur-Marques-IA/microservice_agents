@@ -65,6 +65,7 @@ se configura pelo console dá para configurar pela CLI, e vice-versa:
 | Indexar texto e arquivo | `/collections/{n}/documents`, `/files` | `collections add`, `add -f` | abas Texto e Arquivo |
 | Listar e apagar documento indexado | `/collections/{n}/documents` | `collections docs\|rm-doc` | tabela da coleção |
 | Provedores e credenciais de modelo | `/model-providers`, `/model-credentials` | `providers`, `credentials` | Chaves de API |
+| Modelos disponíveis no provedor (ao vivo) | `/model-providers/{p}/models` | `providers models <p>` | seletor de modelo do agente |
 | Execuções, traces e scores | `/observability/*` | `runs ...` | Logs |
 | Shadow: referência e concordância | `/observability/references`, `/agreement` | `runs reference\|agreement` | aba Execuções (analistas) |
 | Dataset a partir do shadow | `/observability/export` | `runs export` | — |

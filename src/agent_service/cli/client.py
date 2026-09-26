@@ -208,6 +208,12 @@ class Client:
     def list_providers(self) -> list[dict[str, Any]]:
         return self._request("GET", "/model-providers")
 
+    def provider_models(self, provider: str, **params: Any) -> dict[str, Any]:
+        """Modelos que o provedor oferece agora (lidos da API dele)."""
+        return self._request(
+            "GET", f"/model-providers/{provider}/models", params={k: v for k, v in params.items() if v is not None}
+        )
+
     def list_credentials(self) -> list[dict[str, Any]]:
         return self._request("GET", "/model-credentials")
 
