@@ -400,7 +400,36 @@ def _feedback_votes(conn: Any, run_ids: list[str]) -> dict[str, list[int]]:
     return votes
 
 
-def _summary(row: Any, votes: list[int] | None = None, meta: dict[str, str] | None = None) -> RunSummary:
+def _attachments_of(conn: Any, run_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """Os anexos de cada run, lidos da entrada da span raiz. Runs antigos só têm a
+    contagem (`{"files": 1}`): viram itens sem nome, para a mensagem ao menos
+    mostrar que houve anexo."""
+    found: dict[str, list[dict[str, Any]]] = {run_id: [] for run_id in run_ids}
+    if not run_ids:
+        return found
+    rows = conn.execute(
+        select(run_spans.c.run_id, run_spans.c.input).where(run_spans.c.id.in_([f"{r}:root" for r in run_ids]))
+    )
+    for run_id, span_input in rows:
+        attachments = (span_input or {}).get("attachments") if isinstance(span_input, dict) else None
+        if isinstance(attachments, list):
+            found[run_id] = [a for a in attachments if isinstance(a, dict)]
+        elif isinstance(attachments, dict):
+            kinds = {"images": "image", "audio": "audio", "videos": "video", "files": "file"}
+            found[run_id] = [
+                {"filename": None, "mime_type": None, "kind": kinds.get(k, "file")}
+                for k, n in attachments.items()
+                for _ in range(int(n or 0))
+            ]
+    return found
+
+
+def _summary(
+    row: Any,
+    votes: list[int] | None = None,
+    meta: dict[str, str] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+) -> RunSummary:
     up, down = votes or (0, 0)
     return RunSummary(
         run_id=row.run_id,
@@ -428,6 +457,7 @@ def _summary(row: Any, votes: list[int] | None = None, meta: dict[str, str] | No
         feedback_up=up,
         feedback_down=down,
         metadata=meta or {},
+        attachments=attachments or [],
     )
 
 
@@ -447,7 +477,8 @@ class DbTraceStore:
             page, more = rows[: query.limit], len(rows) > query.limit
             votes = _feedback_votes(conn, [r.run_id for r in page])
             meta = _metadata_of(conn, [r.run_id for r in page])
-        items = [_summary(r, votes[r.run_id], meta[r.run_id]) for r in page]
+            files = _attachments_of(conn, [r.run_id for r in page])
+        items = [_summary(r, votes[r.run_id], meta[r.run_id], files[r.run_id]) for r in page]
         next_cursor = _encode_cursor(page[-1].started_at, page[-1].run_id) if more else None
         return RunPage(items=items, next_cursor=next_cursor)
 
@@ -466,6 +497,7 @@ class DbTraceStore:
                 conn.execute(select(run_scores).where(run_scores.c.run_id == run_id).order_by(run_scores.c.timestamp))
             )
             run_meta = _metadata_of(conn, [run_id])[run_id]
+            run_files = _attachments_of(conn, [run_id])[run_id]
             reference = conn.execute(select(run_references.c.reference).where(run_references.c.run_id == run_id)).scalar()
         scores = [
             ScoreOut(
@@ -509,7 +541,7 @@ class DbTraceStore:
             )
         # Root primeiro, mesmo empatando no horário com o primeiro filho.
         spans.sort(key=lambda s: (s.parent_id is not None, s.started_at))
-        return RunTrace(run=_summary(row, [up, len(feedback) - up], run_meta), spans=spans, scores=scores, reference=reference)
+        return RunTrace(run=_summary(row, [up, len(feedback) - up], run_meta, run_files), spans=spans, scores=scores, reference=reference)
 
     def list_sessions(self, query: RunQuery) -> SessionPage:
         conditions = _filters(query, with_session=True)

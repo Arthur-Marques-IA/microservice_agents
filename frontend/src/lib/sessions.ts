@@ -1,5 +1,5 @@
 import { toDate } from "@/lib/format";
-import type { ChatMessage, SessionRun, UsageMetrics } from "@/lib/types";
+import type { AttachmentInfo, ChatMessage, SessionRun, UsageMetrics } from "@/lib/types";
 
 function asText(value: unknown): string {
   if (value == null) return "";
@@ -17,6 +17,21 @@ function pickUsage(metrics?: UsageMetrics | null): UsageMetrics | undefined {
   return { input_tokens, output_tokens, total_tokens, reasoning_tokens, duration };
 }
 
+/** Nome e tipo dos anexos do run — o conteúdo (base64) fica de fora. */
+function mediaOf(run: SessionRun): AttachmentInfo[] {
+  const media = run.input_media;
+  if (!media) return [];
+  const groups: [keyof NonNullable<SessionRun["input_media"]>, string][] = [
+    ["images", "image"],
+    ["audios", "audio"],
+    ["videos", "video"],
+    ["files", "file"],
+  ];
+  return groups.flatMap(([key, kind]) =>
+    (media[key] ?? []).map((item) => ({ filename: item.filename ?? null, mime_type: item.mime_type ?? null, kind }))
+  );
+}
+
 /**
  * Reidrata o histórico de uma sessão a partir dos runs do AgentOS: cada run
  * vira um par pergunta (`run_input`) / resposta (`content`). O `messages[]`
@@ -32,7 +47,13 @@ export function runsToMessages(runs: SessionRun[]): ChatMessage[] {
       const content = asText(run.content);
       const failed = run.status?.toUpperCase() === "ERROR";
       const messages: ChatMessage[] = [
-        { id: `${run.run_id}:user`, role: "user", content: asText(run.run_input), createdAt: time || undefined },
+        {
+          id: `${run.run_id}:user`,
+          role: "user",
+          content: asText(run.run_input),
+          createdAt: time || undefined,
+          attachments: mediaOf(run),
+        },
         {
           id: `${run.run_id}:assistant`,
           role: "assistant",

@@ -24,7 +24,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from agno.run.agent import RunEvent
 
-from agent_service.agents.attachments import AttachmentError, AttachmentIn, build_media
+from agent_service.agents.attachments import AttachmentError, AttachmentIn, build_media, describe_attachments
 from agent_service.agents.dependency_fields import DependencyValidationError, validate_dependencies
 from agent_service.agents.registry import UnknownAgentTypeError, get_agent_with_definition, list_agent_types
 from agent_service.config import get_settings
@@ -158,6 +158,7 @@ def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
         session_id=request.session_id,
         message=request.message,
         dependencies=dependencies,
+        attachments=tuple(describe_attachments(request.attachments)),
         images=tuple(media["images"]),
         audio=tuple(media["audio"]),
         videos=tuple(media["videos"]),
@@ -325,6 +326,7 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         session_id=request.session_id or f"analyze-{uuid.uuid4().hex}",
         message=request.document,
         dependencies=dependencies,
+        attachments=tuple(describe_attachments(request.attachments)),
         images=tuple(media["images"]),
         audio=tuple(media["audio"]),
         videos=tuple(media["videos"]),

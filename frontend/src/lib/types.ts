@@ -105,6 +105,17 @@ export interface ChatMessage {
   error?: string;
   /** `run_id` da execução — chave do trace no Langfuse e do feedback. */
   runId?: string;
+  /** Anexos da mensagem do usuário — só nome e tipo, para mostrar o chip. */
+  attachments?: AttachmentInfo[];
+}
+
+/** O que se mostra de um anexo: nunca o conteúdo. */
+export interface AttachmentInfo {
+  filename?: string | null;
+  mime_type?: string | null;
+  kind?: "image" | "audio" | "video" | "file" | string | null;
+  size_bytes?: number | null;
+  url?: string | null;
 }
 
 export interface SearchResult {
@@ -171,6 +182,13 @@ export interface SessionRun {
   content?: unknown;
   metrics?: UsageMetrics | null;
   created_at?: number | string | null;
+  /** Mídia enviada com a mensagem (o Agno guarda com o conteúdo em base64). */
+  input_media?: {
+    images?: { filename?: string | null; mime_type?: string | null }[];
+    audios?: { filename?: string | null; mime_type?: string | null }[];
+    videos?: { filename?: string | null; mime_type?: string | null }[];
+    files?: { filename?: string | null; mime_type?: string | null }[];
+  } | null;
 }
 
 export type MemoryBackend = "common" | "mem0";
@@ -568,6 +586,7 @@ export interface RunSummary {
   feedback_down: number | null;
   /** Correlação mandada por quem chamou (ex.: `conversation_id`). */
   metadata?: Record<string, string>;
+  attachments?: AttachmentInfo[];
 }
 
 export interface RunPage {

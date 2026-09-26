@@ -332,3 +332,28 @@ def test_export_then_apply_directory_is_a_noop_and_dry_run_sends_the_flag(api, t
     assert report["items"][1]["action"] == "create"
     writes = [c for c in api if c.method in ("PUT", "POST")]
     assert writes and all(c.url.params.get("dry_run") == "true" for c in writes)
+
+
+def test_attachments_are_recorded_by_name_and_type_never_content(monkeypatch, r8):
+    import base64
+
+    from agent_service.agents.attachments import AttachmentIn
+
+    fake_agent(monkeypatch, lambda doc: {"acao": "responder"})
+    pdf = base64.b64encode(b"%PDF-1.4 conteudo secreto do aluno").decode()
+    response = asyncio.run(
+        analyze(
+            AnalyzeRequest(
+                agent_type=r8,
+                document="veja o anexo",
+                attachments=[AttachmentIn(content_base64=pdf, mime_type="application/pdf", filename="rg.pdf")],
+            )
+        )
+    )
+
+    trace = get_run_trace(response.run_id)
+    [attachment] = trace.run.attachments
+    assert attachment["filename"] == "rg.pdf" and attachment["kind"] == "file"
+    assert attachment["mime_type"] == "application/pdf" and attachment["size_bytes"] > 0
+    assert "conteudo secreto" not in json.dumps(trace.model_dump(mode="json"))
+    assert pdf not in json.dumps(trace.model_dump(mode="json"))

@@ -88,6 +88,9 @@ class RunContext:
     def trace_id(self) -> str:
         return trace_id_for_run(self.run_id)
 
+    attachments: tuple[dict[str, Any], ...] = ()
+    """Nome, tipo e tamanho de cada anexo (`describe_attachments`) — sem o conteúdo."""
+
     @property
     def attachment_counts(self) -> dict[str, int]:
         """Quantos anexos de cada tipo — vai pro Langfuse no lugar do conteúdo."""
@@ -280,7 +283,7 @@ async def _recorded_events(agent: Agent, run: RunContext) -> AsyncIterator[RunOu
         input={
             "message": run.message,
             "dependencies": run.dependencies,
-            **({"attachments": run.attachment_counts} if run.attachment_counts else {}),
+            **({"attachments": list(run.attachments) or run.attachment_counts} if run.attachment_counts else {}),
         },
     )
     chunks: list[str] = []
@@ -415,7 +418,7 @@ async def _produce(client: "Langfuse", agent: Agent, run: RunContext, queue: asy
                 input={
                     "message": run.message,
                     "dependencies": run.dependencies,
-                    **({"attachments": run.attachment_counts} if run.attachment_counts else {}),
+                    **({"attachments": list(run.attachments) or run.attachment_counts} if run.attachment_counts else {}),
                 },
             ) as root,
         ):

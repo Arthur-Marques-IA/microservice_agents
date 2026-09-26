@@ -62,6 +62,26 @@ def _media_kwargs(attachment: AttachmentIn) -> dict[str, Any]:
         raise AttachmentError(f"anexo {attachment.filename or ''!r}: content_base64 não é base64 válido") from exc
 
 
+def describe_attachments(attachments: list[AttachmentIn]) -> list[dict[str, Any]]:
+    """O que o registro da execução guarda de cada anexo: nome, tipo, tamanho e,
+    se veio por URL, a URL — **nunca o conteúdo**. É o que o console mostra como
+    "📎 contrato.pdf" na mensagem, no chat e nos Logs."""
+    described = []
+    for attachment in attachments:
+        mime = _guess_mime(attachment)
+        kind = next(
+            (k for prefix, k in (("image/", "image"), ("audio/", "audio"), ("video/", "video")) if (mime or "").startswith(prefix)),
+            "file",
+        )
+        item: dict[str, Any] = {"filename": attachment.filename, "mime_type": mime, "kind": kind}
+        if attachment.content_base64 is not None:
+            item["size_bytes"] = len(attachment.content_base64) * 3 // 4
+        if attachment.url:
+            item["url"] = attachment.url
+        described.append(item)
+    return described
+
+
 def build_media(attachments: list[AttachmentIn]) -> dict[str, list[Any]]:
     """Bucketiza os anexos em `{"images": [...], "audio": [...], "videos": [...],
     "files": [...]}`, pelo prefixo do mime type — o formato que `Agent.arun`

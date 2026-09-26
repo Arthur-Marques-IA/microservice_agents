@@ -105,8 +105,8 @@ function asMarkdown(output: string): string {
 
 function toMessages(run: RunSummary): ChatMessage[] {
   const messages: ChatMessage[] = [];
-  if (run.message) {
-    messages.push({ id: `${run.run_id}:u`, role: "user", content: run.message });
+  if (run.message || run.attachments?.length) {
+    messages.push({ id: `${run.run_id}:u`, role: "user", content: run.message ?? "", attachments: run.attachments });
   }
   messages.push({
     id: `${run.run_id}:a`,

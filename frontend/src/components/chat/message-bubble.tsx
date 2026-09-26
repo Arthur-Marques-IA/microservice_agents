@@ -1,6 +1,6 @@
-import { CircleAlert, RotateCcw } from "lucide-react";
+import { CircleAlert, FileText, Film, Image as ImageIcon, Music, RotateCcw } from "lucide-react";
 import { formatDuration, formatNumber } from "@/lib/format";
-import type { ChatMessage } from "@/lib/types";
+import type { AttachmentInfo, ChatMessage } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
@@ -35,6 +35,39 @@ function UsageSummary({ usage }: { usage: NonNullable<ChatMessage["usage"]> }) {
   );
 }
 
+const ATTACHMENT_ICONS = { image: ImageIcon, audio: Music, video: Film, file: FileText } as const;
+
+function formatBytes(bytes?: number | null): string | null {
+  if (!bytes) return null;
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1).replace(".", ",")} MB`;
+}
+
+/** Os anexos que foram junto com a mensagem — nome, tipo e tamanho. */
+export function AttachmentChips({ attachments }: { attachments: AttachmentInfo[] }) {
+  const labels: Record<string, string> = { image: "imagem", audio: "áudio", video: "vídeo", file: "arquivo" };
+  return (
+    <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
+      {attachments.map((attachment, index) => {
+        const kind = (attachment.kind ?? "file") as keyof typeof ATTACHMENT_ICONS;
+        const Icon = ATTACHMENT_ICONS[kind] ?? FileText;
+        const size = formatBytes(attachment.size_bytes);
+        return (
+          <span
+            key={`${attachment.filename ?? kind}-${index}`}
+            title={[attachment.filename, attachment.mime_type, size].filter(Boolean).join(" · ")}
+            className="inline-flex max-w-64 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs"
+          >
+            <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{attachment.filename || labels[kind] || "anexo"}</span>
+            {size && <span className="shrink-0 text-muted-foreground">{size}</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export function MessageBubble({
   message,
   agentType,
@@ -55,9 +88,12 @@ export function MessageBubble({
   if (message.role === "user") {
     return (
       <div className="group flex flex-col items-end gap-1">
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-sm leading-relaxed">
-          {message.content}
-        </div>
+        {message.attachments && message.attachments.length > 0 && <AttachmentChips attachments={message.attachments} />}
+        {message.content && (
+          <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-sm leading-relaxed">
+            {message.content}
+          </div>
+        )}
         <div className="flex h-6 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
           <CopyButton value={message.content} label="Copiar mensagem" />
         </div>

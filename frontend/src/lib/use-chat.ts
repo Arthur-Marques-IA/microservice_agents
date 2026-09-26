@@ -54,7 +54,17 @@ export function useChat({
       const now = Date.now();
       setMessages((prev) => [
         ...prev,
-        { id: createId(), role: "user", content: message, createdAt: now },
+        {
+          id: createId(),
+          role: "user",
+          content: message,
+          createdAt: now,
+          attachments: attachments?.map((a) => ({
+            filename: a.filename,
+            mime_type: a.mime_type,
+            kind: a.mime_type?.split("/")[0] === "application" ? "file" : a.mime_type?.split("/")[0] ?? "file",
+          })),
+        },
         { id: assistantId, role: "assistant", content: "", pending: true, createdAt: now },
       ]);
 

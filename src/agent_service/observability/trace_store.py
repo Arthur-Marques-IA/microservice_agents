@@ -80,6 +80,8 @@ class RunSummary(BaseModel):
     """`None` quando havia avaliações demais para contar com segurança na listagem — veja o trace."""
     metadata: dict[str, str] = {}
     """Correlação mandada por quem chamou (ex.: `conversation_id`)."""
+    attachments: list[dict[str, Any]] = []
+    """Anexos da mensagem: `{filename, mime_type, kind, size_bytes?, url?}` — sem o conteúdo."""
 
 
 class RunPage(BaseModel):
