@@ -13,8 +13,10 @@ export interface ModelOption {
  * salva, pelo fallback antigo via `GOOGLE_API_KEY` no ambiente.
  */
 export const MODEL_OPTIONS: ModelOption[] = [
-  { provider: "google", id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-  { provider: "google", id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+  // Apelidos `-latest`: acompanham a versão estável mais nova e não saem de linha.
+  { provider: "google", id: "gemini-flash-latest", label: "Gemini Flash (mais recente)" },
+  { provider: "google", id: "gemini-pro-latest", label: "Gemini Pro (mais recente)" },
+  { provider: "google", id: "gemini-flash-lite-latest", label: "Gemini Flash-Lite (mais recente)" },
   { provider: "openai", id: "gpt-4.1", label: "GPT-4.1" },
   { provider: "openai", id: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
   { provider: "openai", id: "gpt-4o-mini", label: "GPT-4o Mini" },
@@ -27,7 +29,7 @@ export const MODEL_OPTIONS: ModelOption[] = [
 export const DEFAULT_MODEL = MODEL_OPTIONS[0];
 
 export function modelLabel(modelId?: string | null): string {
-  if (!modelId) return `${DEFAULT_MODEL.label} (padrão)`;
+  if (!modelId) return "Modelo padrão do serviço";
   return MODEL_OPTIONS.find((m) => m.id === modelId)?.label ?? modelId;
 }
 

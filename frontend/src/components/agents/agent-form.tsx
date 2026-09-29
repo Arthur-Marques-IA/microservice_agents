@@ -530,6 +530,12 @@ export function AgentForm({
                 </>
               }
             >
+              {/* Enquanto a lista real não chega, nada de mostrar a fixa como se fosse ela. */}
+              {providerModels.loading ? (
+                <Select id={`${id}-model`} value="" disabled>
+                  <option value="">Carregando modelos…</option>
+                </Select>
+              ) : (
               <Select id={`${id}-model`} value={values.modelId} onChange={(e) => handleModelChange(e.target.value)}>
                 {Object.entries(groupByProvider(models, modelProviders)).map(([providerLabel, options]) => (
                   <optgroup key={providerLabel} label={providerLabel}>
@@ -541,6 +547,7 @@ export function AgentForm({
                   </optgroup>
                 ))}
               </Select>
+              )}
             </Field>
             {credentialsForProvider.length > 1 && (
               <Field

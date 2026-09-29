@@ -10,10 +10,15 @@ pergunta ao provedor, com a credencial cadastrada, quais modelos existem:
 - ollama: `GET /api/tags` do servidor configurado.
 
 O resultado fica em cache por credencial (`CACHE_SECONDS`): listar modelos não
-gasta token, mas é uma chamada externa a cada abertura do formulário.
+gasta token, mas é uma chamada externa — e lenta (a do Gemini leva ~10 s). Por
+isso, vencido o cache, a lista antiga é devolvida na hora e a nova é buscada em
+segundo plano; e o serviço já busca a do Google ao subir (`warm_up`). Só a
+primeira consulta de uma credencial espera o provedor.
 """
 
+import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -36,6 +41,9 @@ class ModelInfo:
 
 
 _cache: dict[tuple[str, str | None], tuple[float, list[ModelInfo]]] = {}
+_refreshing: set[tuple[str, str | None]] = set()
+_lock = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 def _google(api_key: str | None, base_url: str | None) -> list[ModelInfo]:
@@ -116,8 +124,14 @@ def list_models(
         raise ProviderProbeError(f"Provedor sem listagem de modelos: {provider!r}")
     key = (provider, cache_key)
     cached = _cache.get(key)
-    if cached and not refresh and time.time() - cached[0] < CACHE_SECONDS:
+    if cached and not refresh:
+        if time.time() - cached[0] >= CACHE_SECONDS:
+            _refresh_in_background(key, lister, api_key, base_url)
         return cached[1], cached[0]
+    return _fetch(key, lister, api_key, base_url)
+
+
+def _fetch(key: tuple[str, str | None], lister: Any, api_key: str | None, base_url: str | None) -> tuple[list[ModelInfo], float]:
     models = lister(api_key, base_url)
     # Mais novos primeiro quando há data; senão ordem alfabética decrescente, que
     # nos nomes versionados ("gemini-3...", "gemini-2.5...") dá o mesmo efeito.
@@ -125,6 +139,39 @@ def list_models(
     fetched_at = time.time()
     _cache[key] = (fetched_at, models)
     return models, fetched_at
+
+
+def _refresh_in_background(key: tuple[str, str | None], lister: Any, api_key: str | None, base_url: str | None) -> None:
+    with _lock:
+        if key in _refreshing:
+            return
+        _refreshing.add(key)
+
+    def run() -> None:
+        try:
+            _fetch(key, lister, api_key, base_url)
+        except Exception:  # a lista antiga continua valendo; tenta de novo na próxima consulta
+            logger.warning("Falha ao renovar a lista de modelos de %s", key[0], exc_info=True)
+        finally:
+            with _lock:
+                _refreshing.discard(key)
+
+    threading.Thread(target=run, name=f"models-{key[0]}", daemon=True).start()
+
+
+def warm_up() -> None:
+    """Busca a lista do Google em segundo plano ao subir o serviço, para o primeiro
+    formulário aberto não esperar o provedor. Falha aqui não impede nada."""
+
+    def run() -> None:
+        from agent_service.api.model_providers_routes import list_provider_models
+
+        try:
+            list_provider_models("google")
+        except Exception as exc:
+            logger.info("Lista de modelos do Google não pré-carregada: %s", getattr(exc, "detail", exc))
+
+    threading.Thread(target=run, name="models-warm-up", daemon=True).start()
 
 
 def clear_cache() -> None:
