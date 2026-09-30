@@ -549,16 +549,25 @@ export function AgentForm({
               </Select>
               )}
             </Field>
-            {credentialsForProvider.length > 1 && (
+            {!providerModels.loading && (
               <Field
                 label="Chave de API"
                 htmlFor={`${id}-credential`}
-                hint="Mesmo provedor, chaves diferentes — útil pra separar clientes/times."
+                hint={
+                  credentialsForProvider.length === 0 ? (
+                    <Link href="/models" className="hover:underline">
+                      Nenhuma chave cadastrada para este provedor — cadastre em Chaves de API
+                    </Link>
+                  ) : (
+                    "Mesmo provedor, chaves diferentes — útil pra separar clientes/times."
+                  )
+                }
               >
                 <Select
                   id={`${id}-credential`}
                   value={values.credentialId}
                   onChange={(e) => update("credentialId", e.target.value)}
+                  disabled={credentialsForProvider.length === 0}
                 >
                   <option value="">Padrão do provedor</option>
                   {credentialsForProvider.map((c) => (

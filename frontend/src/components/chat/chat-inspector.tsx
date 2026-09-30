@@ -24,7 +24,9 @@ export function ChatInspector({
   messageCount,
   totalTokens,
   dependenciesText,
+  presetText,
   onDependenciesChange,
+  onDependenciesReset,
   dependenciesError,
   dependenciesCount,
   onEditAgent,
@@ -38,7 +40,10 @@ export function ChatInspector({
   messageCount: number;
   totalTokens: number;
   dependenciesText: string;
+  /** Valores fictícios de teste gerados dos campos declarados; `""` se o agente não declara nenhum. */
+  presetText: string;
   onDependenciesChange: (value: string) => void;
+  onDependenciesReset: () => void;
   dependenciesError: string | null;
   dependenciesCount: number;
   onEditAgent: () => void;
@@ -132,6 +137,7 @@ export function ChatInspector({
             <>
               Objeto <code className="font-mono">dependencies</code> enviado com cada mensagem — o agente o recebe
               como contexto estruturado (ex.: dados do cliente).
+              {presetText && " Pré-preenchido com valores fictícios — não atingem clientes reais."}
             </>
           }
         >
@@ -172,8 +178,13 @@ export function ChatInspector({
                   ? `${dependenciesCount} ${dependenciesCount === 1 ? "campo será enviado" : "campos serão enviados"}`
                   : "Vazio — nada é enviado.")}
             </p>
-            <div className="flex shrink-0 gap-1">
-              {!dependenciesText && (
+            <div className="flex shrink-0 flex-wrap justify-end gap-1">
+              {presetText && dependenciesText !== presetText && (
+                <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={onDependenciesReset}>
+                  Valores de teste
+                </Button>
+              )}
+              {!presetText && !dependenciesText && (
                 <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => onDependenciesChange(DEPENDENCIES_EXAMPLE)}>
                   Exemplo
                 </Button>
