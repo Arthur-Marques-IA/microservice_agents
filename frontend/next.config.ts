@@ -11,6 +11,11 @@ const nextConfig: NextConfig = {
   // usado pelo Dockerfile pra não precisar copiar node_modules inteiro.
   output: "standalone",
   ...(basePath ? { basePath } : {}),
+  // <Link>/router.push já são basePath-aware sozinhos, mas fetch() de rota
+  // absoluta ("/api/...") no client não é — o Next não reescreve isso. Os
+  // client components que chamam a API do próprio BFF (sidebar, chat) usam
+  // esta env pra montar a URL certa (ver frontend/src/lib/http.ts).
+  env: { NEXT_PUBLIC_BASE_PATH: basePath },
   // Rotas antigas (abas separadas) → áreas equivalentes do console unificado.
   async redirects() {
     return [

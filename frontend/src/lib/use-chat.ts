@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { parseSseStream } from "@/lib/sse";
-import { readErrorMessage } from "@/lib/http";
+import { apiUrl, readErrorMessage } from "@/lib/http";
 import { createId } from "@/lib/id";
 import type { Attachment, ChatMessage, UsageMetrics } from "@/lib/types";
 
@@ -70,7 +70,7 @@ export function useChat({
 
       let receivedContent = false;
       try {
-        const response = await fetch("/api/chat/stream", {
+        const response = await fetch(apiUrl("/api/chat/stream"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
