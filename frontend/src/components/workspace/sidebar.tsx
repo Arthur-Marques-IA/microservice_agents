@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { formatDateTime, groupByRecency } from "@/lib/format";
-import { errorMessage } from "@/lib/http";
+import { apiUrl, errorMessage } from "@/lib/http";
 import { sessionTitle } from "@/lib/sessions";
 import { useTheme } from "@/lib/theme";
 import { useModifierKeyLabel } from "@/lib/use-platform";
@@ -357,7 +357,7 @@ function useBackendHealth(): HealthStatus {
     let cancelled = false;
     async function check() {
       try {
-        const res = await fetch("/api/health", { cache: "no-store" });
+        const res = await fetch(apiUrl("/api/health"), { cache: "no-store" });
         if (!cancelled) setStatus(res.ok ? "online" : "offline");
       } catch {
         if (!cancelled) setStatus("offline");

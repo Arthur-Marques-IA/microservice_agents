@@ -4,6 +4,20 @@
  * uma string ou a lista de erros de validação do Pydantic.
  */
 
+/**
+ * basePath configurado no build (NEXT_BASE_PATH/next.config.ts), exposto ao
+ * browser via NEXT_PUBLIC_BASE_PATH. <Link>/router.push já resolvem sozinhos
+ * — só fetch() de path absoluto ("/api/...") feito no client precisa disso:
+ * sem prefixo, a chamada sai pro domínio raiz (fora do reverse proxy deste
+ * console) em vez de cair aqui mesmo.
+ */
+export const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
+/** Prefixa um path absoluto ("/api/...") com o basePath, se houver um configurado. */
+export function apiUrl(path: string): string {
+  return `${BASE_PATH}${path}`;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -38,7 +52,7 @@ export async function requestJson<T>(
   url: string,
   { json, fallbackError = "Falha na requisição", ...init }: RequestInit & { json?: unknown; fallbackError?: string } = {}
 ): Promise<T> {
-  const response = await fetch(url, {
+  const response = await fetch(apiUrl(url), {
     cache: "no-store",
     ...init,
     ...(json !== undefined && {
