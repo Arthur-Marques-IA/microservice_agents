@@ -10,6 +10,11 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # AGENT_SERVICE_URL é lido em runtime (process.env), não precisa existir no build.
+# NEXT_BASE_PATH é diferente: vira basePath do Next (next.config.ts), que é
+# assado no bundle — por isso ARG de build, não ENV de runtime. Vazio por
+# padrão (dev local, serve na raiz "/").
+ARG NEXT_BASE_PATH=""
+ENV NEXT_BASE_PATH=$NEXT_BASE_PATH
 RUN npm run build
 
 # Runner: só o output "standalone" do Next.js, sem node_modules completo nem
