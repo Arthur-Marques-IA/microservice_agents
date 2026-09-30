@@ -25,7 +25,8 @@ import { createId } from "@/lib/id";
 import { MEMORY_BACKENDS, modelLabel, parseDependencies } from "@/lib/agent-meta";
 import { sessionTitle } from "@/lib/sessions";
 import { useChat } from "@/lib/use-chat";
-import { useLocalStorage } from "@/lib/use-local-storage";
+import { testDependenciesText } from "@/lib/test-context";
+import { useLocalStorage, writeLocalStorage } from "@/lib/use-local-storage";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -91,7 +92,14 @@ export function Conversation({
   const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false);
   const [codeOpen, setCodeOpen] = useState(false);
   const [editAgentOpen, setEditAgentOpen] = useState(false);
-  const [dependenciesText, setDependenciesText] = useLocalStorage<string>("agent-service:dependencies", "");
+  // Id da conversa antes do 1º envio: vira o session_id e semeia os ids fictícios do contexto de teste.
+  const [draftId] = useState(createId);
+  const seedId = sessionId ?? createdSessionId ?? draftId;
+  // Sem edição manual vale o preset de teste (todos os campos declarados, com valores fictícios).
+  // A edição é guardada por agente: o contexto de um não vaza para o outro.
+  const presetText = useMemo(() => testDependenciesText(agent?.dependency_fields, seedId), [agent?.dependency_fields, seedId]);
+  const dependenciesKey = `agent-service:dependencies:${agentType}`;
+  const [dependenciesText, setDependenciesText] = useLocalStorage<string>(dependenciesKey, presetText);
   const dependencies = useMemo(() => parseDependencies(dependenciesText), [dependenciesText]);
 
   // Conversa nova: depois que a primeira troca termina, sobe para a rota da sessão.
@@ -117,7 +125,7 @@ export function Conversation({
         : null;
 
   async function runSend(text: string, attachments: Attachment[]) {
-    const id = activeSessionId ?? createId();
+    const id = activeSessionId ?? draftId;
     if (!activeSessionId) onSessionCreated?.(id);
     const executed = await send({ text, sessionId: id, dependencies: dependencies.value, attachments });
     if (!executed) return;
@@ -169,7 +177,9 @@ export function Conversation({
     messageCount: messages.length,
     totalTokens,
     dependenciesText,
+    presetText,
     onDependenciesChange: setDependenciesText,
+    onDependenciesReset: () => writeLocalStorage(dependenciesKey, null),
     dependenciesError: dependencies.error,
     dependenciesCount: dependencies.count,
     onEditAgent: () => {

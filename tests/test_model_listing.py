@@ -70,6 +70,25 @@ def test_result_is_cached_until_refresh(monkeypatch):
     assert [first[0].id, again[0].id, fresh[0].id] == ["m1", "m1", "m2"]
 
 
+def test_expired_cache_answers_at_once_and_refreshes_in_background(monkeypatch):
+    calls = []
+
+    def fake(api_key, base_url):
+        calls.append(1)
+        return [listing.ModelInfo(id=f"m{len(calls)}", label="m")]
+
+    monkeypatch.setitem(listing._LISTERS, "ollama", fake)
+    started = []
+    monkeypatch.setattr(listing, "_refresh_in_background", lambda key, lister, api_key, base_url: started.append(key))
+    listing.list_models("ollama", api_key=None, base_url=None, cache_key="x")
+    fetched_at, models = listing._cache[("ollama", "x")]
+    listing._cache[("ollama", "x")] = (fetched_at - listing.CACHE_SECONDS - 1, models)
+
+    stale, _ = listing.list_models("ollama", api_key=None, base_url=None, cache_key="x")
+
+    assert stale[0].id == "m1" and len(calls) == 1 and started == [("ollama", "x")]
+
+
 def test_route_maps_provider_failure_and_missing_key(monkeypatch):
     def broken(api_key, base_url):
         raise ProviderProbeError("chave sem permissão")

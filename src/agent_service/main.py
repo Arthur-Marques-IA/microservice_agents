@@ -26,6 +26,7 @@ from agent_service.db import get_db
 from agent_service.documents.collections import all_collections
 from agent_service.documents.store import seed_default_collection
 from agent_service.migrations import upgrade_database
+from agent_service.models.listing import warm_up as warm_up_model_listing
 from agent_service.observability.tracing import configure_tracing
 from agent_service.tools.seed import seed_default_tools
 
@@ -37,6 +38,7 @@ upgrade_database()
 seed_default_collection()
 seed_default_tools()
 seed_default_agents()
+warm_up_model_listing()
 
 base_app = FastAPI(title=settings.app_name)
 base_app.include_router(router)
