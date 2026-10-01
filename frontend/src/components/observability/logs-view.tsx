@@ -15,6 +15,7 @@ import { RUN_STATUS_OPTIONS } from "@/components/observability/run-status";
 import { RunsTable, useRunsPager } from "@/components/observability/runs-table";
 import { SessionsTable } from "@/components/observability/sessions-table";
 import { OverviewPanel, useOverview } from "@/components/observability/overview-panel";
+import { EMPTY_REVIEW, ReviewFilters, reviewParams, type ReviewState } from "@/components/observability/review-filters";
 import { StatsPanel } from "@/components/observability/stats-panel";
 import { PageBody, PageHeader } from "@/components/workspace/page-header";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
@@ -57,7 +58,9 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
     return p;
   }, [filters.agentType, filters.status, userId, sessionId, since, search]);
 
-  const runsPager = useRunsPager(params);
+  const [review, setReview] = useState<ReviewState>(EMPTY_REVIEW);
+  const runsParams = useMemo(() => ({ ...params, ...reviewParams(review) }), [params, review]);
+  const runsPager = useRunsPager(runsParams);
 
   const overviewParams = useMemo(() => {
     const p: Record<string, string> = {};
@@ -220,7 +223,8 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
           <TabsContent value="sessions" className="mt-3">
             <SessionsTable params={params} />
           </TabsContent>
-          <TabsContent value="runs" className="mt-3">
+          <TabsContent value="runs" className="mt-3 flex flex-col gap-3">
+            <ReviewFilters review={review} onChange={setReview} />
             <RunsTable
               items={runsPager.items}
               state={runsPager.state}
@@ -229,7 +233,9 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
               loadingMore={runsPager.loadingMore}
               onLoadMore={() => void runsPager.loadMore()}
               onRetry={() => void runsPager.reload()}
-              emptyTitle={filtered || fixedFilter ? "Nenhuma execução com esses filtros" : "Nenhuma execução registrada"}
+              emptyTitle={
+                filtered || fixedFilter || review !== EMPTY_REVIEW ? "Nenhuma execução com esses filtros" : "Nenhuma execução registrada"
+              }
               showAgentColumn
             />
           </TabsContent>

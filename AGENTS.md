@@ -136,6 +136,14 @@ kuro --json runs tail --agent suporte           # acompanha ao vivo; um objeto J
 kuro --json runs sessions --agent suporte       # execuções agrupadas por sessão (tokens, custo, erros)
 kuro --json runs list --agent r8 --meta conversation_id=98231   # pela metadata que quem chamou mandou
 kuro --json runs list --agent r8 --version 7    # só runs de uma versão da configuração
+# Fila de revisão: o que vale um humano olhar (complexidade 1–3 pelas tools de negócio distintas)
+kuro --json runs list -a r8 -c 3 --no-tests      # complexidade 3, sem os testes do Playground
+kuro --json runs list -a r8 --tool-failed        # o agente respondeu, mas alguma tool falhou
+kuro --json runs list -a r8 --side-effect --min-chars 20   # chamou tool com efeito colateral; sem "ok"/"oi"
+kuro --json runs list -a r8 --feedback down      # com 👎
+kuro --json runs list -a r8 --sample 20 --no-tests   # amostra aleatória (pega o erro que nenhum filtro aponta)
+# Panorama do dashboard (totais vs período anterior, série, agentes e versões, tools falhando):
+# GET /observability/overview?since=...&agent_type=...&include_dry_run=false&tz=America/Sao_Paulo
 
 # Modo shadow (o legado responde; o Kuro decide em silêncio e é comparado)
 kuro --json runs reference <run_id> -f decisao_legado.json   # o sistema integrado usa POST /observability/references

@@ -204,7 +204,7 @@ function KpiRow({ totals, previous }: { totals: OverviewTotals; previous: Overvi
 type Metric = "runs" | "cost" | "latency";
 
 const METRICS: { value: Metric; label: string; title: string }[] = [
-  { value: "runs", label: "Execuções", title: "Execuções por resultado" },
+  { value: "runs", label: "Volume", title: "Execuções por resultado" },
   { value: "cost", label: "Custo", title: "Custo (US$)" },
   { value: "latency", label: "Latência p95", title: "Latência p95" },
 ];

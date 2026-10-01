@@ -197,6 +197,21 @@ class RunQuery:
     """Trecho do `session_id`, `user_id` ou de um valor de metadata (ex.: `conversation_id`) — só no trace store local."""
     metadata: tuple[tuple[str, str], ...] = ()
     """Pares chave/valor que o run precisa ter (todos) — só no trace store local."""
+    # Fila de revisão (só no trace store local): o que vale um humano olhar.
+    complexity: tuple[int, ...] = ()
+    """Só estes níveis (1–3, ver `tools/failures.py`)."""
+    tool_failed: bool | None = None
+    """`True`: só runs com alguma tool falhando; `False`: só sem."""
+    side_effect: bool | None = None
+    """`True`: só runs que chamaram uma tool com `side_effect=true`; `False`: só os que não."""
+    min_message_chars: int | None = None
+    """Esconde mensagens curtas ("ok", "oi"): só runs com a mensagem pelo menos deste tamanho."""
+    feedback: str | None = None
+    """`down`: com algum 👎; `up`: com algum 👍; `none`: sem voto."""
+    exclude_dry_run: bool = False
+    """Tira os testes do Playground (`metadata.dry_run = "true"`)."""
+    sample: int | None = None
+    """Amostra aleatória deste tamanho, em vez das mais recentes (sem paginação)."""
 
 
 class TraceStore(Protocol):

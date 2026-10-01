@@ -155,3 +155,69 @@ def test_rota_recusa_fuso_invalido_e_intervalo_invertido():
     with pytest.raises(HTTPException) as invertido:
         overview(since=BASE + timedelta(days=1), until=BASE)
     assert invertido.value.status_code == 422
+
+
+# -- fila de revisão (filtros de /observability/runs) ---------------------------------
+
+
+def listar(agente, **filtros):
+    from agent_service.api.observability_routes import list_runs
+
+    base = dict(agent_type=agente, prompt_version=None, status=None, user_id=None, session_id=None,
+                since=None, until=None, limit=50, cursor=None, agent_version=None, meta=None, search=None,
+                complexity=None, tool_failed=None, side_effect=None, min_message_chars=None, feedback=None,
+                include_dry_run=True, sample=None)
+    return {r.run_id for r in list_runs(**{**base, **filtros}).items}
+
+
+def test_fila_de_revisao(agente):
+    from agent_service.api.tools_routes import ToolIn, create_tool, delete_tool
+
+    t = BASE + timedelta(hours=12)
+    trivial = gravar(agente, t)  # mensagem "oi", sem tool
+    falhou = gravar(agente, t, tools=("grava_ficha",), tool_failures=1)
+    complexo = gravar(agente, t, tools=("grava_ficha", "consulta", "outra"))
+    teste = gravar(agente, t, metadata={"dry_run": "true"})
+    run_store._write_run(RunRecord(
+        run_id=(longo := str(uuid4())), trace_id="x", agent_type=agente, agent_name=None, prompt_version=1,
+        endpoint="chat", user_id="u", session_id="s", message="quero parcelar a mensalidade em 6 vezes",
+        started_at=t, status="success",
+    ))
+    save_score(run_id=longo, name="feedback", value=0, user_id="avaliador")
+
+    create_tool(ToolIn(tool_name="grava_ficha", kind="api", label="Grava", side_effect=True,
+                       config={"method": "POST", "url": "https://exemplo.test/ficha", "parameters": []}))
+    try:
+        assert listar(agente, complexity=[3]) == {complexo}
+        assert listar(agente, complexity=[2, 3]) == {falhou, complexo}
+        assert listar(agente, tool_failed=True) == {falhou}
+        assert listar(agente, side_effect=True) == {falhou, complexo}
+        assert listar(agente, min_message_chars=10) == {longo}
+        assert listar(agente, feedback="down") == {longo}
+        assert teste not in listar(agente, include_dry_run=False)
+        assert trivial in listar(agente, include_dry_run=False)
+        amostra = listar(agente, sample=2)
+        assert len(amostra) == 2 and amostra <= {trivial, falhou, complexo, teste, longo}
+    finally:
+        delete_tool("grava_ficha")
+
+
+def test_filtros_de_revisao_pela_http(agente):
+    """A validação de parâmetro repetido (`complexity=2&complexity=3`) só aparece pela HTTP."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from agent_service.api.observability_routes import router
+
+    t = BASE + timedelta(hours=12)
+    gravar(agente, t)
+    dois = gravar(agente, t, tools=("a",))
+    tres = gravar(agente, t, tools=("a", "b", "c"))
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    resposta = client.get("/observability/runs", params=[("agent_type", agente), ("complexity", 2), ("complexity", 3)])
+    assert resposta.status_code == 200
+    assert {r["run_id"] for r in resposta.json()["items"]} == {dois, tres}
+    assert client.get("/observability/runs", params={"complexity": 4}).status_code == 422

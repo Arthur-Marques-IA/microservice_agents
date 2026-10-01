@@ -52,6 +52,11 @@ Aqui não entram as mudanças internas; essas ficam no histórico do git.
   separadas de tool falhando, latência p95 em vez da média), gráfico por resultado, custo ou
   latência com visão em tabela, quadro de tools falhando e tabela por agente com a comparação
   entre versões. A busca e o filtro de status passaram para junto das listas.
+- **Fila de revisão** (`GET /observability/runs` e `kuro runs list`): filtros `complexity`
+  (repetível), `tool_failed`, `side_effect` (pela classificação atual das tools, então vale também
+  para runs antigos), `min_message_chars` (esconde "ok" e "oi"), `feedback` (`up`, `down`, `none`),
+  `include_dry_run=false` e `sample=N` (amostra aleatória, sem paginação). No console, ficam na aba
+  Execuções dos Logs e de cada agente, com a coluna de complexidade e falhas de tool.
 - A falha de rede de uma tool passou a dizer o tipo do erro ("Falha ao chamar a API:
   ReadTimeout"). Antes vinha vazia.
 

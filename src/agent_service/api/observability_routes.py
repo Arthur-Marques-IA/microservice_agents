@@ -7,7 +7,7 @@ de um `run_id` e registrar avaliações (feedback do usuário final, notas de ev
 """
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
@@ -105,8 +105,10 @@ def _list_runs(
     agent_version: int | None = None,
     meta: list[str] | None = None,
     search: str | None = None,
+    review: dict[str, Any] | None = None,
 ) -> RunPage:
     query = RunQuery(
+        **(review or {}),
         agent_type=agent_type,
         prompt_version=prompt_version,
         agent_version=agent_version,
@@ -140,11 +142,24 @@ def list_runs(
     agent_version: Annotated[int | None, Query(ge=1)] = None,
     meta: Annotated[list[str] | None, Query(description="Filtro por metadata, `chave=valor` (repetível).")] = None,
     search: Annotated[str | None, Query(max_length=200, description="Trecho do session_id, user_id ou de um valor de metadata.")] = None,
+    complexity: Annotated[
+        list[Annotated[int, Field(ge=1, le=3)]] | None, Query(description="Só estes níveis de complexidade (repetível).")
+    ] = None,
+    tool_failed: Annotated[bool | None, Query(description="true: só com tool falhando; false: só sem.")] = None,
+    side_effect: Annotated[bool | None, Query(description="true: só os que chamaram tool com efeito colateral.")] = None,
+    min_message_chars: Annotated[int | None, Query(ge=1, le=1000, description="Esconde mensagens mais curtas que isto.")] = None,
+    feedback: Annotated[Literal["up", "down", "none"] | None, Query()] = None,
+    include_dry_run: Annotated[bool, Query(description="false tira os testes do Playground.")] = True,
+    sample: Annotated[int | None, Query(ge=1, le=100, description="Amostra aleatória deste tamanho, sem paginação.")] = None,
 ) -> RunPage:
     """Execuções de todos os agentes (ou de um só, com `agent_type`), mais recentes
     primeiro, com tokens, custo e feedback — a página `/observability` do console usa isto.
 
     Um run aparece logo depois de terminar (a gravação sai do caminho da resposta).
+
+    Os filtros de revisão (`complexity`, `tool_failed`, `side_effect`,
+    `min_message_chars`, `feedback`, `include_dry_run`, `sample`) montam a fila do
+    que vale um humano olhar. Só no trace store local.
     """
     return _list_runs(
         agent_type=agent_type,
@@ -159,6 +174,15 @@ def list_runs(
         agent_version=agent_version,
         meta=meta,
         search=search,
+        review={
+            "complexity": tuple(complexity or ()),
+            "tool_failed": tool_failed,
+            "side_effect": side_effect,
+            "min_message_chars": min_message_chars,
+            "feedback": feedback,
+            "exclude_dry_run": not include_dry_run,
+            "sample": sample,
+        },
     )
 
 

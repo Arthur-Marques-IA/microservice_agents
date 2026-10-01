@@ -10,6 +10,7 @@ import { Select } from "@/components/ui/select";
 import { PERIODS, usePeriodSince, type Period } from "@/components/observability/period-filter";
 import { RUN_STATUS_OPTIONS } from "@/components/observability/run-status";
 import { RunsTable, useRunsPager } from "@/components/observability/runs-table";
+import { EMPTY_REVIEW, ReviewFilters, reviewParams, type ReviewState } from "@/components/observability/review-filters";
 import { StatsPanel } from "@/components/observability/stats-panel";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
 
@@ -37,7 +38,9 @@ export function AgentRuns({ agentType, versions }: { agentType: string; versions
     return p;
   }, [agentType, filters.version, filters.status, since]);
 
-  const pager = useRunsPager(params);
+  const [review, setReview] = useState<ReviewState>(EMPTY_REVIEW);
+  const runsParams = useMemo(() => ({ ...params, ...reviewParams(review) }), [params, review]);
+  const pager = useRunsPager(runsParams);
 
   if (!observability.enabled) {
     return (
@@ -114,6 +117,8 @@ export function AgentRuns({ agentType, versions }: { agentType: string; versions
 
       <StatsPanel params={params} />
 
+      <ReviewFilters review={review} onChange={setReview} />
+
       <RunsTable
         items={pager.items}
         state={pager.state}
@@ -122,7 +127,7 @@ export function AgentRuns({ agentType, versions }: { agentType: string; versions
         loadingMore={pager.loadingMore}
         onLoadMore={() => void pager.loadMore()}
         onRetry={() => void pager.reload()}
-        emptyTitle={filtered ? "Nenhuma execução com esses filtros" : "Nenhuma execução registrada"}
+        emptyTitle={filtered || review !== EMPTY_REVIEW ? "Nenhuma execução com esses filtros" : "Nenhuma execução registrada"}
       />
     </div>
   );
