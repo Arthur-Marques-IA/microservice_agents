@@ -43,6 +43,15 @@ Aqui não entram as mudanças internas; essas ficam no histórico do git.
 - **`side_effect` nas tools** (`true`, `false` ou vazio): diz se a tool grava, cobra, transfere ou
   envia algo. É opcional; o console avisa enquanto estiver vazio. Não entra na versão da
   configuração do agente, então classificar uma tool não gera versão nova.
+- **`GET /observability/overview`**: o panorama do dashboard dos Logs num pedido só. Traz totais
+  com o período anterior, a série no tempo sem buracos (por hora, dia ou semana, conforme o
+  intervalo, no fuso `tz`, padrão `America/Sao_Paulo`), uma linha por agente com as versões da
+  configuração que rodaram, e as tools que estão falhando. Os testes `dry_run` ficam de fora, a
+  menos que `include_dry_run=true`. Só no trace store local; com o Langfuse responde 501.
+- **Dashboard dos Logs refeito**: indicadores com variação contra o período anterior (falhas
+  separadas de tool falhando, latência p95 em vez da média), gráfico por resultado, custo ou
+  latência com visão em tabela, quadro de tools falhando e tabela por agente com a comparação
+  entre versões. A busca e o filtro de status passaram para junto das listas.
 - A falha de rede de uma tool passou a dizer o tipo do erro ("Falha ao chamar a API:
   ReadTimeout"). Antes vinha vazia.
 

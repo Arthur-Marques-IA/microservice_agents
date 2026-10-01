@@ -726,3 +726,83 @@ export interface RunStats {
   avg_latency_ms?: number | null;
   scanned: number;
 }
+
+// -- Panorama dos Logs (`GET /observability/overview`) -----------------------
+
+export interface OverviewTotals {
+  runs: number;
+  success: number;
+  errors: number;
+  interrupted: number;
+  /** Runs `success` com pelo menos uma tool falhando. */
+  tool_failure_runs: number;
+  tool_calls: number;
+  tool_failures: number;
+  sessions: number;
+  total_tokens: number;
+  cost_usd: number | null;
+  p50_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  feedback_up: number;
+  feedback_down: number;
+}
+
+export interface OverviewBucket {
+  /** Início do balde no fuso pedido (ISO com offset). */
+  start: string;
+  runs: number;
+  success: number;
+  tool_failure_runs: number;
+  /** `error` + `interrupted`. */
+  errors: number;
+  cost_usd: number;
+  total_tokens: number;
+  p95_latency_ms: number | null;
+}
+
+export interface OverviewVersion {
+  agent_version: number | null;
+  runs: number;
+  error_rate: number;
+  tool_failure_rate: number;
+  cost_per_run_usd: number | null;
+  p95_latency_ms: number | null;
+  feedback_up: number;
+  feedback_down: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface OverviewAgent {
+  agent_type: string;
+  agent_name: string | null;
+  totals: OverviewTotals;
+  cost_per_session_usd: number | null;
+  last_run_at: string;
+  /** Execuções por balde, alinhado com `Overview.buckets`. */
+  trend: number[];
+  /** Da versão mais nova para a mais antiga. */
+  versions: OverviewVersion[];
+}
+
+export interface OverviewToolFailure {
+  tool_name: string;
+  failure: ToolFailureKind;
+  count: number;
+  last_at: string;
+  agent_types: string[];
+  http_status: number[];
+}
+
+export interface Overview {
+  since: string;
+  until: string;
+  timezone: string;
+  granularity: "hour" | "day" | "week";
+  include_dry_run: boolean;
+  buckets: OverviewBucket[];
+  totals: OverviewTotals;
+  previous: OverviewTotals | null;
+  agents: OverviewAgent[];
+  tool_failures: OverviewToolFailure[];
+}

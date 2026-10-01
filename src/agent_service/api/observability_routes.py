@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
 from agent_service.observability import tracing
+from agent_service.observability.overview import DEFAULT_TIMEZONE, Granularity, Overview, build_overview
 from agent_service.observability.trace_store import (
     RunPage,
     RunQuery,
@@ -215,6 +216,42 @@ def list_sessions(
         return _store().list_sessions(query)
     except TraceStoreError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/overview", response_model=Overview)
+def overview(
+    since: datetime | None = None,
+    until: datetime | None = None,
+    agent_type: str | None = None,
+    include_dry_run: bool = False,
+    tz: Annotated[str, Query(max_length=64, description="Fuso dos baldes da série (IANA).")] = DEFAULT_TIMEZONE,
+    granularity: Granularity | None = None,
+) -> Overview:
+    """O panorama do dashboard dos Logs (`observability/overview.py`): totais com o
+    período anterior, série no tempo sem buracos, uma linha por agente com as versões
+    da configuração, e as tools que estão falhando. Sem `since`, desde o primeiro run.
+
+    Os testes do Playground (`dry_run`) ficam de fora, a menos que `include_dry_run`.
+    Só no trace store local: com `TRACE_STORE_BACKEND=langfuse` responde 501."""
+    from zoneinfo import ZoneInfoNotFoundError
+
+    from agent_service.observability.run_store import DbTraceStore
+
+    if not isinstance(_store(), DbTraceStore):
+        raise HTTPException(status_code=501, detail="O panorama só existe com o trace store local (TRACE_STORE_BACKEND=db).")
+    if since and until and since >= until:
+        raise HTTPException(status_code=422, detail="since precisa ser anterior a until")
+    try:
+        return build_overview(
+            since=since,
+            until=until,
+            agent_type=agent_type,
+            include_dry_run=include_dry_run,
+            timezone_name=tz,
+            granularity=granularity,
+        )
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Fuso desconhecido: {tz!r}") from exc
 
 
 @router.get("/stats", response_model=RunStats)

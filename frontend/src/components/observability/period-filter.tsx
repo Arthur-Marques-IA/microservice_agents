@@ -6,6 +6,7 @@ export const PERIODS = [
   { value: "1d", label: "Últimas 24h", days: 1 },
   { value: "7d", label: "Últimos 7 dias", days: 7 },
   { value: "30d", label: "Últimos 30 dias", days: 30 },
+  { value: "90d", label: "Últimos 90 dias", days: 90 },
   { value: "all", label: "Todo o período", days: null },
 ] as const;
 

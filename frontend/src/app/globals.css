@@ -26,6 +26,13 @@
   --success: #047857;
   --warning: #b45309;
   --ring: #0891b2;
+  /* Cores de status dos gráficos (Logs): as mesmas nos dois temas, validadas
+     como trio adjacente (verde · âmbar · vermelho) contra daltonismo. O âmbar
+     fica abaixo de 3:1 no fundo claro: por isso todo gráfico com elas tem
+     legenda com rótulo e visão em tabela — a cor nunca carrega o significado sozinha. */
+  --viz-good: #0ca30c;
+  --viz-warning: #fab219;
+  --viz-critical: #d03b3b;
 }
 
 .dark {
