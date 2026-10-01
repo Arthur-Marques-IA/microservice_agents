@@ -161,4 +161,6 @@ def test_run_records_the_agent_version_and_an_estimated_cost(monkeypatch, agente
 def test_cost_estimate_bills_gemini_thinking_and_knows_dated_models():
     assert estimate_cost(provider="Google", model_id="gemini-2.5-flash", input_tokens=0, output_tokens=0, reasoning_tokens=1_000_000) == 2.5
     assert estimate_cost(provider="OpenAI", model_id="gpt-4.1-mini-2025-04-14", input_tokens=1_000_000, output_tokens=0) == 0.4
+    assert estimate_cost(provider="Google", model_id="gemini-3.5-flash", input_tokens=1_000_000, output_tokens=1_000_000) == 10.5
+    assert estimate_cost(provider="Google", model_id="gemini-3.5-flash-lite", input_tokens=1_000_000, output_tokens=0) == 0.3
     assert estimate_cost(provider="OpenAI", model_id="modelo-sem-preco", input_tokens=10, output_tokens=10) is None

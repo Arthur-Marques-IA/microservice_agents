@@ -27,6 +27,18 @@ DEFAULT_PRICES: dict[str, tuple[float, float]] = {
     "gemini-2.5-flash": (0.30, 2.50),
     "gemini-2.5-flash-lite": (0.10, 0.40),
     "gemini-2.0-flash": (0.10, 0.40),
+    # Gemini 3.x (ai.google.dev/gemini-api/docs/pricing, conferido em 2026-10-01).
+    # 3.6/3.7/3.8 têm preço promocional até 2026-12-31 e dobram em 2027-01-01
+    # (1.50 / 7.50): atualize aqui ou use MODEL_PRICES na virada.
+    "gemini-3.8-flash": (0.75, 3.75),
+    "gemini-3.7-flash": (0.75, 3.75),
+    "gemini-3.6-flash": (0.75, 3.75),
+    "gemini-3.5-flash": (1.50, 9.00),
+    "gemini-3.5-flash-lite": (0.30, 2.50),
+    "gemini-3.1-flash-lite": (0.25, 1.50),
+    # Faixa de prompts até 200k tokens; acima disso é 4.00 / 18.00.
+    "gemini-3.1-pro-preview": (2.00, 12.00),
+    "gemini-omni-1.1-flash": (1.50, 9.00),  # saída de texto; vídeo é 17.50
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "gpt-4.1-nano": (0.10, 0.40),
