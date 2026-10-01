@@ -42,7 +42,7 @@ import httpx
 from agno.tools.function import Function
 
 from agent_service.field_schema import FieldSchemaError, object_schema, validate_composite
-from agent_service.tools.context import get_dependencies
+from agent_service.tools.context import DRY_RUN_DEPENDENCY, DRY_RUN_HEADER, get_dependencies, is_dry_run
 from agent_service.tools.egress import EgressBlockedError, acheck_url, check_url_template
 
 Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
@@ -220,7 +220,11 @@ def required_dependencies(config: dict[str, Any]) -> list[str]:
         {
             p["dependency"]
             for p in config.get("parameters") or []
-            if p.get("source") == "dependency" and p.get("required") and isinstance(p.get("dependency"), str)
+            if p.get("source") == "dependency"
+            and p.get("required")
+            and isinstance(p.get("dependency"), str)
+            # Preenchido pelo servidor em todo run — não é coisa de declarar.
+            and p["dependency"] != DRY_RUN_DEPENDENCY
         }
     )
 
@@ -274,7 +278,9 @@ def _apply_auth(headers: dict[str, str], auth: dict[str, Any]) -> None:
 
 
 async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any]) -> str:
-    arguments, error = _resolve_arguments(config["parameters"], model_arguments, get_dependencies())
+    # O flag do servidor vence um `dry_run` que viesse nas dependencies.
+    dependencies = {**get_dependencies(), DRY_RUN_DEPENDENCY: is_dry_run()}
+    arguments, error = _resolve_arguments(config["parameters"], model_arguments, dependencies)
     if error is not None:
         return error
 
@@ -310,6 +316,12 @@ async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any]) -> 
         await acheck_url(url)
     except EgressBlockedError as exc:
         return f"Chamada recusada: {exc}"
+
+    # Um header da config ou de parâmetro com outra caixa (`x-kuro-dry-run: false`)
+    # iria junto com o nosso; quem decide é o flag da requisição.
+    headers = {k: v for k, v in headers.items() if k.lower() != DRY_RUN_HEADER.lower()}
+    if is_dry_run():
+        headers[DRY_RUN_HEADER] = "true"
 
     auth = config.get("auth") or {"type": "none"}
     _apply_auth(headers, auth)

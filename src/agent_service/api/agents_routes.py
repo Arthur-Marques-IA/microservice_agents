@@ -149,7 +149,8 @@ class AgentDefinitionIn(BaseModel):
     )
     model_params: dict[str, Any] | None = Field(
         default=None,
-        description="temperature, top_p, max_tokens, thinking_budget (Gemini). Vazio = padrão do provedor.",
+        description="temperature, top_p, max_tokens, reasoning (off|low|medium|high), thinking_budget (Gemini), "
+        "prompt_cache (off|5m|1h, só anthropic). Vazio = padrão do provedor.",
     )
     timeout_seconds: int | None = Field(
         default=None, ge=1, le=600, description="Tempo limite de uma execução; vazio = RUN_TIMEOUT_SECONDS."

@@ -1,5 +1,6 @@
 "use client";
 
+import { useDryRun } from "@/components/tools/dry-run-toggle";
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -101,6 +102,7 @@ export function Conversation({
   const dependenciesKey = `agent-service:dependencies:${agentType}`;
   const [dependenciesText, setDependenciesText] = useLocalStorage<string>(dependenciesKey, presetText);
   const dependencies = useMemo(() => parseDependencies(dependenciesText), [dependenciesText]);
+  const [dryRun, setDryRun] = useDryRun();
 
   // Conversa nova: depois que a primeira troca termina, sobe para a rota da sessão.
   const [completedSessionId, setCompletedSessionId] = useState<string | null>(null);
@@ -127,7 +129,7 @@ export function Conversation({
   async function runSend(text: string, attachments: Attachment[]) {
     const id = activeSessionId ?? draftId;
     if (!activeSessionId) onSessionCreated?.(id);
-    const executed = await send({ text, sessionId: id, dependencies: dependencies.value, attachments });
+    const executed = await send({ text, sessionId: id, dependencies: dependencies.value, attachments, dryRun });
     if (!executed) return;
     if (sessionId) void refreshSessions();
     else setCompletedSessionId(id);
@@ -182,6 +184,8 @@ export function Conversation({
     onDependenciesReset: () => writeLocalStorage(dependenciesKey, null),
     dependenciesError: dependencies.error,
     dependenciesCount: dependencies.count,
+    dryRun,
+    onDryRunChange: setDryRun,
     onEditAgent: () => {
       setMobileInspectorOpen(false);
       setEditAgentOpen(true);

@@ -11,6 +11,7 @@ import { Dialog, DialogBody, DialogDescription, DialogFooter, DialogHeader, Dial
 import { Field, Spinner } from "@/components/ui/primitives";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { DryRunToggle, useDryRun } from "@/components/tools/dry-run-toggle";
 
 /** Roda uma tool uma vez, fora de qualquer agente — pra conferir se ela está configurada certo. */
 export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; onOpenChange: (open: boolean) => void }) {
@@ -21,6 +22,9 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
   const [dependenciesText, setDependenciesText] = useState("{}");
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<ToolInvokeResult | null>(null);
+  const [dryRun, setDryRun] = useDryRun();
+  // Builtin não faz chamada HTTP nossa: não há a quem avisar.
+  const avisaDryRun = tool.kind === "api" || tool.kind === "python";
 
   useEffect(() => {
     let cancelled = false;
@@ -56,6 +60,7 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
           arguments: argumentsCheck.value ?? {},
           function_name: tool.kind === "builtin" ? functionName || null : null,
           dependencies: dependenciesCheck.value ?? {},
+          dry_run: avisaDryRun && dryRun,
         },
         fallbackError: "Falha ao testar a tool",
       });
@@ -126,6 +131,8 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
             placeholder='{"a": 1, "b": 2}'
           />
         </Field>
+
+        {avisaDryRun && <DryRunToggle checked={dryRun} onChange={setDryRun} />}
 
         {result && (
           <div className="flex flex-col gap-2">

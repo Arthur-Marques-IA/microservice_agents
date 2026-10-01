@@ -6,7 +6,7 @@ import type { ModelOption } from "@/lib/agent-meta";
 
 interface ProviderModels {
   provider: string;
-  models: { id: string; label: string; created?: number | null }[];
+  models: { id: string; label: string; created?: number | null; channel?: ModelOption["channel"] }[];
 }
 
 /**
@@ -37,7 +37,7 @@ export function useProviderModels(providers: string[], fallback: ModelOption[]) 
       results.forEach((result, index) => {
         const provider = list[index];
         if (result.status === "fulfilled" && result.value.models.length > 0) {
-          ok[provider] = result.value.models.map((m) => ({ provider, id: m.id, label: m.label }));
+          ok[provider] = result.value.models.map((m) => ({ provider, id: m.id, label: m.label, channel: m.channel }));
         } else if (result.status === "rejected") {
           failed[provider] = result.reason instanceof Error ? result.reason.message : String(result.reason);
         }

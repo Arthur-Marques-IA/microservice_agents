@@ -1,0 +1,154 @@
+# Notas de versão
+
+O que muda para quem **integra** um sistema ao Kuro ou **opera** o serviço, versão a versão.
+Aqui não entram as mudanças internas; essas ficam no histórico do git.
+
+## Como ler
+
+- **Versão no ar:** `GET /health` devolve `version` (ex.: `"0.2.0"`), e `kuro health` mostra o mesmo.
+  Compare com as versões abaixo para saber o que você ainda não pegou.
+- **Numeração:** `MAIOR.MENOR.CORREÇÃO`. Enquanto a versão começar com `0.`, uma versão MENOR nova
+  (`0.1` → `0.2`) **pode** exigir ação de quem integra. Por isso cada versão traz primeiro a seção
+  **Ação necessária**. Uma versão de CORREÇÃO (`0.2.0` → `0.2.1`) nunca exige ação.
+- **Pulando versões:** leia a seção **Ação necessária** de cada versão entre a sua e a nova, da
+  mais antiga para a mais nova.
+- **Seções de cada versão:**
+  - **Ação necessária**: o que pode quebrar ou mudar de comportamento se você não fizer nada.
+  - **Novo**: o que passou a existir. É opcional usar.
+  - **Corrigido**: bugs que deixaram de acontecer.
+  - **Como atualizar**: os passos de quem opera o serviço.
+
+---
+
+## 0.2.0
+
+Primeira rodada de melhorias vinda da integração do R8 em produção: erros de configuração com
+motivo claro, modo teste para tools, upload de documentos no RAG e informações para escolher
+modelo e cache.
+
+### Ação necessária
+
+1. **Erro de configuração agora é 503 com `error`, e não 500.** Quando falta a chave do provedor
+   do modelo ou a `CREDENTIALS_ENCRYPTION_KEY`, a resposta é:
+
+   ```json
+   HTTP 503
+   {"detail": "google: nenhuma chave cadastrada em /model-credentials nem GOOGLE_API_KEY no ambiente",
+    "error": "model_provider_not_configured"}
+   ```
+
+   `error` é `model_provider_not_configured` ou `encryption_not_configured`. O 503 com header
+   `Retry-After` continua significando falta de vaga ou banco fora. **O que fazer:** se o seu
+   cliente repete todo 503, não repita quando o corpo tiver `error`. Nesse caso, caia no fallback e
+   alerte quem opera o Kuro, porque repetir não resolve
+   ([integração, seção 4](integracao.md#4-erros-e-fallback)).
+
+2. **Agente google sem chave falha na hora.** Antes, o run começava e podia terminar como
+   `interrupted` ("cliente desconectou"), o que parecia problema de rede. Agora a chamada responde 503 antes de
+   executar. Se o seu monitoramento contava `interrupted` como sinal de credencial, passe a olhar o
+   503 com `error`.
+
+3. **As chamadas de teste do console avisam as tools.** O Playground, a tela de Análise e o teste de
+   tool mandam `dry_run` **ligado por padrão**. Com isso, toda chamada HTTP de tool leva o header
+   `X-Kuro-Dry-Run: true`. **O que fazer:** nas APIs que suas tools chamam e que têm efeito
+   colateral (cobrança, acordo, mensagem), trate o header e, quando ele vier, só registre a
+   intenção. Uma API que ignora o header continua executando de verdade.
+
+4. **`dry_run` virou nome reservado em `dependencies`.** Um parâmetro de tool com
+   `"source": "dependency", "dependency": "dry_run"` recebe o flag da requisição (`true`/`false`),
+   e um valor `dry_run` enviado nas `dependencies` é ignorado. Pelo mesmo motivo, um header
+   `X-Kuro-Dry-Run` fixo na config da tool é descartado. **O que fazer:** se você já usava um campo
+   com esse nome para outra coisa, renomeie.
+
+5. **Texto da mensagem de run interrompido mudou.** Agora é "Execução interrompida antes de
+   terminar: quem chamou desconectou ou cancelou (ex.: timeout do cliente menor que o
+   timeout_seconds do agente)." Só afeta quem compara esse texto; o status continua
+   `interrupted`.
+
+### Novo
+
+- **`dry_run`** no `/chat`, `/analyze` e `/tools/{nome}/invoke`. O run fica com
+  `metadata.dry_run = "true"` (`kuro runs list --meta dry_run=true`). Na CLI, use `--dry-run` em
+  `chat`, `analyze`, `eval` e `tools invoke` ([integração, seção 6](integracao.md#modo-teste-dry_run)).
+- **`model_params.prompt_cache`** (`5m` ou `1h`, só anthropic) guarda as instructions e as tools no
+  cache do Claude. No google e no openai o campo é recusado com 422, porque os dois já fazem esse
+  cache sozinhos.
+- **Tokens de cache por execução:** a span do modelo traz `metadata.cache_read_tokens` e
+  `cache_write_tokens` (`kuro runs show <run_id>`), em qualquer provedor que informe.
+- **`channel` na lista de modelos** (`GET /model-providers/{p}/models`): `stable`, `preview` ou
+  `alias` (`-latest`). É deduzido do nome, porque nenhum provedor informa. O console avisa ao
+  escolher um modelo preview ou alias.
+- **`GET /health`** passou a devolver `version` e `model_credentials` (`enabled`, ou o motivo de o
+  cadastro de chaves estar desligado).
+- **`docker-compose.override.example.yml`**: exemplo de como ligar o Kuro à rede Docker de outro
+  sistema, com o `TOOL_EGRESS_ALLOWLIST` que as tools precisam
+  ([integração, seção 6](integracao.md#rede-docker)).
+
+### Corrigido
+
+- Upload de **DOCX, PDF, CSV, PPTX, XLSX e XLS** no RAG falhava com "package is not installed". As
+  bibliotecas de leitura agora fazem parte da imagem.
+- `POST /model-credentials` sem `CREDENTIALS_ENCRYPTION_KEY` devolvia 500 sem explicação. Agora
+  devolve 503 dizendo como gerar a chave.
+- Um agente cujo provedor estava sem chave impedia o serviço de subir. Agora o serviço sobe, e só
+  esse agente responde 503.
+
+### Como atualizar
+
+1. Reconstrua a imagem. É obrigatório, porque há dependências novas:
+
+   ```bash
+   docker compose up -d --build agent-service
+   ```
+
+   Nenhuma migração de banco nesta versão, e nenhuma variável de ambiente nova.
+2. Confira com `kuro --json health`: `service.version` deve ser `"0.2.0"` e
+   `service.model_credentials` deve ser `"enabled"`.
+3. Se as tools chamam outro container pela rede Docker, troque o `docker network connect` manual
+   pelo `docker-compose.override.yml` (copie do `.example`). A ligação manual some a cada
+   `docker compose up`.
+4. Reenvie os documentos que falharam no upload. Os que ficaram com erro aparecem em
+   `kuro --json collections docs <coleção>`; remova-os com `rm-doc` antes de reenviar.
+
+---
+
+## 0.1.0 — 2026-09-30
+
+Versão que entrou em produção, até o commit `5de73fe`. É a base das notas acima: o contrato de
+`/chat` e `/analyze`, os agentes como código (`kuro agents apply`), o fluxo draft → eval → promote,
+o modo shadow, o RAG por coleção, a autenticação por escopo e o console. Tudo isso está descrito em
+[integracao.md](integracao.md) e no [README](../README.md).
+
+---
+
+## Para quem mantém o Kuro: como registrar uma versão
+
+Toda mudança que **quem integra ou opera** perceberia ganha uma linha aqui no mesmo PR: campo novo
+ou removido, status HTTP diferente, texto de erro, default que mudou, variável de ambiente, passo de
+deploy. Refatoração interna, teste e ajuste visual do console não entram.
+
+1. Durante o desenvolvimento, as linhas vão para uma seção `## Não lançada` no topo, nas mesmas
+   subseções.
+2. No lançamento, troque `Não lançada` pelo número e pela data, suba a `version` do
+   `pyproject.toml` (é o que o `/health` mostra) e crie a tag: `git tag v0.3.0`.
+3. Regra para escolher o número: precisa de ação de quem integra → MENOR; só correção → CORREÇÃO.
+
+Modelo de entrada:
+
+```markdown
+## 0.3.0 — AAAA-MM-DD
+
+Uma frase sobre o tema da versão.
+
+### Ação necessária
+1. **O que mudou, em uma linha.** Por que mudou. **O que fazer:** o passo concreto.
+
+### Novo
+- **Nome da coisa**: o que faz e onde está documentada.
+
+### Corrigido
+- O sintoma que deixou de acontecer.
+
+### Como atualizar
+1. Rebuild? Migração? Variável nova? Como conferir que deu certo.
+```

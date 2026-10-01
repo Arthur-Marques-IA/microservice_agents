@@ -444,6 +444,9 @@ fica no histórico da sessão, então para arquivos grandes prefira `analyze`.
 erros e fallback, agentes como código, draft → eval → promote, modo shadow e um cliente PHP de
 exemplo.
 
+**Ao atualizar o Kuro, leia as [notas de versão](docs/notas-de-versao.md):** o que cada versão
+exige de quem integra e como atualizar. `GET /health` mostra a versão no ar.
+
 Cada agente publica o próprio contrato: endpoint, corpo, `dependencies`
 obrigatórias e exemplos. A documentação sai dos dados e não fica desatualizada.
 

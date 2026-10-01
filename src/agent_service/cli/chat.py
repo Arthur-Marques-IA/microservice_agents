@@ -193,6 +193,9 @@ def chat(
     attach: list[str] = typer.Option(
         [], "--attach", "-a", help="Anexa um arquivo (imagem, áudio, vídeo, PDF...) à mensagem (repetível)."
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Execução de teste: as tools recebem `X-Kuro-Dry-Run: true` e decidem o que simular."
+    ),
 ) -> None:
     """Conversa com um agente. Ex.: `kuro chat conversational -m "oi" --json`."""
     st = state(ctx)
@@ -205,6 +208,7 @@ def chat(
         new_session=new_session,
         user_id=user_id,
         attachments=read_attachments(st, attach),
+        dry_run=dry_run,
     )
 
 
@@ -223,6 +227,7 @@ def run_chat(
     new_session: bool = False,
     user_id: str = "cli",
     attachments: list[dict[str, Any]] | None = None,
+    dry_run: bool = False,
 ) -> None:
     definition = call(st, st.client.get_agent, agent_type)
     if message is None and not stdin_is_tty():
@@ -248,6 +253,8 @@ def run_chat(
         }
         if sent:
             payload["attachments"] = sent
+        if dry_run:
+            payload["dry_run"] = True
         return payload
 
     if message is not None:

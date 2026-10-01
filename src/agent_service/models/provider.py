@@ -13,12 +13,14 @@ Novo provedor: um branch aqui + uma entrada em `models/catalog.py` (pro
 console saber pedir a chave certa e validar).
 """
 
-from agno.models.base import Model
-
+import os
 from typing import Any
+
+from agno.models.base import Model
 
 from agent_service.config import get_settings
 from agent_service.models import store
+from agent_service.models.crypto import EncryptionNotConfiguredError
 from agent_service.models.params import provider_kwargs
 
 
@@ -27,7 +29,9 @@ class UnknownModelProviderError(ValueError):
 
 
 class ProviderNotConfiguredError(ValueError):
-    """Provedor reconhecido, mas sem credencial cadastrada em /model-credentials."""
+    """Provedor reconhecido, mas sem credencial utilizável: nenhuma cadastrada em
+    /model-credentials, ou uma cadastrada que não dá para decifrar. É configuração
+    do serviço, não da chamada — as rotas devolvem 503 com esta mensagem."""
 
 
 def _credentials(provider: str, credential_id: str | None) -> tuple[str | None, str | None]:
@@ -36,7 +40,11 @@ def _credentials(provider: str, credential_id: str | None) -> tuple[str | None, 
     credential = store.get_credential(credential_id) if credential_id else store.resolve_default_credential(provider)
     if credential is None:
         return None, None
-    api_key = store.get_decrypted_api_key(credential["id"])
+    try:
+        api_key = store.get_decrypted_api_key(credential["id"])
+    except EncryptionNotConfiguredError as exc:
+        # Sem isto, a falha de cifragem subia crua e virava um 500 sem explicação.
+        raise ProviderNotConfiguredError(f"{provider}: a credencial {credential['label']!r} não pôde ser lida — {exc}") from exc
     return api_key, credential["base_url"]
 
 
@@ -56,7 +64,15 @@ def get_model(
         from agno.models.google import Gemini
 
         api_key, _ = _credentials("google", credential_id)
-        return Gemini(id=model_id, api_key=api_key or settings.google_api_key, **extra)
+        api_key = api_key or settings.google_api_key
+        # Sem chave o Agno só loga um erro e monta o cliente mesmo assim: o run
+        # falhava lá adiante, e quem chamava via "interrompido (cliente
+        # desconectou)" em vez de "falta a chave". O Vertex autentica por ADC.
+        if not api_key and os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() != "true":
+            raise ProviderNotConfiguredError(
+                "google: nenhuma chave cadastrada em /model-credentials nem GOOGLE_API_KEY no ambiente"
+            )
+        return Gemini(id=model_id, api_key=api_key, **extra)
 
     if provider == "openai":
         from agno.models.openai import OpenAIChat

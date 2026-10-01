@@ -175,6 +175,11 @@ class ToolInvokeIn(BaseModel):
     function_name: str | None = Field(
         default=None, description="Obrigatório para kind='builtin' — qual função da toolkit chamar."
     )
+    dry_run: bool = Field(
+        default=False,
+        description="Como o `dry_run` do /chat: a chamada leva `X-Kuro-Dry-Run: true` e "
+        "`dependencies.dry_run` vale true — o destino decide o que simular.",
+    )
 
 
 class ToolInvokeOut(BaseModel):
@@ -345,7 +350,7 @@ async def invoke_tool(tool_name: str, body: ToolInvokeIn) -> dict[str, Any]:
         return ToolInvokeOut(ok=False, error=str(exc)).model_dump()
 
     try:
-        with dependencies_scope(body.dependencies):
+        with dependencies_scope(body.dependencies, dry_run=body.dry_run):
             if row["kind"] == "api":
                 result = await built.entrypoint(**body.arguments)
             elif row["kind"] == "python":

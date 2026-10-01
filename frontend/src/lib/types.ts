@@ -13,6 +13,8 @@ export interface ChatRequest {
   message: string;
   dependencies?: Record<string, unknown>;
   attachments?: Attachment[];
+  /** Execução de teste: as tools recebem `X-Kuro-Dry-Run: true`. */
+  dry_run?: boolean;
 }
 
 export interface AnalyzeRequest {
@@ -257,6 +259,8 @@ export interface ModelParams {
   thinking_budget?: number;
   /** Nível de raciocínio, traduzido para cada modelo; ausente = padrão do modelo. */
   reasoning?: "off" | "low" | "medium" | "high";
+  /** Cache do prefixo no Claude (só anthropic); ausente = desligado. */
+  prompt_cache?: "5m" | "1h";
 }
 
 export interface AgentDefinition {
@@ -478,6 +482,7 @@ export interface ToolInvokeInput {
   function_name?: string | null;
   /** Simula o `dependencies` do `/chat` para parâmetros `source: "dependency"`. */
   dependencies?: Record<string, unknown>;
+  dry_run?: boolean;
 }
 
 export interface ToolInvokeResult {

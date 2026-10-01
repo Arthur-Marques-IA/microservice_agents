@@ -17,3 +17,6 @@ wheels/
 # não versionadas.
 .claude/skills/
 
+
+# Override local de rede/ambiente (ver docker-compose.override.example.yml)
+docker-compose.override.yml

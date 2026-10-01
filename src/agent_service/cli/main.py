@@ -135,7 +135,8 @@ def health(ctx: typer.Context) -> None:
         ]
 
     def render(r: dict[str, Any]) -> None:
-        console.print(f"[green]●[/] agent-service em {r['url']}")
+        versao = r["service"].get("version")
+        console.print(f"[green]●[/] agent-service em {r['url']}" + (f" [dim](v{versao})[/]" if versao else ""))
         fechado = r["service"].get("auth") == "enabled"
         console.print(
             f"{'[green]●[/]' if fechado else '[red]●[/]'} autenticação "
@@ -146,6 +147,13 @@ def health(ctx: typer.Context) -> None:
                 "prompts[/] (defina ADMIN_API_KEY e RUNTIME_API_KEY)"
             )
         )
+        cifra = r["service"].get("model_credentials")
+        if cifra is not None:
+            ok = cifra == "enabled"
+            console.print(
+                f"{'[green]●[/]' if ok else '[yellow]●[/]'} cadastro de chaves de modelo "
+                + ("ligado" if ok else f"[yellow]{cifra}[/] (gere com `python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"`)")
+            )
         obs = r["observability"]
         recording = obs.get("enabled")
         on = obs.get("langfuse", recording)
@@ -187,7 +195,9 @@ def provider_models(
     def render(r: dict[str, Any]) -> None:
         for m in r["models"]:
             default = " [dim](padrão do catálogo)[/]" if m["id"] == r["default_model_id"] else ""
-            console.print(f"[cyan]{m['id']}[/]  {m['label']}{default}", highlight=False)
+            channel = m.get("channel")
+            tag = f" [yellow]{channel}[/]" if channel in ("preview", "alias") else ""
+            console.print(f"[cyan]{m['id']}[/]  {m['label']}{tag}{default}", highlight=False)
 
     emit(st, result, render)
 

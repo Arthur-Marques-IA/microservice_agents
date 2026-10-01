@@ -229,9 +229,18 @@ def _http_client() -> Any:
     if _guarded_httpx_client is None:
         # O hook roda a cada envio, inclusive em cada salto de redirect.
         _guarded_httpx_client = httpx.Client(
-            follow_redirects=False, event_hooks={"request": [guard_request]}, timeout=10.0
+            follow_redirects=False, event_hooks={"request": [guard_request, _mark_dry_run]}, timeout=10.0
         )
     return _guarded_httpx_client
+
+
+def _mark_dry_run(request: Any) -> None:
+    """Mesmo aviso das tools `api`: num run com `dry_run`, o destino recebe
+    `X-Kuro-Dry-Run: true` e decide o que simular."""
+    from agent_service.tools.context import DRY_RUN_HEADER, is_dry_run
+
+    if is_dry_run():
+        request.headers[DRY_RUN_HEADER] = "true"
 
 
 def _safe_import(name: str, *args: Any, **kwargs: Any) -> Any:

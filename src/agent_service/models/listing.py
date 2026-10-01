@@ -14,6 +14,12 @@ gasta token, mas é uma chamada externa — e lenta (a do Gemini leva ~10 s). Po
 isso, vencido o cache, a lista antiga é devolvida na hora e a nova é buscada em
 segundo plano; e o serviço já busca a do Google ao subir (`warm_up`). Só a
 primeira consulta de uma credencial espera o provedor.
+
+`channel` diz se o modelo serve para produção. Nenhum dos provedores devolve isso
+na listagem, então é **deduzido do id e do nome** (`model_channel`): `preview`
+(preview, exp, beta... — pode mudar ou sair do ar sem aviso), `alias` (`-latest`:
+aponta para um modelo diferente quando o provedor quiser) ou `stable`. No Ollama
+não se aplica (`None`): o modelo é o que está baixado no servidor.
 """
 
 import logging
@@ -29,6 +35,8 @@ CACHE_SECONDS = 15 * 60
 
 _OPENAI_CHAT = re.compile(r"^(gpt-|o\d|chatgpt-)")
 _OPENAI_NOT_CHAT = ("audio", "realtime", "transcribe", "tts", "image", "search", "instruct", "embedding", "moderation", "codex")
+_PREVIEW = re.compile(r"(^|[-_.\s])(preview|exp|experimental|beta|alpha)($|[-_.\s\d])", re.IGNORECASE)
+_ALIAS = re.compile(r"(^|[-_.])latest$", re.IGNORECASE)
 _GOOGLE_NOT_CHAT = ("transcribe", "embedding", "tts", "image", "live", "native-audio", "aqa", "imagen", "veo", "robotics", "computer-use")
 
 
@@ -178,5 +186,23 @@ def clear_cache() -> None:
     _cache.clear()
 
 
-def as_dict(model: ModelInfo) -> dict[str, Any]:
-    return {"id": model.id, "label": model.label, "created": model.created}
+def model_channel(provider: str, model_id: str, label: str = "") -> str | None:
+    """`stable`, `preview` ou `alias` — pelo nome, que é o que o provedor dá.
+    Uma estimativa: confira a página de modelos do provedor antes de fixar um
+    modelo em produção."""
+    if provider == "ollama":
+        return None
+    if _PREVIEW.search(model_id) or _PREVIEW.search(label):
+        return "preview"
+    if _ALIAS.search(model_id):
+        return "alias"
+    return "stable"
+
+
+def as_dict(model: ModelInfo, provider: str = "") -> dict[str, Any]:
+    return {
+        "id": model.id,
+        "label": model.label,
+        "created": model.created,
+        "channel": model_channel(provider, model.id, model.label),
+    }
