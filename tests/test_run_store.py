@@ -247,6 +247,19 @@ def test_sessions_and_stats_aggregate_the_whole_history(agent_type):
     assert [b.runs for b in stats.buckets] == [2]
 
 
+def test_search_finds_sessions_by_a_piece_of_the_id_and_ignores_wildcards(agent_type):
+    wanted = make_run(agent_type, session_id="busca-alvo-123")
+    other = make_run(agent_type, session_id="busca-outra-999")
+    drain(completed(wanted.run_id), wanted)
+    drain(completed(other.run_id), other)
+
+    [hit] = list_sessions(agent_type=agent_type, search="alvo").items
+    assert hit.session_id == "busca-alvo-123"
+    assert len(list_sessions(agent_type=agent_type, search="BUSCA").items) == 2  # sem diferenciar maiúsculas
+    assert list_sessions(agent_type=agent_type, search="%").items == []  # % não vira curinga
+    assert len(list_sessions(agent_type=agent_type, search="  ").items) == 2  # só espaços = sem filtro
+
+
 def test_a_failing_write_never_breaks_the_run(agent_type, monkeypatch, caplog):
     from agent_service.observability import run_store
 

@@ -103,6 +103,7 @@ def _list_runs(
     cursor: str | None,
     agent_version: int | None = None,
     meta: list[str] | None = None,
+    search: str | None = None,
 ) -> RunPage:
     query = RunQuery(
         agent_type=agent_type,
@@ -116,6 +117,7 @@ def _list_runs(
         limit=limit,
         cursor=cursor,
         metadata=_parse_meta(meta),
+        search=search,
     )
     try:
         return _store().list_runs(query)
@@ -136,6 +138,7 @@ def list_runs(
     cursor: str | None = None,
     agent_version: Annotated[int | None, Query(ge=1)] = None,
     meta: Annotated[list[str] | None, Query(description="Filtro por metadata, `chave=valor` (repetível).")] = None,
+    search: Annotated[str | None, Query(max_length=200, description="Trecho do session_id, user_id ou de um valor de metadata.")] = None,
 ) -> RunPage:
     """Execuções de todos os agentes (ou de um só, com `agent_type`), mais recentes
     primeiro, com tokens, custo e feedback — a página `/observability` do console usa isto.
@@ -154,6 +157,7 @@ def list_runs(
         cursor=cursor,
         agent_version=agent_version,
         meta=meta,
+        search=search,
     )
 
 
@@ -198,6 +202,7 @@ def list_sessions(
     since: datetime | None = None,
     until: datetime | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    search: Annotated[str | None, Query(max_length=200, description="Trecho do session_id, user_id ou de um valor de metadata.")] = None,
 ) -> SessionPage:
     """Sessões recentes (execuções agrupadas por `session_id`), com tokens, custo e feedback somados.
 
@@ -205,7 +210,7 @@ def list_sessions(
     quantas execuções entraram. Com `TRACE_STORE_BACKEND=langfuse` a API não agrupa
     por sessão, e isto varre só um lote das execuções mais recentes.
     """
-    query = RunQuery(agent_type=agent_type, status=status, user_id=user_id, since=since, until=until, limit=limit)
+    query = RunQuery(agent_type=agent_type, status=status, user_id=user_id, since=since, until=until, limit=limit, search=search)
     try:
         return _store().list_sessions(query)
     except TraceStoreError as exc:
@@ -221,6 +226,7 @@ def run_stats(
     session_id: str | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    search: Annotated[str | None, Query(max_length=200)] = None,
 ) -> RunStats:
     """Série diária (execuções, erros, tokens, custo) mais contagem por status — os gráficos do console.
 
@@ -235,6 +241,7 @@ def run_stats(
         session_id=session_id,
         since=since,
         until=until,
+        search=search,
     )
     try:
         return _store().get_stats(query)

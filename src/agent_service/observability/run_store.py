@@ -357,6 +357,16 @@ def _filters(query: RunQuery, *, with_session: bool = False) -> list[Any]:
         conditions.append(runs.c.started_at < query.until)
     if with_session:
         conditions.append(runs.c.session_id.is_not(None))
+    if query.search and (term := query.search.strip()):
+        escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
+        conditions.append(
+            or_(
+                runs.c.session_id.ilike(like, escape="\\"),
+                runs.c.user_id.ilike(like, escape="\\"),
+                exists().where(run_metadata.c.run_id == runs.c.run_id, run_metadata.c.value.ilike(like, escape="\\")),
+            )
+        )
     for key, value in query.metadata:
         conditions.append(
             exists().where(run_metadata.c.run_id == runs.c.run_id, run_metadata.c.key == key, run_metadata.c.value == value)

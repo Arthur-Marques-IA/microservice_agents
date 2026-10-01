@@ -186,6 +186,8 @@ class RunQuery:
     cursor: str | None = None
     tenant_id: str | None = None
     """Reservado para isolar clientes da API: filtra `metadata.tenant_id`."""
+    search: str | None = None
+    """Trecho do `session_id`, `user_id` ou de um valor de metadata (ex.: `conversation_id`) — só no trace store local."""
     metadata: tuple[tuple[str, str], ...] = ()
     """Pares chave/valor que o run precisa ter (todos) — só no trace store local."""
 

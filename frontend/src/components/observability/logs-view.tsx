@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Activity, RefreshCw, X } from "lucide-react";
+import { Activity, RefreshCw, Search, X } from "lucide-react";
 import type { RunStatus } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/primitives";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -34,6 +35,13 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
   const [filters, setFilters] = useState<Filters>({ agentType: "", status: "", period: "7d" });
   const [tab, setTab] = useState<"sessions" | "runs">(sessionId ? "runs" : "sessions");
   const since = usePeriodSince(filters.period);
+  // O texto digitado só vira filtro (e chamada à API) depois de uma pausa.
+  const [searchText, setSearchText] = useState("");
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearch(searchText.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchText]);
 
   const params = useMemo(() => {
     const p: Record<string, string> = {};
@@ -42,8 +50,9 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
     if (userId) p.user_id = userId;
     if (sessionId) p.session_id = sessionId;
     if (since) p.since = since;
+    if (search) p.search = search;
     return p;
-  }, [filters.agentType, filters.status, userId, sessionId, since]);
+  }, [filters.agentType, filters.status, userId, sessionId, since, search]);
 
   const runsPager = useRunsPager(params);
 
@@ -64,7 +73,7 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
     );
   }
 
-  const filtered = Boolean(filters.agentType || filters.status);
+  const filtered = Boolean(filters.agentType || filters.status || search);
   const fixedFilter = userId
     ? { label: "Usuário", value: userId }
     : sessionId
@@ -85,6 +94,17 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
       />
       <PageBody className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center gap-2">
+          <div className="relative w-full sm:w-72">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+            <Input
+              type="search"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              placeholder="Buscar sessão, usuário ou conversa…"
+              aria-label="Buscar por sessão, usuário ou conversation_id"
+              className="pl-9"
+            />
+          </div>
           {fixedFilter && (
             <span className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-sm">
               {fixedFilter.label}: <span className="max-w-40 truncate font-mono text-xs">{fixedFilter.value}</span>
@@ -137,7 +157,10 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
             ))}
           </Select>
           {filtered && (
-            <Button variant="ghost" size="sm" onClick={() => setFilters((f) => ({ ...f, agentType: "", status: "" }))}>
+            <Button variant="ghost" size="sm" onClick={() => {
+                setFilters((f) => ({ ...f, agentType: "", status: "" }));
+                setSearchText("");
+              }}>
               Limpar filtros
             </Button>
           )}
