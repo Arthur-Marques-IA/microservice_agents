@@ -148,3 +148,8 @@ def test_openapi_nao_fica_publico_com_auth_ligada(app_com_auth):
 def test_health_continua_aberta_por_necessidade(app_com_auth):
     assert auth.required_scope("/health") is None
     assert auth.required_scope("/health/") is None
+
+
+def test_panorama_dos_logs_exige_admin():
+    """Expõe custo e falhas de todos os agentes: nada de rota aberta por esquecimento."""
+    assert auth.required_scope("/observability/overview") == "admin"
