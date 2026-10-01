@@ -42,6 +42,7 @@ import httpx
 from agno.tools.function import Function
 
 from agent_service.field_schema import FieldSchemaError, object_schema, validate_composite
+from agent_service.tools import failures
 from agent_service.tools.context import DRY_RUN_DEPENDENCY, DRY_RUN_HEADER, get_dependencies, is_dry_run
 from agent_service.tools.egress import EgressBlockedError, acheck_url, check_url_template
 
@@ -277,12 +278,18 @@ def _apply_auth(headers: dict[str, str], auth: dict[str, Any]) -> None:
         pass  # aplicado via httpx.BasicAuth na chamada, não num header manual
 
 
-async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any]) -> str:
+async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any], tool_name: str = "") -> str:
+    def failed(output: str, kind: failures.FailureKind, http_status: int | None = None) -> str:
+        # O texto vai para o modelo como sempre; o registro é o que o trace lê
+        # para marcar a span como falha (ver `tools/failures.py`).
+        failures.record_failure(tool_name, output, kind, http_status)
+        return output
+
     # O flag do servidor vence um `dry_run` que viesse nas dependencies.
     dependencies = {**get_dependencies(), DRY_RUN_DEPENDENCY: is_dry_run()}
     arguments, error = _resolve_arguments(config["parameters"], model_arguments, dependencies)
     if error is not None:
-        return error
+        return failed(error, "config" if error.startswith("Erro de configuração") else "invalid_arguments")
 
     method = config["method"]
     url = config["url"]
@@ -309,13 +316,13 @@ async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any]) -> 
     try:
         url = url.format(**path_values)
     except KeyError as exc:
-        return f"Erro ao montar a URL: parâmetro de path ausente {exc}"
+        return failed(f"Erro ao montar a URL: parâmetro de path ausente {exc}", "invalid_arguments")
 
     # Com a URL já montada: um parâmetro de path pode ter composto o host.
     try:
         await acheck_url(url)
     except EgressBlockedError as exc:
-        return f"Chamada recusada: {exc}"
+        return failed(f"Chamada recusada: {exc}", "config")
 
     # Um header da config ou de parâmetro com outra caixa (`x-kuro-dry-run: false`)
     # iria junto com o nosso; quem decide é o flag da requisição.
@@ -338,7 +345,9 @@ async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any]) -> 
             timeout=config.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS),
         )
     except httpx.HTTPError as exc:
-        return f"Falha ao chamar a API: {exc}"
+        # Timeout e afins chegam com a mensagem vazia: sem o tipo, o log dizia
+        # só "Falha ao chamar a API: " e ninguém sabia o que tinha acontecido.
+        return failed(f"Falha ao chamar a API: {type(exc).__name__}: {exc}".rstrip(": "), "unavailable")
 
     text = response.text
     try:
@@ -349,14 +358,16 @@ async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any]) -> 
         pass
     if len(text) > _MAX_RESPONSE_CHARS:
         text = text[:_MAX_RESPONSE_CHARS] + f"... (truncado, {len(response.text)} chars no total)"
-    return f"HTTP {response.status_code}: {text}"
+    output = f"HTTP {response.status_code}: {text}"
+    kind = failures.classify_http(response.status_code)
+    return failed(output, kind, response.status_code) if kind else output
 
 
 def build_api_function(*, tool_name: str, description: str | None, config: dict[str, Any]) -> Function:
     validated = validate_api_config(config)
 
     async def entrypoint(**arguments: Any) -> str:
-        return await _call_api(validated, arguments)
+        return await _call_api(validated, arguments, tool_name)
 
     return Function(
         name=tool_name,

@@ -147,7 +147,7 @@ kuro --json runs export -a r8 -o casos.jsonl    # runs com referência viram dat
 kuro --json sessions list --agent suporte
 kuro --json sessions show <session_id>          # transcrição: cada mensagem, a resposta e os tokens
 kuro --json sessions rename <session_id> "Cliente X"
-kuro --json sessions delete <session_id> --yes  # apaga a conversa e as execuções dela (não tem volta)
+kuro --json sessions delete <session_id> --yes  # apaga a conversa (não tem volta); o registro em `kuro runs` continua
 
 # Integração: como outro módulo chama este agente (endpoint, cURL, dependências obrigatórias)
 kuro --json agents integrate suporte

@@ -26,16 +26,17 @@ from agent_service.cli.common import (
 app = typer.Typer(help="Tools: listar, ver, criar/editar (apply), invocar, remover.")
 
 # `kind` fica de fora: mudar o tipo de uma tool existente é criar outra tool.
-EDITABLE_FIELDS = ("label", "description", "config", "enabled")
+EDITABLE_FIELDS = ("label", "description", "config", "enabled", "side_effect")
 
 
 def _render_list(tools: list[dict[str, Any]]) -> None:
     table = Table(show_edge=False, header_style="bold")
-    for column in ("tool_name", "kind", "label", "ativa"):
+    for column in ("tool_name", "kind", "label", "ativa", "efeito colateral"):
         table.add_column(column)
     for t in tools:
         seed = " [dim](seed)[/]" if t["is_seed"] else ""
-        table.add_row(f"[cyan]{t['tool_name']}[/]{seed}", t["kind"], t["label"], "sim" if t["enabled"] else "[red]não[/]")
+        efeito = {True: "sim", False: "não"}.get(t.get("side_effect"), "[yellow]não classificada[/]")
+        table.add_row(f"[cyan]{t['tool_name']}[/]{seed}", t["kind"], t["label"], "sim" if t["enabled"] else "[red]não[/]", efeito)
     console.print(table)
 
 
@@ -218,7 +219,8 @@ def _invoke(
     if st.json_mode:
         print_json(result)
     if not result["ok"]:  # a API responde 200 com ok=false quando a tool em si falha
-        fail(st, result.get("error") or "a tool falhou", EXIT_FAILED)
+        tipo = f" [{result['failure']}]" if result.get("failure") else ""
+        fail(st, f"{result.get('error') or 'a tool falhou'}{tipo}", EXIT_FAILED)
     if not st.json_mode:
         _render_invoke(result)
 

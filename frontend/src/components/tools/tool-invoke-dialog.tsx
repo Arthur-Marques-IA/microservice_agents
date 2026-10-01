@@ -12,6 +12,7 @@ import { Field, Spinner } from "@/components/ui/primitives";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { DryRunToggle, useDryRun } from "@/components/tools/dry-run-toggle";
+import { TOOL_FAILURE_META } from "@/lib/tool-failures";
 
 /** Roda uma tool uma vez, fora de qualquer agente — pra conferir se ela está configurada certo. */
 export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; onOpenChange: (open: boolean) => void }) {
@@ -137,8 +138,13 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
         {result && (
           <div className="flex flex-col gap-2">
             <p className={`text-[13px] font-medium ${result.ok ? "text-success" : "text-destructive"}`}>
-              {result.ok ? "Sucesso" : "Erro"}
+              {result.ok
+                ? "Sucesso"
+                : result.failure
+                  ? `Falhou — ${TOOL_FAILURE_META[result.failure].label}${result.http_status ? ` (HTTP ${result.http_status})` : ""}`
+                  : "Erro"}
             </p>
+            {result.failure && <p className="text-xs text-muted-foreground">{TOOL_FAILURE_META[result.failure].action}</p>}
             <CodeBlock
               title={result.ok ? "result" : "error"}
               code={result.ok ? formatResult(result.result) : (result.error ?? "")}

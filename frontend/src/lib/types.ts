@@ -391,6 +391,8 @@ export interface ToolSummary {
   config: Record<string, unknown>;
   enabled: boolean;
   is_seed: boolean;
+  /** A tool muda algo no sistema chamado? `null` = ainda não classificada. */
+  side_effect?: boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -408,6 +410,7 @@ export interface ToolInput {
   description?: string | null;
   config: Record<string, unknown>;
   enabled?: boolean;
+  side_effect?: boolean | null;
 }
 
 export type ToolUpdateInput = Partial<Omit<ToolInput, "tool_name" | "kind">>;
@@ -485,10 +488,15 @@ export interface ToolInvokeInput {
   dry_run?: boolean;
 }
 
+/** Tipo de falha de tool (`tools/failures.py`). */
+export type ToolFailureKind = "invalid_arguments" | "not_found" | "auth" | "unavailable" | "config" | "exception";
+
 export interface ToolInvokeResult {
   ok: boolean;
   result?: unknown;
   error?: string | null;
+  failure?: ToolFailureKind | null;
+  http_status?: number | null;
 }
 
 // -- Provedores e credenciais de modelo ----------------------------------
@@ -598,6 +606,12 @@ export interface RunSummary {
   feedback_down: number | null;
   /** Correlação mandada por quem chamou (ex.: `conversation_id`). */
   metadata?: Record<string, string>;
+  /** Chamadas de tool no run; `null` = não informado. */
+  tool_calls?: number | null;
+  /** Chamadas que falharam (HTTP 4xx/5xx, rede, exceção). O `status` do run não muda por isso. */
+  tool_failures?: number | null;
+  /** 1 = nenhuma tool de negócio; 2 = uma ou duas distintas; 3 = três ou mais. */
+  complexity?: number | null;
   attachments?: AttachmentInfo[];
 }
 

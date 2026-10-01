@@ -156,7 +156,8 @@ def test_parametro_de_path_nao_consegue_escolher_um_host_interno(monkeypatch):
     try:
         resolve_para(monkeypatch, "169.254.169.254")
         result = asyncio.run(invoke_tool("host_variavel", ToolInvokeIn(arguments={"host": "metadata.google.internal"})))
-        assert result["ok"] is True  # a tool responde, mas com a recusa no texto
+        # O modelo lê a recusa no texto; o teste da tool marca como falha de configuração.
+        assert result["ok"] is False and result["failure"] == "config"
         assert "recusada" in result["result"] and "link-local" in result["result"]
     finally:
         delete_tool("host_variavel")

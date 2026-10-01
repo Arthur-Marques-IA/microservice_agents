@@ -30,6 +30,7 @@ from agent_service.config import get_settings
 from agent_service.tools import registry, store
 from agent_service.tools.api_tool import ApiToolConfigError, required_dependencies, validate_api_config
 from agent_service.tools.catalog import BuiltinConfigError, list_builtin_catalog, validate_builtin_config
+from agent_service.tools import failures
 from agent_service.tools.context import dependencies_scope
 from agent_service.tools.python_tool import PythonToolConfigError, validate_python_config
 from agent_service.tools.registry import ToolBuildError
@@ -113,6 +114,11 @@ class ToolIn(BaseModel):
     description: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+    side_effect: bool | None = Field(
+        default=None,
+        description="A tool muda algo no sistema chamado (grava, cobra, transfere, envia)? "
+        "Vazio = ainda não classificada. Serve para a fila de revisão dos Logs.",
+    )
 
     @model_validator(mode="after")
     def _validate_slug(self) -> "ToolIn":
@@ -126,6 +132,9 @@ class ToolUpdateIn(BaseModel):
     description: str | None = None
     config: dict[str, Any] | None = None
     enabled: bool | None = None
+    side_effect: bool | None = Field(
+        default=None, description="Mandar `null` explícito volta para 'não classificada'; omitir não mexe."
+    )
 
 
 class ToolOut(BaseModel):
@@ -136,6 +145,8 @@ class ToolOut(BaseModel):
     config: dict[str, Any]
     enabled: bool
     is_seed: bool
+    side_effect: bool | None = None
+    """`None` = ainda não classificada."""
     created_at: datetime
     updated_at: datetime
 
@@ -184,8 +195,13 @@ class ToolInvokeIn(BaseModel):
 
 class ToolInvokeOut(BaseModel):
     ok: bool
+    """`false` também quando a API da tool respondeu erro (HTTP 4xx/5xx, rede): o
+    texto que o modelo leria vem em `result`, e o tipo em `failure`."""
     result: Any = None
     error: str | None = None
+    failure: str | None = None
+    """invalid_arguments | not_found | auth | unavailable | config | exception (`tools/failures.py`)."""
+    http_status: int | None = None
 
 
 # -- config ---------------------------------------------------------------
@@ -249,6 +265,7 @@ def create_tool(body: ToolIn) -> dict[str, Any]:
         description=body.description,
         config=config,
         enabled=body.enabled,
+        side_effect=body.side_effect,
     )
     return _row_out(created)
 
@@ -287,6 +304,7 @@ def update_tool(tool_name: str, body: ToolUpdateIn) -> dict[str, Any]:
         description=body.description,
         config=config,
         enabled=body.enabled,
+        **({"side_effect": body.side_effect} if "side_effect" in body.model_fields_set else {}),
     )
     return _row_out(updated)
 
@@ -350,6 +368,7 @@ async def invoke_tool(tool_name: str, body: ToolInvokeIn) -> dict[str, Any]:
         return ToolInvokeOut(ok=False, error=str(exc)).model_dump()
 
     try:
+        failures.start_run()
         with dependencies_scope(body.dependencies, dry_run=body.dry_run):
             if row["kind"] == "api":
                 result = await built.entrypoint(**body.arguments)
@@ -373,6 +392,11 @@ async def invoke_tool(tool_name: str, body: ToolInvokeIn) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001 - erro de execução da tool, não do endpoint
-        return ToolInvokeOut(ok=False, error=f"{type(exc).__name__}: {exc}").model_dump()
+        return ToolInvokeOut(ok=False, error=f"{type(exc).__name__}: {exc}", failure="exception").model_dump()
 
+    # A tool de API devolve o erro como texto: sem isto, um HTTP 500 aparecia como "Sucesso".
+    failed = failures.lookup_failure(tool_name, result)
+    if failed is not None:
+        kind, http_status = failed
+        return ToolInvokeOut(ok=False, result=result, error=str(result), failure=kind, http_status=http_status).model_dump()
     return ToolInvokeOut(ok=True, result=result).model_dump()

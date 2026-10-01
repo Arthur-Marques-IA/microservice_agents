@@ -1,5 +1,7 @@
 "use client";
 
+import { TOOL_FAILURE_META, toolFailureLabel } from "@/lib/tool-failures";
+import type { ToolFailureKind } from "@/lib/types";
 import { type ReactNode, useCallback, useEffect, useMemo, useState, Fragment } from "react";
 import Link from "next/link";
 import {
@@ -147,6 +149,11 @@ function TraceDetail({ trace, onReload }: { trace: RunTrace; onReload: () => voi
         description={
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <RunStatusBadge status={run.status} title={run.status_message} />
+            {!!run.tool_failures && (
+              <Badge variant="warning" title="O agente seguiu, mas estas chamadas de tool falharam — veja as spans abaixo.">
+                {run.tool_failures} {run.tool_failures === 1 ? "tool falhou" : "tools falharam"}
+              </Badge>
+            )}
             {run.agent_version != null && (
               <Badge variant="outline" title={`config_hash ${run.config_hash ?? "—"}`}>
                 Config v{run.agent_version}
@@ -387,7 +394,13 @@ function SpanDetail({ span }: { span: TraceSpan }) {
           <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{span.name}</h2>
           <Badge variant="secondary">{label}</Badge>
-          {span.level === "ERROR" && <Badge variant="destructive">Erro</Badge>}
+          {span.level === "ERROR" && (
+            <Badge variant="destructive" title={typeof span.metadata?.failure === "string" ? TOOL_FAILURE_META[span.metadata.failure as ToolFailureKind]?.action : undefined}>
+              {typeof span.metadata?.failure === "string"
+                ? `${toolFailureLabel(span.metadata.failure)}${span.metadata.http_status ? ` · HTTP ${span.metadata.http_status}` : ""}`
+                : "Erro"}
+            </Badge>
+          )}
           {span.level === "WARNING" && <Badge variant="warning">Aviso</Badge>}
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">

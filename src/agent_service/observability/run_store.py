@@ -43,6 +43,7 @@ from sqlalchemy import (
 )
 
 from agent_service.db import get_db
+from agent_service.tools.failures import complexity
 from agent_service.observability.trace_store import (
     RunPage,
     RunQuery,
@@ -91,6 +92,12 @@ runs = Table(
     Column("latency_ms", Float, nullable=True),
     Column("started_at", DateTime(timezone=True), nullable=False, index=True),
     Column("ended_at", DateTime(timezone=True), nullable=True),
+    # Resumo das tools do run (ver `tools/failures.py`): quantas chamadas, quantas
+    # falharam (o run continua `success` se o agente respondeu) e a complexidade
+    # 1–3 pelas tools de negócio distintas. `None` em runs anteriores à 0006 sem tools.
+    Column("tool_calls", Integer, nullable=True),
+    Column("tool_failures", Integer, nullable=True),
+    Column("complexity", Integer, nullable=True),
 )
 
 run_spans = Table(
@@ -270,6 +277,7 @@ def _write_run(record: RunRecord) -> None:
                 latency_ms=latency,
                 started_at=record.started_at,
                 ended_at=ended_at,
+                **_tool_summary(record.spans),
             )
         )
         conn.execute(insert(run_spans), span_rows)
@@ -278,6 +286,15 @@ def _write_run(record: RunRecord) -> None:
                 insert(run_metadata),
                 [{"run_id": record.run_id, "key": k, "value": v} for k, v in record.metadata.items()],
             )
+
+
+def _tool_summary(spans: list[SpanRecord]) -> dict[str, int]:
+    tools = [span for span in spans if span.type == "TOOL"]
+    return {
+        "tool_calls": len(tools),
+        "tool_failures": sum(1 for span in tools if span.level == "ERROR"),
+        "complexity": complexity([span.name for span in tools]),
+    }
 
 
 def _submit(fn: Callable[[], None]) -> None:
@@ -468,6 +485,9 @@ def _summary(
         feedback_down=down,
         metadata=meta or {},
         attachments=attachments or [],
+        tool_calls=row.tool_calls,
+        tool_failures=row.tool_failures,
+        complexity=row.complexity,
     )
 
 

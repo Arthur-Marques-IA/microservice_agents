@@ -82,6 +82,13 @@ class RunSummary(BaseModel):
     """Correlação mandada por quem chamou (ex.: `conversation_id`)."""
     attachments: list[dict[str, Any]] = []
     """Anexos da mensagem: `{filename, mime_type, kind, size_bytes?, url?}` — sem o conteúdo."""
+    tool_calls: int | None = None
+    """Chamadas de tool no run. `None` = não informado (backend Langfuse)."""
+    tool_failures: int | None = None
+    """Chamadas que falharam (HTTP 4xx/5xx, rede, exceção) — o `status` do run não
+    muda por isso. `None` = não informado; 0 = nenhuma falha."""
+    complexity: int | None = None
+    """1 = nenhuma tool de negócio; 2 = uma ou duas distintas; 3 = três ou mais (`tools/failures.py`)."""
 
 
 class RunPage(BaseModel):

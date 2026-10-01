@@ -20,6 +20,41 @@ Aqui não entram as mudanças internas; essas ficam no histórico do git.
 
 ---
 
+## Não lançada
+
+### Ação necessária
+
+1. **`POST /tools/{nome}/invoke` responde `ok: false` quando a API da tool devolve erro.**
+   Antes, um HTTP 4xx/5xx ou uma falha de rede saíam como `ok: true`, com o erro só no texto de
+   `result`. Agora a resposta traz `failure` (o tipo) e `http_status`, e `kuro tools invoke` sai
+   com código 1. **O que fazer:** se um script seu tratava `ok: true` com "HTTP 500" no texto como
+   sucesso, ele passa a ver a falha. É o comportamento correto.
+
+### Novo
+
+- **Falha de tool aparece no trace.** Uma chamada de tool que falha (HTTP 4xx/5xx, rede, destino
+  bloqueado, exceção) vira uma span com `level: "ERROR"` e `metadata.failure`:
+  `invalid_arguments`, `not_found`, `auth`, `unavailable`, `config` ou `exception`. O **`status` do
+  run não muda**: se o agente respondeu, o run continua `success`. O texto que o modelo lê também é
+  o mesmo de antes.
+- **Resumo de tools no run** (`GET /observability/runs` e `kuro runs show`): `tool_calls`,
+  `tool_failures` e `complexity` (1 = nenhuma tool de negócio, 2 = uma ou duas distintas, 3 = três
+  ou mais; memória e busca na base não contam). `null` no backend Langfuse.
+- **`side_effect` nas tools** (`true`, `false` ou vazio): diz se a tool grava, cobra, transfere ou
+  envia algo. É opcional; o console avisa enquanto estiver vazio. Não entra na versão da
+  configuração do agente, então classificar uma tool não gera versão nova.
+- A falha de rede de uma tool passou a dizer o tipo do erro ("Falha ao chamar a API:
+  ReadTimeout"). Antes vinha vazia.
+
+### Como atualizar
+
+1. Rebuild da imagem. A migração `0006` roda sozinha no boot: cria as colunas e **reclassifica os
+   runs já gravados** a partir dos textos de erro que as tools `kind="api"` devolviam.
+2. Classifique as tools com efeito colateral: `kuro --json tools set <tool> side_effect=true`, ou
+   pela tela de Tools.
+
+---
+
 ## 0.2.0
 
 Primeira rodada de melhorias vinda da integração do R8 em produção: erros de configuração com

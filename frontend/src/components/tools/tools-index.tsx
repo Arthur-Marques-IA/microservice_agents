@@ -130,6 +130,12 @@ export function ToolsIndex() {
                         <Badge variant="outline">{TOOL_KIND_META[tool.kind].label}</Badge>
                         {tool.is_seed && <Badge variant="secondary">sistema</Badge>}
                         {!tool.enabled && <Badge variant="warning">desativada</Badge>}
+                        {tool.side_effect === true && <Badge variant="outline">efeito colateral</Badge>}
+                        {(tool.side_effect === null || tool.side_effect === undefined) && (
+                          <Badge variant="warning" title="Edite a tool e diga se ela grava, cobra ou envia algo — a fila de revisão dos Logs usa isso.">
+                            efeito colateral?
+                          </Badge>
+                        )}
                       </div>
                       <p className="truncate font-mono text-xs text-muted-foreground">
                         {tool.tool_name}
