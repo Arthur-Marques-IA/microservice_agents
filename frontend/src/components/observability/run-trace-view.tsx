@@ -401,7 +401,13 @@ function SpanDetail({ span }: { span: TraceSpan }) {
                 : "Erro"}
             </Badge>
           )}
-          {span.level === "WARNING" && <Badge variant="warning">Aviso</Badge>}
+          {span.level === "WARNING" && (
+            <Badge variant="warning" title={typeof span.metadata?.failure === "string" ? TOOL_FAILURE_META[span.metadata.failure as ToolFailureKind]?.action : undefined}>
+              {typeof span.metadata?.failure === "string"
+                ? `${toolFailureLabel(span.metadata.failure)}${span.metadata.http_status ? ` · HTTP ${span.metadata.http_status}` : ""}`
+                : "Aviso"}
+            </Badge>
+          )}
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <span>{formatMs(span.latency_ms)}</span>

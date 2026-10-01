@@ -197,6 +197,7 @@ def test_migracao_reclassifica_falhas_antigas_so_de_tools_api(tmp_path):
             ("s1", "ficha", '"HTTP 500: {\\"ok\\": false}"'),
             ("s2", "ficha", '"HTTP 200: {\\"ok\\": true}"'),
             ("s3", "script", '"HTTP 500: texto qualquer de uma tool python"'),
+            ("s4", "ficha", '"HTTP 404: {\\"ok\\": false}"'),
         ]:
             conn.execute(sa.text(
                 "INSERT INTO run_spans (id, run_id, type, name, level, output, input_tokens, output_tokens, "
@@ -211,5 +212,44 @@ def test_migracao_reclassifica_falhas_antigas_so_de_tools_api(tmp_path):
     assert spans["s1"].level == "ERROR" and "unavailable" in spans["s1"].metadata
     assert spans["s2"].level == "DEFAULT"
     assert spans["s3"].level == "DEFAULT", "tool python não é reclassificada pelo texto"
-    assert tuple(r1) == (3, 1, 2)
+    assert spans["s4"].level == "WARNING" and "not_found" in spans["s4"].metadata
+    assert tuple(r1) == (4, 1, 2), "o 404 conta como chamada, não como falha"
     assert tuple(r2) == (0, 0, 1)
+
+
+# -- 404 não é falha ----------------------------------------------------------------
+
+
+def test_404_no_run_vira_aviso_e_nao_conta(monkeypatch):
+    monkeypatch.setattr(api_tool, "_client", rede(404, {"mensagem": "sem sessões anteriores"}))
+
+    class Agente:
+        def arun(self, message, **kwargs):
+            async def stream():
+                fn = build_api_function(tool_name="oferta", description=None, config=CONFIG)
+                resultado = await fn.entrypoint(valor=1)
+                yield ToolCallCompletedEvent(tool=ToolExecution(tool_name="oferta", tool_args={}, result=resultado))
+                yield RunCompletedEvent(run_id=kwargs.get("run_id"), content="ok")
+
+            return stream()
+
+    run = RunContext(endpoint="chat", agent_type=f"agente-{uuid4().hex[:8]}", agent_name="t", prompt_version=1,
+                     user_id="u", session_id="s", message="m")
+
+    async def consumir():
+        async with aclosing(tracing.traced_run_events(Agente(), run)) as eventos:
+            async for _ in eventos:
+                pass
+
+    asyncio.run(consumir())
+    trace = get_run_trace(run.run_id)
+    assert (trace.run.tool_calls, trace.run.tool_failures) == (1, 0)
+    [span] = [s for s in trace.spans if s.type == "TOOL"]
+    assert span.level == "WARNING" and span.metadata == {"failure": "not_found", "http_status": 404}
+
+
+def test_invoke_com_404_e_ok_mas_indica_o_tipo(monkeypatch, tool_oferta):
+    monkeypatch.setattr(api_tool, "_client", rede(404))
+    out = asyncio.run(invoke_tool(tool_oferta, ToolInvokeIn(arguments={"valor": 1})))
+    assert out["ok"] is True
+    assert (out["failure"], out["http_status"]) == ("not_found", 404)

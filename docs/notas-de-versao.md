@@ -20,60 +20,11 @@ Aqui não entram as mudanças internas; essas ficam no histórico do git.
 
 ---
 
-## Não lançada
-
-### Ação necessária
-
-1. **`POST /tools/{nome}/invoke` responde `ok: false` quando a API da tool devolve erro.**
-   Antes, um HTTP 4xx/5xx ou uma falha de rede saíam como `ok: true`, com o erro só no texto de
-   `result`. Agora a resposta traz `failure` (o tipo) e `http_status`, e `kuro tools invoke` sai
-   com código 1. **O que fazer:** se um script seu tratava `ok: true` com "HTTP 500" no texto como
-   sucesso, ele passa a ver a falha. É o comportamento correto.
-
-### Novo
-
-- **Falha de tool aparece no trace.** Uma chamada de tool que falha (HTTP 4xx/5xx, rede, destino
-  bloqueado, exceção) vira uma span com `level: "ERROR"` e `metadata.failure`:
-  `invalid_arguments`, `not_found`, `auth`, `unavailable`, `config` ou `exception`. O **`status` do
-  run não muda**: se o agente respondeu, o run continua `success`. O texto que o modelo lê também é
-  o mesmo de antes.
-- **Resumo de tools no run** (`GET /observability/runs` e `kuro runs show`): `tool_calls`,
-  `tool_failures` e `complexity` (1 = nenhuma tool de negócio, 2 = uma ou duas distintas, 3 = três
-  ou mais; memória e busca na base não contam). `null` no backend Langfuse.
-- **`side_effect` nas tools** (`true`, `false` ou vazio): diz se a tool grava, cobra, transfere ou
-  envia algo. É opcional; o console avisa enquanto estiver vazio. Não entra na versão da
-  configuração do agente, então classificar uma tool não gera versão nova.
-- **`GET /observability/overview`**: o panorama do dashboard dos Logs num pedido só. Traz totais
-  com o período anterior, a série no tempo sem buracos (por hora, dia ou semana, conforme o
-  intervalo, no fuso `tz`, padrão `America/Sao_Paulo`), uma linha por agente com as versões da
-  configuração que rodaram, e as tools que estão falhando. Os testes `dry_run` ficam de fora, a
-  menos que `include_dry_run=true`. Só no trace store local; com o Langfuse responde 501.
-- **Dashboard dos Logs refeito**: indicadores com variação contra o período anterior (falhas
-  separadas de tool falhando, latência p95 em vez da média), gráfico por resultado, custo ou
-  latência com visão em tabela, quadro de tools falhando e tabela por agente com a comparação
-  entre versões. A busca e o filtro de status passaram para junto das listas.
-- **Fila de revisão** (`GET /observability/runs` e `kuro runs list`): filtros `complexity`
-  (repetível), `tool_failed`, `side_effect` (pela classificação atual das tools, então vale também
-  para runs antigos), `min_message_chars` (esconde "ok" e "oi"), `feedback` (`up`, `down`, `none`),
-  `include_dry_run=false` e `sample=N` (amostra aleatória, sem paginação). No console, ficam na aba
-  Execuções dos Logs e de cada agente, com a coluna de complexidade e falhas de tool.
-- A falha de rede de uma tool passou a dizer o tipo do erro ("Falha ao chamar a API:
-  ReadTimeout"). Antes vinha vazia.
-
-### Como atualizar
-
-1. Rebuild da imagem. A migração `0006` roda sozinha no boot: cria as colunas e **reclassifica os
-   runs já gravados** a partir dos textos de erro que as tools `kind="api"` devolviam.
-2. Classifique as tools com efeito colateral: `kuro --json tools set <tool> side_effect=true`, ou
-   pela tela de Tools.
-
----
-
 ## 0.2.0
 
 Primeira rodada de melhorias vinda da integração do R8 em produção: erros de configuração com
-motivo claro, modo teste para tools, upload de documentos no RAG e informações para escolher
-modelo e cache.
+motivo claro, modo teste para tools, upload de documentos no RAG, informações para escolher
+modelo e cache, falha de tool visível no trace, dashboard dos Logs refeito e fila de revisão.
 
 ### Ação necessária
 
@@ -114,6 +65,13 @@ modelo e cache.
    timeout_seconds do agente)." Só afeta quem compara esse texto; o status continua
    `interrupted`.
 
+6. **`POST /tools/{nome}/invoke` responde `ok: false` quando a API da tool devolve erro.**
+   Antes, um HTTP 4xx/5xx ou uma falha de rede saíam como `ok: true`, com o erro só no texto de
+   `result`. Agora a resposta traz `failure` (o tipo) e `http_status`, e `kuro tools invoke` sai
+   com código 1. O 404 é a exceção: continua `ok: true`, com `failure: "not_found"`. **O que
+   fazer:** se um script seu tratava `ok: true` com "HTTP 500" no texto como sucesso, ele passa a
+   ver a falha. É o comportamento correto.
+
 ### Novo
 
 - **`dry_run`** no `/chat`, `/analyze` e `/tools/{nome}/invoke`. O run fica com
@@ -132,6 +90,40 @@ modelo e cache.
 - **`docker-compose.override.example.yml`**: exemplo de como ligar o Kuro à rede Docker de outro
   sistema, com o `TOOL_EGRESS_ALLOWLIST` que as tools precisam
   ([integração, seção 6](integracao.md#rede-docker)).
+- **Custo estimado dos modelos Gemini 3.x.** A tabela de `models/pricing.py` agora conhece
+  `gemini-3.1-flash-lite`, `3.5-flash`, `3.5-flash-lite`, `3.6/3.7/3.8-flash`, `3.1-pro-preview` e
+  `omni-1.1-flash`; antes o `cost_usd` desses runs vinha `null`. Os 3.6–3.8 têm preço promocional até
+  2026-12-31 e dobram em 2027-01-01: ajuste com `MODEL_PRICES` na virada. Runs antigos não são recalculados.
+
+- **Falha de tool aparece no trace.** Uma chamada de tool que falha (HTTP 4xx/5xx, rede, destino
+  bloqueado, exceção) vira uma span com `level: "ERROR"` e `metadata.failure`:
+  `invalid_arguments`, `auth`, `unavailable`, `config` ou `exception`. O **`status` do run não
+  muda**: se o agente respondeu, o run continua `success`. O texto que o modelo lê também é o mesmo
+  de antes. Um **404 não conta como falha** (pode ser resposta normal, como "não há sessões
+  anteriores"): a span sai como aviso (`WARNING`, `failure: "not_found"`), fica fora de
+  `tool_failures` e continua visível no trace e no quadro de tools do dashboard.
+- **Resumo de tools no run** (`GET /observability/runs` e `kuro runs show`): `tool_calls`,
+  `tool_failures` e `complexity` (1 = nenhuma tool de negócio, 2 = uma ou duas distintas, 3 = três
+  ou mais; memória e busca na base não contam). `null` no backend Langfuse.
+- **`side_effect` nas tools** (`true`, `false` ou vazio): diz se a tool grava, cobra, transfere ou
+  envia algo. É opcional; o console avisa enquanto estiver vazio. Não entra na versão da
+  configuração do agente, então classificar uma tool não gera versão nova.
+- **`GET /observability/overview`**: o panorama do dashboard dos Logs num pedido só. Traz totais
+  com o período anterior, a série no tempo sem buracos (por hora, dia ou semana, conforme o
+  intervalo, no fuso `tz`, padrão `America/Sao_Paulo`), uma linha por agente com as versões da
+  configuração que rodaram, e as tools que estão falhando. Os testes `dry_run` ficam de fora, a
+  menos que `include_dry_run=true`. Só no trace store local; com o Langfuse responde 501.
+- **Dashboard dos Logs refeito**: indicadores com variação contra o período anterior (falhas
+  separadas de tool falhando, latência p95 em vez da média), gráfico por resultado, custo ou
+  latência com visão em tabela, quadro de tools falhando e tabela por agente com a comparação
+  entre versões. A busca e o filtro de status passaram para junto das listas.
+- **Fila de revisão** (`GET /observability/runs` e `kuro runs list`): filtros `complexity`
+  (repetível), `tool_failed`, `side_effect` (pela classificação atual das tools, então vale também
+  para runs antigos), `min_message_chars` (esconde "ok" e "oi"), `feedback` (`up`, `down`, `none`),
+  `include_dry_run=false` e `sample=N` (amostra aleatória, sem paginação). No console, ficam na aba
+  Execuções dos Logs e de cada agente, com a coluna de complexidade e falhas de tool.
+- A falha de rede de uma tool passou a dizer o tipo do erro ("Falha ao chamar a API:
+  ReadTimeout"). Antes vinha vazia.
 
 ### Corrigido
 
@@ -150,7 +142,10 @@ modelo e cache.
    docker compose up -d --build agent-service
    ```
 
-   Nenhuma migração de banco nesta versão, e nenhuma variável de ambiente nova.
+   A migração `0006` roda sozinha no boot: cria as colunas de tools no run e o `side_effect` das
+   tools, e **reclassifica os runs já gravados** a partir dos textos de erro que as tools
+   `kind="api"` devolviam. Com muitos meses de dados, rode antes com `kuro-migrate` para o boot não
+   esperar. Nenhuma variável de ambiente nova.
 2. Confira com `kuro --json health`: `service.version` deve ser `"0.2.0"` e
    `service.model_credentials` deve ser `"enabled"`.
 3. Se as tools chamam outro container pela rede Docker, troque o `docker network connect` manual
@@ -158,6 +153,8 @@ modelo e cache.
    `docker compose up`.
 4. Reenvie os documentos que falharam no upload. Os que ficaram com erro aparecem em
    `kuro --json collections docs <coleção>`; remova-os com `rm-doc` antes de reenviar.
+5. Classifique as tools com efeito colateral: `kuro --json tools set <tool> side_effect=true`, ou
+   pela tela de Tools. Sem isso, o filtro "Efeito colateral" da fila de revisão fica vazio.
 
 ---
 

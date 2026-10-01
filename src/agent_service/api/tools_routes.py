@@ -398,5 +398,7 @@ async def invoke_tool(tool_name: str, body: ToolInvokeIn) -> dict[str, Any]:
     failed = failures.lookup_failure(tool_name, result)
     if failed is not None:
         kind, http_status = failed
+        if kind in failures.NOT_COUNTED:  # 404: resposta da API, não falha — fica só a indicação
+            return ToolInvokeOut(ok=True, result=result, failure=kind, http_status=http_status).model_dump()
         return ToolInvokeOut(ok=False, result=result, error=str(result), failure=kind, http_status=http_status).model_dump()
     return ToolInvokeOut(ok=True, result=result).model_dump()

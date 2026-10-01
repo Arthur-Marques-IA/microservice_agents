@@ -8,7 +8,7 @@ export const TOOL_FAILURE_META: Record<ToolFailureKind, { label: string; action:
   },
   not_found: {
     label: "Não encontrado",
-    action: "A API respondeu 404. Pode ser uma resposta normal (nada a mostrar) ou um id errado.",
+    action: "A API respondeu 404. Não conta como falha: pode ser uma resposta normal (nada a mostrar) — ou um id errado, se aparecer muito.",
   },
   auth: {
     label: "Autenticação",

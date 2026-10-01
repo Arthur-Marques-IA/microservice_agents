@@ -139,7 +139,9 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
           <div className="flex flex-col gap-2">
             <p className={`text-[13px] font-medium ${result.ok ? "text-success" : "text-destructive"}`}>
               {result.ok
-                ? "Sucesso"
+                ? result.failure
+                  ? `Respondeu ${TOOL_FAILURE_META[result.failure].label.toLowerCase()}${result.http_status ? ` (HTTP ${result.http_status})` : ""} — não conta como falha`
+                  : "Sucesso"
                 : result.failure
                   ? `Falhou — ${TOOL_FAILURE_META[result.failure].label}${result.http_status ? ` (HTTP ${result.http_status})` : ""}`
                   : "Erro"}

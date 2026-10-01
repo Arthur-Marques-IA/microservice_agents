@@ -396,7 +396,8 @@ def _tool_failures(conn: Any, conditions: list[Any]) -> list[ToolFailureRow]:
     for name, metadata, started_at, agent_type in conn.execute(
         select(run_spans.c.name, run_spans.c.metadata, runs.c.started_at, runs.c.agent_type)
         .select_from(run_spans.join(runs, runs.c.run_id == run_spans.c.run_id))
-        .where(run_spans.c.type == "TOOL", run_spans.c.level == "ERROR", *conditions)
+        # WARNING entra também: o 404 não é falha, mas quem cuida da tool quer ver.
+        .where(run_spans.c.type == "TOOL", run_spans.c.level.in_(("ERROR", "WARNING")), *conditions)
     ):
         metadata = metadata or {}
         key = (name, metadata.get("failure") or "exception")

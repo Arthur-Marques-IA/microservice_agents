@@ -32,6 +32,8 @@ _BATCH = 500
 # o código da aplicação, que muda depois.
 _INTERNAL_TOOLS = {"update_user_memory", "search_knowledge_base"}
 _HTTP = re.compile(r"^HTTP (\d{3}): ")
+# 404 é registrado como aviso e não conta como falha (ver `tools/failures.py`).
+_NOT_COUNTED = {"not_found"}
 
 
 def _classify(output: object) -> tuple[str, int | None] | None:
@@ -126,12 +128,12 @@ def upgrade() -> None:
                     spans.update()
                     .where(spans.c.id == span.id)
                     .values(
-                        level="ERROR",
+                        level="WARNING" if kind in _NOT_COUNTED else "ERROR",
                         status_message=span.output[:500],
                         metadata={**(span.metadata or {}), "failure": kind, **({"http_status": http_status} if http_status else {})},
                     )
                 )
-                failed = True
+                failed = kind not in _NOT_COUNTED
             elif failed and not (span.metadata or {}).get("failure"):
                 conn.execute(
                     spans.update()

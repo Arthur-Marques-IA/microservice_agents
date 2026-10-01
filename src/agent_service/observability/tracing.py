@@ -298,7 +298,7 @@ def _tool_span(event: Any, now: datetime) -> Any:
         name=name,
         started_at=_utc(getattr(tool_metrics, "start_time", None)) or now,
         ended_at=_utc(getattr(tool_metrics, "end_time", None)),
-        level="ERROR" if metadata else "DEFAULT",
+        level=failures.span_level(metadata["failure"]) if metadata else "DEFAULT",
         status_message=status_message,
         input=getattr(tool, "tool_args", None),
         output=output,

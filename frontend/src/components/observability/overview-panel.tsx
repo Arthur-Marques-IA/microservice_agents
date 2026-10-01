@@ -603,6 +603,7 @@ function ToolFailuresCard({ overview }: { overview: Overview }) {
                 <td className="py-2 pr-3 font-mono text-xs">{f.tool_name}</td>
                 <td className="py-2 pr-3">
                   <span className="font-medium">{TOOL_FAILURE_META[f.failure]?.label ?? f.failure}</span>
+                  {f.failure === "not_found" && <span className="text-muted-foreground"> · não conta como falha</span>}
                   {f.http_status.length > 0 && <span className="text-muted-foreground"> · HTTP {f.http_status.join(", ")}</span>}
                   <p className="text-xs text-muted-foreground">{TOOL_FAILURE_META[f.failure]?.action}</p>
                 </td>

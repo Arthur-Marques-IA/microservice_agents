@@ -21,7 +21,9 @@ from typing import Literal
 FailureKind = Literal["invalid_arguments", "not_found", "auth", "unavailable", "config", "exception"]
 """
 - `invalid_arguments`: o modelo chamou com argumento faltando ou inválido (4xx) — ajuste o prompt ou o schema;
-- `not_found`: 404 — pode ser resposta normal ("não há sessões anteriores"), por isso fica à parte;
+- `not_found`: 404 — pode ser resposta normal ("não há sessões anteriores"), por isso **não conta
+  como falha**: a span sai como aviso (`WARNING`), fora de `tool_failures`, e o teste da tool
+  responde `ok: true`. Continua visível no trace e no quadro de tools do dashboard;
 - `auth`: 401/403 — configuração da tool (credencial);
 - `unavailable`: 5xx, 429, rede ou timeout — o sistema chamado está com problema;
 - `config`: destino recusado pela trava de egress (`TOOL_EGRESS_ALLOWLIST`) ou dependency
@@ -30,6 +32,14 @@ FailureKind = Literal["invalid_arguments", "not_found", "auth", "unavailable", "
 """
 
 FAILURE_KINDS: tuple[str, ...] = ("invalid_arguments", "not_found", "auth", "unavailable", "config", "exception")
+
+NOT_COUNTED: frozenset[str] = frozenset({"not_found"})
+"""Tipos registrados, mas que não são falha (ver `not_found` acima)."""
+
+
+def span_level(kind: str) -> str:
+    return "WARNING" if kind in NOT_COUNTED else "ERROR"
+
 
 INTERNAL_TOOLS = frozenset({"update_user_memory", "search_knowledge_base"})
 """Tools que o próprio Agno dá ao agente (memória, busca na base): não decidem
