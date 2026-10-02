@@ -5,6 +5,9 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
+  /* Famílias carregadas em app/layout.tsx (@fontsource). */
+  --font-app-sans: "IBM Plex Sans";
+  --font-app-mono: "JetBrains Mono";
   --background: #ffffff;
   --foreground: #0a0a0c;
   --surface: #f6f9fa;
