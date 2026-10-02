@@ -37,25 +37,44 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _slots: asyncio.Semaphore | None = None
+_waiting = 0
+
+
+def _busy() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="Serviço no limite de execuções simultâneas. Tente de novo em instantes.",
+        headers={"Retry-After": "5"},
+    )
 
 
 @asynccontextmanager
 async def _run_slot() -> AsyncIterator[None]:
-    """Uma vaga de execução. Sem vaga, 503 com `Retry-After` na hora: quem chama
-    (o daemon do Regente, por exemplo) tenta no próximo ciclo, em vez de a
-    requisição esperar numa fila que ninguém vê. O limite é por processo
-    (`MAX_CONCURRENT_RUNS`)."""
-    global _slots
+    """Uma vaga de execução (`MAX_CONCURRENT_RUNS`, por processo). Sem vaga, a
+    chamada espera na fila, em ordem de chegada, até `QUEUE_MAX_WAIT_SECONDS`; o
+    contrato HTTP não muda — só demora mais. Fila cheia ou espera esgotada: 503
+    com `Retry-After`, para quem chama (o daemon do Regente, por exemplo) tentar
+    de novo, em vez de acumular conexões até derrubar o serviço."""
+    global _slots, _waiting
+    settings = get_settings()
     if _slots is None:
-        _slots = asyncio.Semaphore(get_settings().max_concurrent_runs)
+        _slots = asyncio.Semaphore(settings.max_concurrent_runs)
     if _slots.locked():
-        raise HTTPException(
-            status_code=503,
-            detail="Serviço no limite de execuções simultâneas. Tente de novo em instantes.",
-            headers={"Retry-After": "5"},
-        )
-    async with _slots:
+        if settings.queue_max_wait_seconds <= 0 or _waiting >= settings.queue_max_size:
+            raise _busy()
+        _waiting += 1
+        try:
+            await asyncio.wait_for(_slots.acquire(), settings.queue_max_wait_seconds)
+        except TimeoutError:
+            raise _busy() from None
+        finally:
+            _waiting -= 1
+    else:
+        await _slots.acquire()
+    try:
         yield
+    finally:
+        _slots.release()
 
 
 def _timeout_for(definition: dict[str, Any]) -> float:

@@ -52,8 +52,17 @@ class Settings(BaseSettings):
     """Tempo limite padrão de uma execução (o agente pode ter o seu,
     `timeout_seconds`). Estourou: 504, e quem chama cai no próprio fallback."""
     max_concurrent_runs: int = 16
-    """Execuções simultâneas por processo. Acima disso a chamada recebe 503 com
-    `Retry-After` na hora, em vez de esperar numa fila que ninguém vê."""
+    """Execuções simultâneas por processo. Acima disso a chamada espera na fila
+    (`queue_max_size`/`queue_max_wait_seconds`); sem lugar nela, recebe 503 com
+    `Retry-After`."""
+    queue_max_size: int = 64
+    """Quantas chamadas podem esperar uma vaga, por processo. Fila cheia: 503 na
+    hora, em vez de acumular conexões abertas até derrubar o serviço."""
+    queue_max_wait_seconds: float = 30.0
+    """Quanto uma chamada espera na fila antes do 503. Não conta no
+    `timeout_seconds` do run, que só começa quando ele ganha a vaga. 0 desliga a
+    fila (503 imediato, o comportamento antigo). Mantenha abaixo do timeout de
+    quem chama."""
     aux_model_id: str | None = None
     """Modelo das tarefas de apoio — extrair memória de longo prazo e resumir a
     sessão. Vazio = o modelo do próprio agente. Um modelo barato aqui (ex.:

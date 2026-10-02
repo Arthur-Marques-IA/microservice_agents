@@ -76,9 +76,11 @@ entrega a infraestrutura, e o guia para o time de lá é o [docs/integracao.md](
    `Literal` no schema do provedor, e um valor fora dele dá 502, nunca uma `acao` inventada.
 3. ~~Tempo limite e limite de simultâneas~~ **Feito**: `timeout_seconds` por agente
    (`RUN_TIMEOUT_SECONDS` = 90 por padrão) dá 504 e grava o run como erro. `MAX_CONCURRENT_RUNS`
-   por processo dá 503 com `Retry-After`. **Sem fila no Kuro**, de propósito: a fila é o
-   claim/daemon do Regente. Se um dia houver execução assíncrona, ela vai para o Postgres
-   (`SKIP LOCKED`), não de volta para o Redis.
+   por processo; acima dele a chamada espera numa fila em memória (`QUEUE_MAX_SIZE`,
+   `QUEUE_MAX_WAIT_SECONDS`) e, com a fila cheia ou a espera esgotada, dá 503 com `Retry-After`.
+   Decisão de 2026-10-02: fila só de espera, **sem mudar o contrato HTTP**. Ela não é durável;
+   a fila durável continua sendo o claim/daemon do Regente. Se um dia houver execução
+   assíncrona, ela vai para o Postgres (`SKIP LOCKED`), não de volta para o Redis.
 4. ~~Correlação~~ **Feito** (migração 0004): `metadata` no `/chat`/`/analyze` (não vai para o
    modelo), filtro `--meta`/`?meta=`, e `session_id` opcional no `/analyze` para agrupar por
    conversa.

@@ -20,6 +20,23 @@ Aqui não entram as mudanças internas; essas ficam no histórico do git.
 
 ---
 
+## Não lançada
+
+### Ação necessária
+
+Nenhuma, mas muda o comportamento no limite: acima de `MAX_CONCURRENT_RUNS`, a chamada **espera**
+na fila (até `QUEUE_MAX_WAIT_SECONDS`, 30 s) em vez de receber 503 na hora. Se o seu cliente tem
+timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` para o comportamento antigo.
+
+### Novo
+
+- Fila de espera por vaga de execução em `/chat`, `/analyze` e `/chat/stream`: em ordem de chegada,
+  limitada por `QUEUE_MAX_SIZE` (64) e `QUEUE_MAX_WAIT_SECONDS` (30). Fila cheia ou espera esgotada:
+  503 com `Retry-After`, como antes. O `timeout_seconds` do run só conta depois que ele ganha a vaga.
+  A fila é por processo e em memória: não sobrevive a restart.
+
+---
+
 ## 0.2.0
 
 Primeira rodada de melhorias vinda da integração do R8 em produção: erros de configuração com
