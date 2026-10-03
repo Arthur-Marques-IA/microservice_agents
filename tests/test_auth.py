@@ -145,6 +145,16 @@ def test_openapi_nao_fica_publico_com_auth_ligada(app_com_auth):
     assert app_com_auth.get("/openapi.json", headers=_com(ADMIN)).status_code == 200
 
 
+def test_estado_de_conversa_procedural_aceita_runtime_e_o_resto_de_agents_nao():
+    """Quem integra lê o `state` de uma sessão que ele mesmo conduz; o funil e a
+    definição do agente continuam só para admin."""
+    assert auth.required_scope("/agents/abertura/procedures/sessao-1") == "runtime"
+    assert auth.required_scope("/agents/abertura/procedures/sessao-1/") == "runtime"
+    assert auth.required_scope("/agents/abertura/procedures") == "admin"
+    assert auth.required_scope("/agents/abertura") == "admin"
+    assert auth.required_scope("/agents/abertura/procedures/sessao-1/x") == "admin"
+
+
 def test_health_continua_aberta_por_necessidade(app_com_auth):
     assert auth.required_scope("/health") is None
     assert auth.required_scope("/health/") is None

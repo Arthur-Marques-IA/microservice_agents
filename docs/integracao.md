@@ -82,6 +82,7 @@ id da decisão na trilha de auditoria (decisão → validação → efeito), e
 | 401 / 403 | Chave ausente ou de escopo errado | Erro de configuração: alertar, não repetir |
 | 404 | `agent_type` não existe | Erro de configuração: alertar, não repetir |
 | 409 | Agente procedural: outra mensagem da mesma sessão ainda está sendo processada | Esperar a resposta dela e reenviar |
+| 502 / 504 num agente procedural | Pode ter vindo depois da ação já executada | Ler `GET /agents/{t}/procedures/{session_id}` antes do fallback |
 | 422 | Requisição inválida: dependency faltando ou de tipo errado, texto grande demais, agente não é `analysis` | Bug de quem chama: não repetir, alertar |
 | 502 | Falha do provedor de modelo ou saída que não fecha com o schema | **Fallback.** Pode tentar no próximo ciclo |
 | 503 com `Retry-After` | Sem vaga de execução, ou banco fora | **Fallback agora**, repetir depois do `Retry-After` |
@@ -121,10 +122,15 @@ também `state` — a etapa em que a conversa está, o que já foi coletado e o 
   essa trava que impede uma ação de rodar duas vezes. O debounce por conversa do seu sistema evita
   quase todos os casos.
 - **A tool de uma etapa `action`** recebe os dados coletados como argumentos e em `dependencies`,
-  mais `dependencies.idempotency_key` — estável por tentativa, para descartar uma entrega repetida.
+  mais `dependencies.idempotency_key`. A chave é a mesma enquanto os dados não mudam: se a ação
+  passou do tempo e a pessoa confirmou de novo, a nova tentativa chega com a mesma chave, e o seu
+  sistema reconhece que é o mesmo pedido. Corrigir um dado gera outra chave.
   `dry_run` chega a ela como em qualquer tool.
-- `GET /agents/{t}/procedures/{session_id}` devolve o `state` de uma conversa, e
-  `GET /agents/{t}/procedures` o funil (conversas paradas em cada etapa, sem os testes em `dry_run`).
+- `GET /agents/{t}/procedures/{session_id}` devolve o `state` de uma conversa e aceita a chave
+  `runtime`. O funil, `GET /agents/{t}/procedures` (conversas paradas em cada etapa, sem os testes
+  em `dry_run`), exige `admin`.
+- **Um 502 ou 504 pode chegar depois de a ação ter rodado**: ela é gravada antes da resposta. Antes
+  de cair no fallback, leia o estado da sessão; se a etapa `action` está `done`, o efeito aconteceu.
 
 ## 5. O agente como código
 

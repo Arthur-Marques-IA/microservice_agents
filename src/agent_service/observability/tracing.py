@@ -423,10 +423,13 @@ def _add_extra_spans(record: Any, spans: tuple[Any, ...]) -> None:
         record.cost_usd = (record.cost_usd or 0.0) + sum(costs)
 
 
-def record_run_without_model(run: RunContext, output: str) -> None:
+def record_run_without_model(
+    run: RunContext, output: str | None, *, status: str = "success", status_message: str | None = None
+) -> None:
     """Grava uma execução cuja resposta o servidor montou sem chamar o modelo para
-    redigi-la (a confirmação de um agente procedural). Ela precisa existir como as
-    outras: é dela que vêm a transcrição do feedback e a conversa nos Logs."""
+    redigi-la (a confirmação de um agente procedural), ou que falhou antes de chegar
+    ao modelo da resposta (a extração deu erro). Ela precisa existir como as outras:
+    é dela que vêm a transcrição do feedback e a conversa nos Logs."""
     from agent_service.observability import run_store
 
     started = datetime.now(timezone.utc)
@@ -446,6 +449,8 @@ def record_run_without_model(run: RunContext, output: str) -> None:
         metadata=dict(run.metadata),
         input={"message": run.message, "dependencies": run.dependencies},
         output=output,
+        status=status,
+        status_message=status_message,
     )
     _add_extra_spans(record, run.extra_spans)
     record.model = next((s.model for s in record.spans if s.model), None)

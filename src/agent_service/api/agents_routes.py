@@ -661,6 +661,15 @@ def promote_agent(agent_type: str, body: PromoteIn) -> dict[str, Any]:
     values = {field: source.get(field) for field in _PROMOTED_FIELDS}
 
     target = get_definition(body.to)
+    if target is not None:
+        source_kind = source.get("kind") or "conversational"
+        target_kind = target.get("kind") or "conversational"
+        if source_kind != target_kind and "procedural" in (source_kind, target_kind):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{agent_type!r} é kind={source_kind!r} e {body.to!r} é kind={target_kind!r}: o tipo de um "
+                "agente procedural não muda (as conversas em andamento têm estado). Promova para um agente novo.",
+            )
     previous_version: int | None = None
     if target is None:
         create_definition(agent_type=body.to, name=source["name"], **values)
@@ -896,4 +905,5 @@ def get_procedure_state(agent_type: str, session_id: str) -> dict[str, Any]:
     row = get_procedure(agent_type, session_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"A sessão {session_id!r} ainda não começou o procedimento")
-    return {**state_view(definition.get("stages") or [], row["state"]), "session_id": session_id, "dry_run": row["dry_run"]}
+    view = state_view(definition.get("stages") or [], row["state"], finished=row["status"] == "done")
+    return {**view, "session_id": session_id, "dry_run": row["dry_run"]}

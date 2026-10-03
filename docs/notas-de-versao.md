@@ -55,9 +55,13 @@ timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` pa
   - **409** quando outra mensagem da mesma sessão ainda está sendo processada: espere a resposta
     dela e reenvie. É o que impede uma ação de rodar duas vezes.
   - A tool de uma etapa `action` recebe os dados coletados como argumentos e como `dependencies`,
-    mais `dependencies.idempotency_key` (estável por tentativa) para descartar uma entrega repetida.
-  - `GET /agents/{t}/procedures/{session_id}` (o estado de uma conversa) e
-    `GET /agents/{t}/procedures` (o funil: quantas conversas em cada etapa; sem os testes em `dry_run`).
+    mais `dependencies.idempotency_key`: a mesma enquanto os dados não mudam, para o seu sistema
+    reconhecer uma nova tentativa do mesmo pedido.
+  - `GET /agents/{t}/procedures/{session_id}` (o estado de uma conversa; aceita a chave `runtime`)
+    e `GET /agents/{t}/procedures` (o funil: quantas conversas em cada etapa; sem os testes em
+    `dry_run`; exige `admin`).
+  - Num agente procedural, um 502 ou 504 pode chegar depois de a ação ter rodado: leia o estado da
+    sessão antes de cair no fallback.
 
 ### Como atualizar
 

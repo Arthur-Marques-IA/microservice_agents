@@ -374,7 +374,8 @@ function ActionEditor({
       </div>
       <p className="text-xs text-muted-foreground">
         O servidor chama a tool depois da confirmação, com os campos coletados como argumentos (o nome do campo tem de ser
-        o do parâmetro) e com <code className="font-mono">idempotency_key</code> em dependencies. Se ela falhar, a pessoa
+        o do parâmetro) e com <code className="font-mono">idempotency_key</code> em dependencies — a mesma enquanto os
+        dados não mudam. Se ela falhar, a pessoa
         precisa confirmar de novo para tentar outra vez.
       </p>
     </div>

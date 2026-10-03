@@ -41,6 +41,8 @@ um turno (modelo, tool, banco, trace) fica em `agents/procedure_runner.py`.
 """
 
 import copy
+import hashlib
+import json
 import re
 from typing import Any, Literal
 
@@ -155,6 +157,13 @@ def _validate_collect_fields(stage_id: str, raw: Any, owners: dict[str, str]) ->
     return fields
 
 
+def stages_hash(stages: list[dict[str, Any]]) -> str:
+    """Identifica a versão das etapas. Uma confirmação vale para as etapas que a
+    pessoa viu: se o agente foi editado no meio da conversa, ela não vale mais."""
+    canonical = json.dumps(stages, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
 def collect_fields(stages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [f for s in stages if s["type"] == "collect" for f in s["fields"]]
 
@@ -170,7 +179,14 @@ def fields_before(stages: list[dict[str, Any]], index: int) -> list[str]:
 def new_state(stages: list[dict[str, Any]], dependencies: dict[str, Any] | None = None) -> dict[str, Any]:
     """Estado inicial. Um campo cujo valor já veio em `dependencies` (quem integra
     mandou o CPF, por exemplo) nasce preenchido — a etapa dele pode já estar pronta."""
-    state: dict[str, Any] = {"slots": {}, "confirmed": [], "actions": {}, "invalid": {}, "declined": False}
+    state: dict[str, Any] = {
+        "slots": {},
+        "confirmed": [],
+        "actions": {},
+        "invalid": {},
+        "declined": False,
+        "stages_hash": stages_hash(stages),
+    }
     for field in collect_fields(stages):
         value = (dependencies or {}).get(field["name"])
         if value is not None and check_value(field, value) is None:
@@ -323,10 +339,25 @@ def _field_view(field: dict[str, Any]) -> dict[str, Any]:
     return view
 
 
-def state_view(stages: list[dict[str, Any]], state: dict[str, Any]) -> dict[str, Any]:
+def sync_with_definition(stages: list[dict[str, Any]], state: dict[str, Any]) -> dict[str, Any]:
+    """O agente foi editado desde a última mensagem? Então as confirmações dadas
+    valiam para outras etapas e caem: uma ação nova (ou renomeada) não roda em
+    cima de um "sim" dado para outra coisa."""
+    current = stages_hash(stages)
+    if state.get("stages_hash") == current:
+        return state
+    state = copy.deepcopy(state)
+    state["stages_hash"] = current
+    state["confirmed"] = []
+    state["declined"] = False
+    return state
+
+
+def state_view(stages: list[dict[str, Any]], state: dict[str, Any], *, finished: bool = False) -> dict[str, Any]:
     """O `state` do `/chat`: quem integra sabe a etapa e quando acabou sem
-    interpretar o texto da resposta."""
-    index = current_index(stages, state)
+    interpretar o texto da resposta. `finished` vem da linha gravada: uma conversa
+    concluída continua concluída mesmo que o agente ganhe etapas depois."""
+    index = None if finished else current_index(stages, state)
     stage = stages[index] if index is not None else None
     missing = (
         [_field_view(f) for f in stage["fields"] if state["slots"].get(f["name"]) is None and f["required"]]
@@ -347,7 +378,9 @@ def state_view(stages: list[dict[str, Any]], state: dict[str, Any]) -> dict[str,
                 "id": s["id"],
                 "type": s["type"],
                 "goal": s["goal"],
-                "status": "done" if stage_ready(s, state) else ("current" if i == index else "pending"),
+                "status": "done"
+                if finished or stage_ready(s, state)
+                else ("current" if i == index else "pending"),
             }
             for i, s in enumerate(stages)
         ],
@@ -390,16 +423,17 @@ def reply_context(
     *,
     last_reply: str | None,
     action_error: str | None = None,
+    finished: bool = False,
 ) -> dict[str, Any]:
     """O que o modelo recebe em `dependencies.procedimento` para redigir a resposta."""
-    index = current_index(stages, state)
+    index = None if finished else current_index(stages, state)
     stage = stages[index] if index is not None else None
     context: dict[str, Any] = {
         "etapa": stage["id"] if stage else None,
         "tipo_da_etapa": stage["type"] if stage else None,
         "objetivo": stage["goal"] if stage else None,
         "coletado": dict(state["slots"]),
-        "faltando": state_view(stages, state)["missing"],
+        "faltando": state_view(stages, state, finished=finished)["missing"],
         "invalidos": dict(state["invalid"]),
         "concluido": stage is None,
         "ultima_mensagem_do_agente": last_reply,

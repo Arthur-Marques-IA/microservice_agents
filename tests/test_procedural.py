@@ -353,7 +353,8 @@ def test_conversa_inteira_coleta_confirma_executa(agente, monkeypatch, chamadas_
     assert len(chamadas_http) == 1
     corpo = json.loads(chamadas_http[0].content)
     assert corpo == {"cpf": "12345678901", "categoria": "internet"}
-    assert chamadas_http[0].headers["chave"].endswith(":abrir:1")  # idempotency_key
+    linha, etapa, dados = chamadas_http[0].headers["chave"].split(":")  # idempotency_key
+    assert etapa == "abrir" and len(dados) == 16
     assert modelo.contextos[-1]["concluido"] is True
     # A resposta seguinte sabe o que o agente disse por último (a confirmação veio sem o modelo).
     modelo.responde()
@@ -429,3 +430,100 @@ def test_stream_manda_o_estado_antes_do_done(agente, monkeypatch):
     assert nomes.index("state") < nomes.index("done")
     estado = json.loads(eventos[nomes.index("state")]["data"])
     assert estado["stage"] == "identificacao"
+
+
+# -- correções da revisão --------------------------------------------------------------------
+
+
+def test_conversa_concluida_nao_reexecuta_acao_depois_de_editar_o_agente(agente, monkeypatch, chamadas_http):
+    """Renomear a etapa action de um agente não pode fazer uma conversa já
+    concluída executar a "nova" ação em cima do sim que foi dado para a antiga."""
+    modelo = Modelo(monkeypatch)
+    modelo.responde(cpf="12345678901", nome="Ana", categoria="tv")
+    _chat(agente, "dados", sessao="s-editado")
+    modelo.responde(confirmacao="sim")
+    assert _chat(agente, "sim", sessao="s-editado").state["done"] is True
+    assert len(chamadas_http) == 1
+
+    renomeado = [*STAGES[:3], {**STAGES[3], "id": "abrir-chamado"}]
+    update_agent(agente, AgentDefinitionUpdate(stages=renomeado))
+    modelo.responde(confirmacao="sim")
+    r = _chat(agente, "obrigada", sessao="s-editado")
+    assert len(chamadas_http) == 1
+    assert r.state["done"] is True
+    assert get_procedure_state(agente, "s-editado")["done"] is True
+
+
+def test_editar_o_agente_no_meio_desfaz_a_confirmacao(stages):
+    state, _ = apply_extraction(stages, _ate_a_confirmacao(stages), {"confirmacao": "sim"})
+    assert state["confirmed"] == ["confirmacao"]
+    editado = validate_stages([*STAGES[:3], {**STAGES[3], "id": "abrir-chamado"}])
+    sincronizado = procedural.sync_with_definition(editado, state)
+    assert sincronizado["confirmed"] == []
+    assert procedural.sync_with_definition(stages, state) is state  # sem edição, nada muda
+
+
+def test_falha_na_extracao_e_502_e_fica_registrada(agente, monkeypatch):
+    from agent_service.observability import run_store
+
+    gravados = []
+    monkeypatch.setattr(run_store, "record_run", gravados.append)
+
+    async def falha(definition, state, message, last_reply):
+        raise RuntimeError("429 quota excedida")
+
+    monkeypatch.setattr(procedure_runner, "extract", falha)
+    with pytest.raises(HTTPException) as exc:
+        _chat(agente, "oi", sessao="s-falha-modelo")
+    assert exc.value.status_code == 502 and "quota" in exc.value.detail
+    assert [r.status for r in gravados] == ["error"]
+    assert "quota" in gravados[0].status_message
+
+
+def test_chave_de_idempotencia_estavel_por_dados():
+    linha = {"id": "abc"}
+    dados = {"cpf": "12345678901", "categoria": "tv"}
+    chave = procedure_runner._idempotency_key(linha, "abrir", dados)
+    assert chave == procedure_runner._idempotency_key(linha, "abrir", dict(reversed(list(dados.items()))))
+    assert chave != procedure_runner._idempotency_key(linha, "abrir", {**dados, "categoria": "internet"})
+
+
+def test_promote_nao_troca_o_tipo_de_um_procedural(agente):
+    from agent_service.api.agents_routes import PromoteIn, promote_agent
+
+    create_agent(AgentDefinitionIn(agent_type="conv_destino", name="Destino", instructions=["oi"]))
+    try:
+        with pytest.raises(HTTPException) as exc:
+            promote_agent(agente, PromoteIn(to="conv_destino"))
+        assert exc.value.status_code == 422
+    finally:
+        delete_agent("conv_destino")
+
+
+def test_confirmacao_entra_na_sessao_do_agno():
+    """A confirmação não passa pelo modelo, mas precisa estar no histórico: é o
+    que o modelo lê na mensagem seguinte e o que o console mostra ao reabrir."""
+    from agno.session.agent import AgentSession
+
+    from agent_service.observability.tracing import RunContext
+
+    class AgenteFalso:
+        id, name = "proc", "Proc"
+
+        def __init__(self):
+            self.salva = None
+
+        def get_session(self, session_id, user_id):
+            raise Exception("Session not found")
+
+        def save_session(self, session):
+            self.salva = session
+
+    agente_falso = AgenteFalso()
+    run = RunContext(endpoint="chat", agent_type="proc", agent_name="Proc", prompt_version=1,
+                     user_id="u", session_id="s1", message="dados")
+    procedure_runner._append_to_session(agente_falso, run, "Confira:\n\n- CPF: 1")
+    assert isinstance(agente_falso.salva, AgentSession) and agente_falso.salva.session_id == "s1"
+    (saida,) = agente_falso.salva.runs
+    assert [m.role for m in saida.messages] == ["user", "assistant"]
+    assert saida.content == "Confira:\n\n- CPF: 1" and saida.run_id == run.run_id

@@ -26,7 +26,12 @@ from agno.run.agent import RunEvent
 
 from agent_service.agents.attachments import AttachmentError, AttachmentIn, build_media, describe_attachments
 from agent_service.agents.dependency_fields import DependencyValidationError, validate_dependencies
-from agent_service.agents.procedure_runner import ProcedureBusyError, is_procedural, run_procedural_turn
+from agent_service.agents.procedure_runner import (
+    ProcedureBusyError,
+    ProcedureModelError,
+    is_procedural,
+    run_procedural_turn,
+)
 from agent_service.agents.registry import UnknownAgentTypeError, get_agent_with_definition, list_agent_types
 from agent_service.config import get_settings
 from agent_service.documents.collections import EmbedderError
@@ -334,6 +339,8 @@ async def _chat_procedural(request: ChatRequest, agent: Agent, run: RunContext) 
             raise HTTPException(status_code=504, detail=str(exc)) from exc
         except ProcedureBusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ProcedureModelError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
     return ChatResponse(
         agent_type=request.agent_type,
         session_id=request.session_id,
@@ -518,6 +525,8 @@ async def chat_stream(request: ChatRequest) -> EventSourceResponse:
             yield {"event": "error", "data": json.dumps({"message": str(exc), "status": 504})}
         except ProcedureBusyError as exc:
             yield {"event": "error", "data": json.dumps({"message": str(exc), "status": 409})}
+        except ProcedureModelError as exc:
+            yield {"event": "error", "data": json.dumps({"message": str(exc), "status": 502})}
         except Exception:
             logger.exception("Falha no streaming do agente %r", request.agent_type)
             yield {"event": "error", "data": json.dumps({"message": RUN_FAILED})}
