@@ -155,7 +155,7 @@ def test_acao_que_falha_exige_confirmar_de_novo(stages):
 
 def test_confirmacao_e_montada_dos_dados(stages):
     texto = confirmation_text(stages, _ate_a_confirmacao(stages), 2)
-    assert "• CPF: 12345678901" in texto and "• Categoria: tv" in texto
+    assert "- CPF: 12345678901" in texto and "- Categoria: tv" in texto
 
 
 def test_state_view(stages):
@@ -341,7 +341,7 @@ def test_conversa_inteira_coleta_confirma_executa(agente, monkeypatch, chamadas_
     r = _chat(agente, "cpf 12345678901, minha internet caiu")
     # Confirmação montada pelo servidor, sem o modelo redigir.
     assert r.state["stage"] == "confirmacao"
-    assert "• CPF: 12345678901" in r.content and "• Categoria: internet" in r.content
+    assert "- CPF: 12345678901" in r.content and "- Categoria: internet" in r.content
     assert len(modelo.contextos) == 1
     assert chamadas_http == []
 
@@ -387,7 +387,7 @@ def test_acao_que_falha_nao_avanca_e_nao_repete_sozinha(agente, monkeypatch):
     modelo.responde()
     r = _chat(agente, "e aí?", sessao="s-falha")
     assert len(chamadas) == 1  # sem confirmar de novo, não tenta de novo
-    assert "• CPF" in r.content
+    assert "- CPF" in r.content
 
 
 def test_acao_em_andamento_em_outra_mensagem_e_409(agente, monkeypatch, chamadas_http):

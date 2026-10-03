@@ -24,10 +24,12 @@ import type {
   MemoryBackend,
   ModelParams,
   ModelProviderSummary,
+  ProcedureStage,
   SchemaField,
   ToolSummary,
 } from "@/lib/types";
 import { SchemaFieldsEditor, emptyField, schemaProblem } from "@/components/schema/schema-fields-editor";
+import { StagesEditor, cleanStages, stagesProblem, starterStages } from "@/components/agents/stages-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -55,6 +57,11 @@ const AGENT_KINDS: { kind: AgentKind; label: string; description: string }[] = [
     label: "Analista",
     description: "One-shot no /analyze: recebe um documento e devolve o objeto do response_schema.",
   },
+  {
+    kind: "procedural",
+    label: "Procedural",
+    description: "Fluxo em etapas no /chat: coleta dados, confirma e executa uma ação. O servidor conduz as etapas.",
+  },
 ];
 
 interface FormValues {
@@ -62,6 +69,8 @@ interface FormValues {
   name: string;
   kind: AgentKind;
   responseSchema: SchemaField[];
+  /** Só em procedural. */
+  stages: ProcedureStage[];
   instructions: string;
   tools: string[];
   modelId: string;
@@ -136,6 +145,7 @@ function valuesFrom(agent?: AgentDefinition, instructions?: string[]): FormValue
     name: agent?.name ?? "",
     kind: agent?.kind ?? "conversational",
     responseSchema: agent?.response_schema ?? [],
+    stages: agent?.stages ?? [],
     instructions: (instructions ?? agent?.instructions ?? []).join("\n"),
     tools: agent?.tools ?? [],
     modelId: agent?.model_id ?? DEFAULT_MODEL.id,
@@ -208,6 +218,9 @@ function buildUpdate(values: FormValues, agent: AgentDefinition, models: ModelOp
   }
   if (JSON.stringify(values.responseSchema) !== JSON.stringify(agent.response_schema)) {
     payload.response_schema = values.responseSchema;
+  }
+  if (values.kind === "procedural" && JSON.stringify(cleanStages(values.stages)) !== JSON.stringify(agent.stages ?? [])) {
+    payload.stages = cleanStages(values.stages);
   }
   const provider = models.find((m) => m.id === values.modelId)?.provider;
   const params = paramsFrom(values, provider);
@@ -310,6 +323,7 @@ export function AgentForm({
         : values.responseSchema.length === 0
           ? "Um agente analista precisa de ao menos um campo na saída."
           : schemaProblem(values.responseSchema),
+    stages: values.kind === "procedural" ? stagesProblem(values.stages) : null,
   };
   const hasErrors = Object.values(errors).some(Boolean);
 
@@ -326,6 +340,15 @@ export function AgentForm({
 
   function handleNameChange(name: string) {
     setValues((prev) => ({ ...prev, name, agentType: slugTouched ? prev.agentType : slugify(name) }));
+  }
+
+  function changeKind(kind: AgentKind) {
+    // Um procedural nasce com um ponto de partida que funciona: coletar e confirmar.
+    setValues((prev) => ({
+      ...prev,
+      kind,
+      stages: kind === "procedural" && prev.stages.length === 0 ? starterStages() : prev.stages,
+    }));
   }
 
   function toggleTool(tool: string) {
@@ -364,6 +387,7 @@ export function AgentForm({
           knowledge_collection: values.knowledgeCollection || null,
           dependency_fields: values.dependencyFields,
           response_schema: analysis ? values.responseSchema : [],
+          stages: values.kind === "procedural" ? cleanStages(values.stages) : [],
           model_params: paramsFrom(values, model.provider),
           timeout_seconds: values.timeoutSeconds.trim() ? Number(values.timeoutSeconds) : null,
           // Omitidos em analysis: o backend recusa com 422 um campo que não
@@ -437,9 +461,9 @@ export function AgentForm({
       <FormSection
         variant={variant}
         title="Tipo"
-        description="Conversacional mantém sessão e histórico e responde texto. Analista é one-shot: recebe um documento e devolve um objeto estruturado."
+        description="Conversacional mantém sessão e histórico e responde texto. Analista é one-shot: recebe um documento e devolve um objeto estruturado. Procedural conduz a conversa por etapas definidas aqui."
       >
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-2 sm:grid-cols-3">
           {AGENT_KINDS.map(({ kind, label, description }) => {
             const selected = values.kind === kind;
             return (
@@ -457,7 +481,7 @@ export function AgentForm({
                   value={kind}
                   checked={selected}
                   disabled={mode === "edit"}
-                  onChange={() => update("kind", kind)}
+                  onChange={() => changeKind(kind)}
                   className="mt-0.5 accent-primary"
                 />
                 <span className="flex flex-col gap-0.5">
@@ -505,6 +529,22 @@ export function AgentForm({
           />
         </Field>
       </FormSection>
+
+      {values.kind === "procedural" && (
+        <FormSection
+          variant={variant}
+          title="Etapas"
+          description="O fluxo que o servidor conduz, na ordem. A etapa atual é sempre a primeira que ainda não está pronta: corrigir um dado volta para a etapa dele. Uma ação só roda depois de uma confirmação."
+        >
+          <Field label="Etapas" error={fieldError("stages")}>
+            <StagesEditor
+              stages={values.stages}
+              onChange={(stages) => update("stages", stages)}
+              tools={availableTools}
+            />
+          </Field>
+        </FormSection>
+      )}
 
       <FormSection
         variant={variant}
@@ -829,7 +869,11 @@ export function AgentForm({
       <FormSection
         variant={variant}
         title="Tools"
-        description="Funções que o agente pode chamar durante a execução."
+        description={
+          values.kind === "procedural"
+            ? "Consultas que o modelo pode fazer ao redigir a resposta. Tool com efeito colateral entra como etapa de ação, não aqui."
+            : "Funções que o agente pode chamar durante a execução."
+        }
         action={
           <Link href="/tools" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
             <Wrench className="size-3" /> Gerenciar tools
@@ -846,18 +890,24 @@ export function AgentForm({
           </p>
         ) : (
           <div className="grid gap-2 sm:grid-cols-2">
-            {availableTools.map((tool) => (
+            {availableTools.map((tool) => {
+              // Num procedural, efeito só por etapa de ação — depois da confirmação.
+              const blocked =
+                values.kind === "procedural" && tool.side_effect === true && !values.tools.includes(tool.tool_name);
+              return (
               <label
                 key={tool.tool_name}
-                title={tool.description ?? undefined}
+                title={blocked ? "Tem efeito colateral: use como etapa de ação" : (tool.description ?? undefined)}
                 className={cn(
                   "flex cursor-pointer items-start gap-2.5 rounded-lg border border-input px-3 py-2 text-[13px] hover:bg-accent/50",
-                  !tool.enabled && "opacity-60"
+                  (!tool.enabled || blocked) && "opacity-60",
+                  blocked && "cursor-not-allowed"
                 )}
               >
                 <input
                   type="checkbox"
                   checked={values.tools.includes(tool.tool_name)}
+                  disabled={blocked}
                   onChange={() => toggleTool(tool.tool_name)}
                   className="mt-0.5 accent-primary"
                 />
@@ -876,7 +926,8 @@ export function AgentForm({
                   <span className="truncate font-mono text-xs text-muted-foreground">{tool.tool_name}</span>
                 </span>
               </label>
-            ))}
+              );
+            })}
           </div>
         )}
       </FormSection>

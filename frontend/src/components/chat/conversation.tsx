@@ -22,13 +22,14 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
+import { apiUrl } from "@/lib/http";
 import { createId } from "@/lib/id";
 import { MEMORY_BACKENDS, modelLabel, parseDependencies } from "@/lib/agent-meta";
 import { sessionTitle } from "@/lib/sessions";
 import { useChat } from "@/lib/use-chat";
 import { testDependenciesText } from "@/lib/test-context";
 import { useLocalStorage, writeLocalStorage } from "@/lib/use-local-storage";
-import type { Attachment, ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage, ProcedureState } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogBody, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -47,6 +48,7 @@ import { AgentEditSheet } from "@/components/chat/agent-edit-sheet";
 import { ChatInspector } from "@/components/chat/chat-inspector";
 import { Composer } from "@/components/chat/composer";
 import { MessageBubble } from "@/components/chat/message-bubble";
+import { ProcedureStrip } from "@/components/chat/procedure-progress";
 
 const SUGGESTIONS = [
   { icon: Sparkles, label: "O que você consegue fazer?", prompt: "O que você consegue fazer por mim?" },
@@ -87,7 +89,12 @@ export function Conversation({
   const toast = useToast();
   const { userId, getAgent, sessions, refreshSessions, backendReachable, agents } = useWorkspace();
   const agent = getAgent(agentType);
-  const { messages, send, stop, truncateFrom, isStreaming } = useChat({ agentType, userId, initialMessages });
+  const { messages, send, stop, truncateFrom, isStreaming, procedureState, setProcedureState } = useChat({
+    agentType,
+    userId,
+    initialMessages,
+  });
+  const procedural = agent?.kind === "procedural";
 
   const [inspectorPref, setInspectorPref] = useLocalStorage<"open" | "closed">("agent-service:inspector", "closed");
   const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false);
@@ -114,6 +121,23 @@ export function Conversation({
   }, [completedSessionId, isStreaming, messages, onFirstExchangeComplete]);
 
   const activeSessionId = sessionId ?? createdSessionId ?? null;
+
+  // Conversa reaberta com um agente procedural: as etapas vêm do backend, não das mensagens.
+  useEffect(() => {
+    if (!procedural || !sessionId) return;
+    const controller = new AbortController();
+    fetch(apiUrl(`/api/agents/${encodeURIComponent(agentType)}/procedures/${encodeURIComponent(sessionId)}`), {
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? (res.json() as Promise<ProcedureState>) : null))
+      .then((state) => {
+        if (state) setProcedureState(state);
+      })
+      .catch(() => {
+        // Sem o estado a conversa continua funcionando; a faixa só começa da etapa 1.
+      });
+    return () => controller.abort();
+  }, [procedural, agentType, sessionId, setProcedureState]);
   const session = sessionId ? sessions.find((s) => s.session_id === sessionId) : undefined;
   const totalTokens = messages.reduce((sum, m) => sum + (m.usage?.total_tokens ?? 0), 0);
   const inspectorOpen = inspectorPref === "open";
@@ -186,6 +210,7 @@ export function Conversation({
     dependenciesCount: dependencies.count,
     dryRun,
     onDryRunChange: setDryRun,
+    procedureState,
     onEditAgent: () => {
       setMobileInspectorOpen(false);
       setEditAgentOpen(true);
@@ -246,6 +271,10 @@ export function Conversation({
             </Button>
           </div>
         </header>
+
+        {procedural && agent && (
+          <ProcedureStrip state={procedureState} stages={agent.stages ?? []} onOpen={() => openInspector()} />
+        )}
 
         {blockedReason && messages.length > 0 && (
           <div className="flex items-center gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-[13px] text-warning">

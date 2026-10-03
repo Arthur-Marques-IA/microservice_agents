@@ -153,6 +153,30 @@ export function IntegrationPanel({
         </div>
       )}
 
+      {contract.kind === "procedural" && (
+        <div className="flex flex-col gap-2 rounded-lg border border-border p-4 text-[13px]">
+          <h3 className="text-sm font-semibold">Agente procedural: a resposta traz o estado</h3>
+          <p className="text-muted-foreground">
+            Além do texto, o <code className="font-mono text-xs">/chat</code> devolve{" "}
+            <code className="font-mono text-xs">state</code> (no stream, o evento{" "}
+            <code className="font-mono text-xs">state</code>, antes do <code className="font-mono text-xs">done</code>
+            ): a etapa atual, o que foi coletado, o que falta e, quando{" "}
+            <code className="font-mono text-xs">state.done</code> for verdadeiro, o resultado em{" "}
+            <code className="font-mono text-xs">state.result</code>. Não é preciso interpretar o texto para saber que
+            acabou.
+          </p>
+          <p className="text-muted-foreground">
+            Mensagens da mesma sessão são processadas uma de cada vez: a segunda recebe{" "}
+            <code className="font-mono text-xs">409</code> enquanto a primeira não termina. Espere a resposta e reenvie.
+          </p>
+          {contract.state_url && (
+            <p className="text-muted-foreground">
+              Estado de uma conversa: <code className="break-all font-mono text-xs">GET {contract.state_url}</code>
+            </p>
+          )}
+        </div>
+      )}
+
       {contract.dependencies.length > 0 && (
         <div className="flex flex-col gap-2">
           <h3 className="text-sm font-semibold">Campos que este agente espera</h3>

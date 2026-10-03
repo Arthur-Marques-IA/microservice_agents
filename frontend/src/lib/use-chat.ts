@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { parseSseStream } from "@/lib/sse";
 import { apiUrl, readErrorMessage } from "@/lib/http";
 import { createId } from "@/lib/id";
-import type { Attachment, ChatMessage, UsageMetrics } from "@/lib/types";
+import type { Attachment, ChatMessage, ProcedureState, UsageMetrics } from "@/lib/types";
 
 interface SendOptions {
   text: string;
@@ -33,6 +33,8 @@ export function useChat({
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? []);
   const [isStreaming, setIsStreaming] = useState(false);
+  /** Só em agente procedural: a etapa e os dados, atualizados a cada resposta (evento `state`). */
+  const [procedureState, setProcedureState] = useState<ProcedureState | null>(null);
   const streamingRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -104,6 +106,8 @@ export function useChat({
           } else if (sseEvent.event === "run") {
             const { run_id } = JSON.parse(sseEvent.data) as { run_id?: string };
             if (run_id) patchMessage(assistantId, (m) => ({ ...m, runId: run_id }));
+          } else if (sseEvent.event === "state") {
+            setProcedureState(JSON.parse(sseEvent.data) as ProcedureState);
           } else if (sseEvent.event === "error") {
             const { message: detail } = JSON.parse(sseEvent.data) as { message?: string };
             streamError = detail || "Falha ao executar o agente.";
@@ -139,5 +143,5 @@ export function useChat({
     });
   }, []);
 
-  return { messages, send, stop, truncateFrom, isStreaming };
+  return { messages, send, stop, truncateFrom, isStreaming, procedureState, setProcedureState };
 }

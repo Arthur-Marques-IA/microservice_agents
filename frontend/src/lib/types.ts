@@ -79,6 +79,10 @@ export interface IntegrationContract {
   chat_url: string;
   stream_url: string | null;
   response_schema: SchemaField[];
+  /** Só em `kind: "procedural"`. */
+  stages?: ProcedureStage[];
+  /** Só em `kind: "procedural"`: onde ler o estado de uma conversa (`{session_id}` a trocar). */
+  state_url?: string | null;
   dependencies: DependencyContract[];
   request_example: Record<string, unknown>;
   curl: string;
@@ -91,6 +95,8 @@ export interface ChatResponse {
   content: string;
   run_id: string;
   trace_id?: string | null;
+  /** Só em agente procedural. */
+  state?: ProcedureState | null;
 }
 
 export interface ChatMessage {
@@ -220,7 +226,54 @@ export interface DependencyFieldInput {
   default?: unknown;
 }
 
-export type AgentKind = "conversational" | "analysis";
+export type AgentKind = "conversational" | "analysis" | "procedural";
+
+/** Tipo de etapa de um agente procedural (`agents/procedural.py`). */
+export type ProcedureStageType = "collect" | "confirm" | "action";
+
+/** Campo coletado numa etapa `collect`: o de `dependency_fields`, mais `pattern` (regex) em string. */
+export interface ProcedureField extends DependencyField {
+  pattern?: string | null;
+}
+
+/** Etapa de um agente `kind: "procedural"`. */
+export interface ProcedureStage {
+  id: string;
+  type: ProcedureStageType;
+  /** O que a etapa quer obter — vai para o modelo e, numa `confirm`, abre a mensagem. */
+  goal: string;
+  /** Só em `collect`. */
+  fields?: ProcedureField[];
+  /** Só em `action`: a tool que o servidor chama com os dados coletados. */
+  tool?: string;
+  /** Só em `action` com tool builtin: a função da toolkit. */
+  function?: string;
+}
+
+/** O `state` do `/chat` num agente procedural — e o `GET /agents/{t}/procedures/{sessão}`. */
+export interface ProcedureState {
+  stage: string | null;
+  stage_type: ProcedureStageType | null;
+  stage_index: number;
+  stages_total: number;
+  stages: { id: string; type: ProcedureStageType; goal: string; status: "done" | "current" | "pending" }[];
+  collected: Record<string, unknown>;
+  missing: { name: string; label: string; type: string; description: string; enum?: unknown[] }[];
+  invalid: Record<string, string>;
+  actions: Record<string, { status: "running" | "done" | "failed"; attempts?: number; result?: unknown; error?: string | null }>;
+  done: boolean;
+  result: { collected: Record<string, unknown>; actions: Record<string, unknown> } | null;
+  dry_run?: boolean;
+}
+
+/** `GET /agents/{t}/procedures`: em que etapa as conversas estão paradas. */
+export interface ProcedureFunnel {
+  agent_type: string;
+  stages: { id: string; type: ProcedureStageType; goal: string; sessions: number }[];
+  done: number;
+  orphaned: number;
+  total: number;
+}
 
 /** Vocabulário de campo composto — o mesmo do backend (`field_schema.py`). */
 export type FieldType = "string" | "integer" | "number" | "boolean" | "object" | "array";
@@ -269,6 +322,8 @@ export interface AgentDefinition {
   kind: AgentKind;
   /** Só em `kind: "analysis"`: a forma do objeto que o `/analyze` devolve. */
   response_schema: SchemaField[];
+  /** Só em `kind: "procedural"`: as etapas do fluxo. */
+  stages?: ProcedureStage[];
   instructions: string[];
   tools: string[];
   model_provider: string | null;
@@ -298,6 +353,7 @@ export interface AgentDefinitionInput {
    * agente one-shot não tem histórico nem memória. */
   kind?: AgentKind;
   response_schema?: SchemaField[];
+  stages?: ProcedureStage[];
   instructions: string[];
   tools?: string[];
   model_provider?: string | null;

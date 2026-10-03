@@ -372,14 +372,16 @@ def confirmation_text(stages: list[dict[str, Any]], state: dict[str, Any], index
     """O texto da etapa `confirm`, montado dos dados coletados — sem modelo, para
     a pessoa confirmar exatamente o que o sistema vai usar."""
     names = set(fields_before(stages, index))
+    # Lista em Markdown: o console renderiza como lista, e em texto puro (WhatsApp,
+    # e-mail) "- campo: valor" continua legível — "•" numa linha só não.
     lines = [
-        f"• {f['label']}: {_display(state['slots'][f['name']])}"
+        f"- {f['label']}: {_display(state['slots'][f['name']])}"
         for f in collect_fields(stages)
         if f["name"] in names and state["slots"].get(f["name"]) is not None
     ]
     goal = stages[index]["goal"]
     head = goal if goal else "Confira os dados antes de continuar:"
-    return f"{head}\n" + "\n".join(lines) + "\n\nEstá tudo certo? Responda sim para confirmar ou diga o que corrigir."
+    return f"{head}\n\n" + "\n".join(lines) + "\n\nEstá tudo certo? Responda sim para confirmar ou diga o que corrigir."
 
 
 def reply_context(
