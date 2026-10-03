@@ -152,6 +152,7 @@ def collect_stream(
         "content": "",
         "usage": None,
         "error": None,
+        "state": None,
     }
     chunks: list[str] = []
     for event, data in client.chat_stream(body):
@@ -166,6 +167,8 @@ def collect_stream(
             result["usage"] = data
         elif event == "error":
             result["error"] = data.get("message") or "falha na execução do agente"
+        elif event == "state":  # só agente procedural: etapa, coletado, faltando
+            result["state"] = data
     result["content"] = "".join(chunks)
     return result
 
@@ -184,6 +187,10 @@ def send(st: State, body: dict[str, Any], *, live: bool) -> dict[str, Any]:
 
 
 def _footer(result: dict[str, Any]) -> None:
+    if result.get("state"):
+        from agent_service.cli.agents import procedure_line
+
+        err_console.print(procedure_line(result["state"]), highlight=False)
     usage = result.get("usage") or {}
     parts = [f"run {result['run_id']}"]
     if usage.get("total_tokens"):

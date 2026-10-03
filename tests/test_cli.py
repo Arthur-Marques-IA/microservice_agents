@@ -158,6 +158,22 @@ def test_chat_streams_and_coerces_dependencies(api):
     assert json.loads(calls[-1].content)["session_id"] == body["session_id"]
 
 
+def test_chat_with_procedural_agent_returns_and_prints_the_stage(api):
+    routes, _ = api
+    routes[("GET", "/agents/abertura")] = httpx.Response(200, json={**AGENT, "agent_type": "abertura", "dependency_fields": []})
+    state = {"stage": "problema", "stage_index": 1, "stages_total": 4, "done": False,
+             "missing": [{"name": "descricao"}], "invalid": {}, "collected": {"cpf": "1"}}
+    routes[("POST", "/chat/stream")] = httpx.Response(
+        200,
+        content=_sse(("run", {"run_id": "r1"}), ("message", {"content": "E o problema?"}), ("state", state), ("done", {})),
+        headers={"content-type": "text/event-stream"},
+    )
+    out = json.loads(_run("--json", "chat", "abertura", "-m", "oi").stdout)
+    assert out["state"]["stage"] == "problema"
+    result = _run("chat", "abertura", "-m", "oi")
+    assert "[2/4 problema] faltando: descricao" in result.stderr
+
+
 def test_chat_stream_error_event_exits_nonzero(api):
     routes, _ = api
     routes[("GET", "/agents/suporte")] = httpx.Response(200, json={**AGENT, "dependency_fields": []})

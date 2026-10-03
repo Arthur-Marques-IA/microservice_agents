@@ -266,6 +266,17 @@ def test_stages_entram_na_versao_so_do_procedural(agente):
     assert config_hash(effective_config(definition)) != config_hash(effective_config({**definition, "stages": STAGES[:1]}))
 
 
+def test_contrato_de_integracao_mostra_etapas_e_onde_ler_o_estado(agente):
+    from agent_service.api.integration_routes import get_integration_contract
+
+    contrato = get_integration_contract(agente, base_url="https://kuro.test")
+    assert contrato.endpoint == "/chat" and contrato.stream_url == "https://kuro.test/chat/stream"
+    assert [s["id"] for s in contrato.stages] == ["identificacao", "problema", "confirmacao", "abrir"]
+    assert contrato.state_url == "https://kuro.test/agents/proc_teste/procedures/{session_id}"
+    # A tool da etapa action pede idempotency_key, que o servidor põe: não é aviso.
+    assert contrato.warnings == []
+
+
 # -- o turno, pelo /chat -------------------------------------------------------------------
 
 
