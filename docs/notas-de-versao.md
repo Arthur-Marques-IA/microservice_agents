@@ -34,6 +34,13 @@ timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` pa
   limitada por `QUEUE_MAX_SIZE` (64) e `QUEUE_MAX_WAIT_SECONDS` (30). Fila cheia ou espera esgotada:
   503 com `Retry-After`, como antes. O `timeout_seconds` do run só conta depois que ele ganha a vaga.
   A fila é por processo e em memória: não sobrevive a restart.
+- **Servidor MCP** (`kuro-mcp`, extra `mcp`): as operações da CLI como tools MCP, para agentes
+  de IA (Claude Code e outros) operarem o Kuro sem passar pelo shell. Roda na máquina de quem
+  opera, por stdio, e fala com o serviço pela API, local ou remoto, com as variáveis da CLI
+  (`KURO_API_URL`, `KURO_API_KEY`, `KURO_CA_BUNDLE`). Remover, restaurar e promover pedem
+  confirmação ao usuário pelo cliente MCP (elicitation); cliente sem esse suporte recebe erro com
+  o comando equivalente da CLI. `chat`, `analyze`, `tool_invoke` e `eval` rodam em `dry_run` por
+  padrão. Guia em `docs/mcp.md`.
 
 ---
 

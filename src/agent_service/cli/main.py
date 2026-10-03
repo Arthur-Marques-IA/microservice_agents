@@ -32,10 +32,7 @@ from agent_service.cli.common import (
     print_json,
     state,
 )
-
-# 127.0.0.1, não localhost: no Windows `localhost` tenta IPv6 (::1) primeiro e o
-# port-forward do Docker Desktop nesse caminho derruba conexões de forma intermitente.
-DEFAULT_URL = "http://127.0.0.1:58000"
+from agent_service.cli.connection import DEFAULT_URL
 
 app = typer.Typer(
     name="kuro",

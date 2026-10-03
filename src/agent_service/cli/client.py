@@ -292,6 +292,11 @@ class Client:
     def export_cases(self, **params: Any) -> list[dict[str, Any]]:
         return self._request("GET", "/observability/export", params={k: v for k, v in params.items() if v is not None})
 
+    def overview(self, **params: Any) -> dict[str, Any]:
+        """Panorama do dashboard: totais × período anterior, série, agentes, versões
+        e tools falhando. Exige escopo admin."""
+        return self._request("GET", "/observability/overview", params={k: v for k, v in params.items() if v is not None})
+
     def run_trace(self, run_id: str) -> dict[str, Any]:
         return self._request("GET", f"/observability/runs/{run_id}/trace")
 
