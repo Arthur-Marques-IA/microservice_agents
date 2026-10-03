@@ -126,7 +126,7 @@ do `typer` para os três reaproveitarem.
 
 **Adiado de propósito** (há um consumidor só): tabela `api_keys` multi-chave, multi-tenancy
 estrutural/RLS, RBAC no console, snapshot com cache e `LISTEN/NOTIFY`, dependências `tool_only`,
-procedural (§4.2, que migra depois a ficha do R8 e o reset do R4), sandbox Python (manter
+migrar a ficha do R8 e o reset do R4 para o procedural (§4.2, já disponível), sandbox Python (manter
 `CUSTOM_PYTHON_TOOLS_ENABLED` desligado em produção), exportador OpenTelemetry e GitOps de tools e
 collections.
 
@@ -250,11 +250,33 @@ Para ficar redondo:
 - ~~**TUI de verdade.**~~ **Feito** (2026-10-03, [docs/tui.md](docs/tui.md)): `kuro dash` em
   [Textual](https://textual.textualize.io), com as execuções chegando ao vivo (filtro por agente,
   status e testes), o trace navegável (spans de modelo e tools, com o caminho até um erro já
-  aberto) e o panorama do `/observability/overview`. **Falta:** o funil por etapa, que depende do
-  procedural (§4.2), e operar pelo painel (testar e editar um agente). Decidir sobre essa parte
+  aberto) e o panorama do `/observability/overview`. **Falta:** o funil por etapa (o procedural
+  já existe, §4.2; o funil está no console e em `kuro agents procedures`), e operar pelo painel (testar e editar um agente). Decidir sobre essa parte
   depois de usar, porque o shell já cobre.
 
-### 4.2 Agente procedural (etapas)
+### 4.2 ~~Agente procedural (etapas)~~ — feito em 2026-10-03
+
+**Feito** como desenhado abaixo, com estes detalhes ([docs/conceitos.md](docs/conceitos.md#agente-procedural-fluxo-em-etapas)):
+
+- `kind="procedural"` com `stages`, de três tipos: `collect` (campos com `enum` e `pattern`),
+  `confirm` e `action`. Máquina de estados pura em `agents/procedural.py`, estado em
+  `procedure_runs` (migração 0007).
+- A confirmação é montada dos dados, sem LLM. Uma `action` só existe depois de uma `confirm`,
+  validado no cadastro.
+- A ação é reservada com trava otimista e gravada antes da resposta; nunca roda duas vezes. Se
+  falhar, a pessoa precisa confirmar de novo. 409 para mensagem concorrente na mesma sessão.
+- `ChatResponse.state` e o evento SSE `state`; `GET /agents/{t}/procedures/{sessão}` e o funil
+  `GET /agents/{t}/procedures`. Tudo também na CLI (`kuro agents procedures`), no MCP e no console
+  (editor de etapas, faixa e etapas no chat, funil).
+
+**Ficou de fora, de propósito:**
+- o webhook `on_complete`, porque precisa de uma fila de entrega durável (Postgres `SKIP LOCKED`, com
+  retentativa), que é um subsistema à parte. Por enquanto quem integra lê `state.done` e
+  `state.result` na resposta;
+- a migração da ficha do R8 e do reset do R4 para procedural;
+- o funil no `kuro dash`.
+
+**Desenho original:**
 
 **Verificação no Agno 3.0.9 instalado:**
 
@@ -459,8 +481,9 @@ Os prazos são estimativas grosseiras para dar ordem de grandeza, não compromis
 | ~~**S2**~~ feito | Alembic, `config_hash` + `agent_versions`, `kuro eval` v0 determinístico, draft como agente comum + `promote` | Mudança de agente provada antes de ir para prod |
 | ~~**S3**~~ feito | Parâmetros do modelo, `enum`, timeout, limite de simultâneas, metadata, shadow (referência, concordância, export), `/ready`, agentes como código, guia de integração | O Regente integra sozinho |
 | ~~**Operação**~~ feito | Servidor MCP (`kuro-mcp`), `kuro dash`, documentação dividida por assunto | Agentes de IA operam o Kuro por tools; humanos, pelo terminal |
+| ~~**Procedural**~~ feito | `kind="procedural"`: etapas, confirmação sem LLM, ação com trava, `state` no `/chat`, funil, console | Fluxos guiados conduzidos pelo servidor |
 | **Regente**, contínuo | R8 shadow → prod, R4 shadow → prod, R6 shadow → assistido → autônomo | Regente fora do `ServiceLLM::chatJson()` |
-| **Depois** | `api_keys`/tenant/RLS, procedural, `tool_only`, cache com `LISTEN/NOTIFY`, lock de migração, sandbox Python, LLM-juiz no eval, `agente@versão`, `kuro up/down`, MCP por HTTP, GitOps de tools/collections | Plataforma completa, por necessidade |
+| **Depois** | `api_keys`/tenant/RLS, webhook de conclusão do procedural, `tool_only`, cache com `LISTEN/NOTIFY`, lock de migração, sandbox Python, LLM-juiz no eval, `agente@versão`, `kuro up/down`, MCP por HTTP, GitOps de tools/collections | Plataforma completa, por necessidade |
 
 A paridade CLI × console está fechada e documentada como matriz em [docs/cli.md](docs/cli.md#paridade-entre-api-cli-e-console) (as exceções, com motivo,
 estão na §6). O console foi atualizado com o que os Sprints 2 e 3 trouxeram em 2026-09-25.

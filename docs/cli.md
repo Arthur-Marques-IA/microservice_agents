@@ -18,6 +18,7 @@ se configura pelo console dá para configurar pela CLI, e vice-versa:
 | Validar sem gravar | `POST`/`PUT /agents?dry_run=true` | `agents apply --dry-run` | — |
 | Agentes como código (diretório) | — | `agents export`, `agents apply -f <dir>` | — |
 | Avaliar contra um dataset | — | `eval` | — |
+| Agente procedural: estado de uma conversa e funil | `/agents/{t}/procedures` | `agents procedures` | faixa do chat, aba Execuções |
 | O que o agente aprendeu (regras de feedback) | `/agents/{t}/feedback` | `agents feedback` | aba Aprendizado |
 | Histórico das regras e rollback | `/agents/{t}/feedback/versions` | `agents feedback --versions\|--rollback` | aba Aprendizado |
 | Contrato de integração | `/agents/{t}/integration` | `agents integrate` | aba Integração |
@@ -127,7 +128,9 @@ uv run kuro analyze extrator-contrato -a contrato.pdf              # agente anal
 ```
 
 A sessão do chat fica salva por agente, então mensagens seguidas continuam a
-mesma conversa. Use `--new-session` para recomeçar.
+mesma conversa. Use `--new-session` para recomeçar. Com um agente procedural, o rodapé mostra a etapa:
+`[2/4 problema] faltando: descricao`, e `kuro agents procedures <agente> [sessão]` mostra o
+funil ou o estado de uma conversa.
 
 **Ensinar com feedback**
 
