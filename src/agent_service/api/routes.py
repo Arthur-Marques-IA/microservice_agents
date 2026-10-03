@@ -26,6 +26,7 @@ from agno.run.agent import RunEvent
 
 from agent_service.agents.attachments import AttachmentError, AttachmentIn, build_media, describe_attachments
 from agent_service.agents.dependency_fields import DependencyValidationError, validate_dependencies
+from agent_service.agents.procedure_runner import ProcedureBusyError, is_procedural, run_procedural_turn
 from agent_service.agents.registry import UnknownAgentTypeError, get_agent_with_definition, list_agent_types
 from agent_service.config import get_settings
 from agent_service.documents.collections import EmbedderError
@@ -150,6 +151,10 @@ class ChatResponse(BaseModel):
     agent_version: int | None = None
     """Versão da configuração inteira que respondeu (`GET /agents/{t}/revisions`)."""
     config_hash: str | None = None
+    state: dict[str, Any] | None = None
+    """Só em agente `kind="procedural"`: a etapa atual, o que foi coletado, o que
+    falta e, quando `done`, o `result`. Quem integra sabe quando acabou sem
+    interpretar o texto (ver `agents/procedural.py::state_view`)."""
 
 
 def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
@@ -195,6 +200,7 @@ def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
         audio=tuple(media["audio"]),
         videos=tuple(media["videos"]),
         files=tuple(media["files"]),
+        definition=definition,
     )
     return agent, run
 
@@ -283,6 +289,8 @@ def _check_input_size(text: str, field: str) -> None:
 async def chat(request: ChatRequest) -> ChatResponse:
     _check_input_size(request.message, "message")
     agent, run = await run_in_threadpool(_resolve, request, "chat")
+    if is_procedural(run):
+        return await _chat_procedural(request, agent, run)
 
     chunks: list[str] = []
     final_content: str | None = None
@@ -306,6 +314,35 @@ async def chat(request: ChatRequest) -> ChatResponse:
         trace_id=run.trace_id,
         agent_version=run.agent_version,
         config_hash=run.config_hash,
+    )
+
+
+async def _chat_procedural(request: ChatRequest, agent: Agent, run: RunContext) -> ChatResponse:
+    chunks: list[str] = []
+    state: dict[str, Any] | None = None
+    async with _run_slot():
+        try:
+            async with aclosing(run_procedural_turn(agent, run)) as events:
+                async for kind, data in events:
+                    if kind == "message":
+                        chunks.append(data)
+                    elif kind == "state":
+                        state = data
+                    elif kind == "error":
+                        raise HTTPException(status_code=502, detail=data)
+        except RunTimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except ProcedureBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ChatResponse(
+        agent_type=request.agent_type,
+        session_id=request.session_id,
+        content="".join(chunks),
+        run_id=run.run_id,
+        trace_id=run.trace_id,
+        agent_version=run.agent_version,
+        config_hash=run.config_hash,
+        state=state,
     )
 
 
@@ -433,7 +470,8 @@ async def chat_stream(request: ChatRequest) -> EventSourceResponse:
     manual do stream (ver `frontend/`), não com a API `EventSource`.
 
     Eventos: `run` ({run_id, trace_id}, antes de tudo), `message` ({content}, a
-    cada trecho), `usage` (métricas do run), `error` ({message}) e `done`.
+    cada trecho), `usage` (métricas do run), `error` ({message}), `state` (só em
+    agente procedural: o mesmo `state` do `/chat`, antes do `done`) e `done`.
     """
     agent, run = await run_in_threadpool(_resolve, request, "chat.stream")
     trace_id = run.trace_id
@@ -445,9 +483,27 @@ async def chat_stream(request: ChatRequest) -> EventSourceResponse:
         "config_hash": run.config_hash,
     }
 
+    async def procedural_events():
+        async with aclosing(run_procedural_turn(agent, run)) as events:
+            async for kind, data in events:
+                if kind == "message":
+                    yield {"event": "message", "data": json.dumps({"content": data})}
+                elif kind == "usage":
+                    yield {"event": "usage", "data": json.dumps(data)}
+                elif kind == "error":
+                    yield {"event": "error", "data": json.dumps({"message": data})}
+                elif kind == "state":
+                    yield {"event": "state", "data": json.dumps(data, default=str)}
+
     async def event_generator():
         yield {"event": "run", "data": json.dumps(run_event)}
         try:
+            if is_procedural(run):
+                async with _run_slot():
+                    async for item in procedural_events():
+                        yield item
+                yield {"event": "done", "data": "{}"}
+                return
             async with _run_slot(), aclosing(traced_run_events(agent, run)) as events:
                 async for event in events:
                     if event.event == RunEvent.run_content.value and event.content:
@@ -460,6 +516,8 @@ async def chat_stream(request: ChatRequest) -> EventSourceResponse:
             yield {"event": "error", "data": json.dumps({"message": exc.detail, "status": exc.status_code})}
         except RunTimeoutError as exc:
             yield {"event": "error", "data": json.dumps({"message": str(exc), "status": 504})}
+        except ProcedureBusyError as exc:
+            yield {"event": "error", "data": json.dumps({"message": str(exc), "status": 409})}
         except Exception:
             logger.exception("Falha no streaming do agente %r", request.agent_type)
             yield {"event": "error", "data": json.dumps({"message": RUN_FAILED})}

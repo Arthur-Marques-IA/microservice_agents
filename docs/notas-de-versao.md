@@ -44,6 +44,25 @@ timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` pa
 - **`kuro dash`** (extra `tui`): painel em tela cheia no terminal, com as execuções ao vivo
   (Enter abre o trace, com os spans de modelo e tools) e o panorama do dashboard dos Logs. Funciona
   contra o serviço local ou remoto, com as mesmas flags da CLI. Guia em `docs/tui.md`.
+- **Agente procedural** (`kind="procedural"`): um fluxo em etapas (`stages`) que o servidor conduz.
+  Uma etapa coleta dados (`collect`), confirma (`confirm`) ou executa uma tool (`action`). O modelo
+  só extrai valores e redige a resposta; avançar, voltar e concluir são decididos pelo código. A
+  confirmação é montada dos dados, sem o modelo, e uma ação só roda depois dela. O que muda para
+  quem integra, tudo aditivo:
+  - `POST /chat` devolve `state` num agente procedural: `stage`, `collected`, `missing`, `invalid`,
+    `done` e, ao concluir, `result`. No `/chat/stream`, o mesmo chega no evento `state`, antes do
+    `done`. Nos outros tipos, `state` é `null` e o stream não muda.
+  - **409** quando outra mensagem da mesma sessão ainda está sendo processada: espere a resposta
+    dela e reenvie. É o que impede uma ação de rodar duas vezes.
+  - A tool de uma etapa `action` recebe os dados coletados como argumentos e como `dependencies`,
+    mais `dependencies.idempotency_key` (estável por tentativa) para descartar uma entrega repetida.
+  - `GET /agents/{t}/procedures/{session_id}` (o estado de uma conversa) e
+    `GET /agents/{t}/procedures` (o funil: quantas conversas em cada etapa; sem os testes em `dry_run`).
+
+### Como atualizar
+
+- A migração `0007` roda sozinha no startup: acrescenta `agent_definitions.stages` e cria a
+  tabela `procedure_runs`. Nada muda nos agentes que já existem, nem a versão da configuração deles.
 
 ---
 

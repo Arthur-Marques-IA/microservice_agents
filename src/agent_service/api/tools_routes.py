@@ -17,7 +17,6 @@ Depois de criada, uma tool entra na lista de um agente pelo nome
 """
 
 import copy
-import inspect
 import re
 from datetime import datetime
 from typing import Any, Literal
@@ -30,8 +29,8 @@ from agent_service.config import get_settings
 from agent_service.tools import registry, store
 from agent_service.tools.api_tool import ApiToolConfigError, required_dependencies, validate_api_config
 from agent_service.tools.catalog import BuiltinConfigError, list_builtin_catalog, validate_builtin_config
-from agent_service.tools import failures
-from agent_service.tools.context import dependencies_scope
+from agent_service.tools.invoke import ToolUnavailableError
+from agent_service.tools.invoke import invoke_tool as run_tool
 from agent_service.tools.python_tool import PythonToolConfigError, validate_python_config
 from agent_service.tools.registry import ToolBuildError
 
@@ -354,51 +353,14 @@ async def invoke_tool(tool_name: str, body: ToolInvokeIn) -> dict[str, Any]:
     """Testa a tool isoladamente. `async` porque o entrypoint de uma tool
     `kind="api"` é uma corrotina (ver `tools/api_tool.py`) — chamá-lo de uma
     rota síncrona devolveria a corrotina sem executá-la."""
-    row = store.get_tool(tool_name)
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"Tool {tool_name!r} não encontrada")
-    if not row["enabled"]:
-        raise HTTPException(status_code=409, detail=f"Tool {tool_name!r} está desativada")
-    if row["kind"] == "python" and not get_settings().custom_python_tools_enabled:
-        raise HTTPException(status_code=403, detail="Tools Python estão desligadas (CUSTOM_PYTHON_TOOLS_ENABLED=false)")
-
     try:
-        built = registry.build_fresh(row)
-    except ToolBuildError as exc:
-        return ToolInvokeOut(ok=False, error=str(exc)).model_dump()
-
-    try:
-        failures.start_run()
-        with dependencies_scope(body.dependencies, dry_run=body.dry_run):
-            if row["kind"] == "api":
-                result = await built.entrypoint(**body.arguments)
-            elif row["kind"] == "python":
-                result = built(**body.arguments)
-            else:  # builtin
-                functions = getattr(built, "functions", {})
-                if not body.function_name:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"Informe function_name — uma de {sorted(functions.keys())}",
-                    )
-                fn = functions.get(body.function_name)
-                if fn is None:
-                    raise HTTPException(
-                        status_code=404, detail=f"Função {body.function_name!r} não existe em {tool_name!r}"
-                    )
-                result = fn.entrypoint(**body.arguments)
-                if inspect.isawaitable(result):  # algumas toolkits do Agno são async
-                    result = await result
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001 - erro de execução da tool, não do endpoint
-        return ToolInvokeOut(ok=False, error=f"{type(exc).__name__}: {exc}", failure="exception").model_dump()
-
-    # A tool de API devolve o erro como texto: sem isto, um HTTP 500 aparecia como "Sucesso".
-    failed = failures.lookup_failure(tool_name, result)
-    if failed is not None:
-        kind, http_status = failed
-        if kind in failures.NOT_COUNTED:  # 404: resposta da API, não falha — fica só a indicação
-            return ToolInvokeOut(ok=True, result=result, failure=kind, http_status=http_status).model_dump()
-        return ToolInvokeOut(ok=False, result=result, error=str(result), failure=kind, http_status=http_status).model_dump()
-    return ToolInvokeOut(ok=True, result=result).model_dump()
+        result = await run_tool(
+            tool_name,
+            body.arguments,
+            function_name=body.function_name,
+            dependencies=body.dependencies,
+            dry_run=body.dry_run,
+        )
+    except ToolUnavailableError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return ToolInvokeOut(**result).model_dump()

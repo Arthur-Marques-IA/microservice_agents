@@ -24,8 +24,9 @@ def test_empty_database_goes_to_head(tmp_path):
     upgrade_database(engine)  # idempotente
 
     tables = set(sa.inspect(engine).get_table_names())
-    assert {"agent_definitions", "tool_definitions", "runs", "run_spans", "agent_versions"} <= tables
+    assert {"agent_definitions", "tool_definitions", "runs", "run_spans", "agent_versions", "procedure_runs"} <= tables
     assert "agent_version" in _columns(engine, "runs")
+    assert "stages" in _columns(engine, "agent_definitions")
     assert _head(engine) == HEAD
 
 
