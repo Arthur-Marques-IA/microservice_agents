@@ -240,3 +240,10 @@ Mudou algo que quem integra ou opera percebe (campo, status HTTP, texto de erro,
 variável de ambiente, passo de deploy)? Registre em `docs/notas-de-versao.md`, na seção
 `## Não lançada` do topo, no mesmo commit — o formato e as regras de numeração estão no fim do
 arquivo. A versão no ar sai de `pyproject.toml` e aparece em `GET /health` (`version`).
+
+## Onde está o resto
+
+Este arquivo é só a receita rápida da CLI. Conceitos em `docs/conceitos.md`, comandos em
+`docs/cli.md`, integração em `docs/integracao.md`, configuração e segurança em
+`docs/operacao.md`, testes e estrutura do código em `docs/desenvolvimento.md`. O índice está
+no `README.md`. Links relativos entre documentos são conferidos por `tests/test_docs_links.py`.
