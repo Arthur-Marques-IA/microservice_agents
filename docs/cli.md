@@ -31,7 +31,8 @@ se configura pelo console dá para configurar pela CLI, e vice-versa:
 | Listar e apagar documento indexado | `/collections/{n}/documents` | `collections docs\|rm-doc` | tabela da coleção |
 | Provedores e credenciais de modelo | `/model-providers`, `/model-credentials` | `providers`, `credentials` | Chaves de API |
 | Modelos disponíveis no provedor (ao vivo) | `/model-providers/{p}/models` | `providers models <p>` | seletor de modelo do agente |
-| Execuções, traces e scores | `/observability/*` | `runs ...` | Logs |
+| Execuções, traces e scores | `/observability/*` | `runs ...`, `dash` | Logs |
+| Panorama (totais, agentes, tools falhando) | `/observability/overview` | `dash` (aba Panorama) | Logs |
 | Shadow: referência e concordância | `/observability/references`, `/agreement` | `runs reference\|agreement` | aba Execuções (analistas) |
 | Dataset a partir do shadow | `/observability/export` | `runs export` | — |
 | Conversas salvas, renomear e apagar | `/sessions` | `sessions list\|show\|rename\|delete` | Conversas |
@@ -44,6 +45,11 @@ vivo, existe só na CLI (no console, a lista de Logs atualiza sozinha);
 CLI o caminho é cadastrar e rodar `credentials test`; e o que é fluxo de CI —
 **`eval`, `runs export`, `agents export`/`apply -f <dir>` e `--dry-run`** — fica
 na CLI, porque trabalha com arquivos do repositório de quem mantém os agentes.
+
+O [servidor MCP](mcp.md) oferece estas mesmas operações como tools para agentes de
+IA, com duas exceções de propósito: cadastrar ou trocar uma chave de modelo (a
+chave passaria pelo contexto do modelo) e os comandos interativos (shell, `edit`,
+`dash`).
 
 ## O shell do Kuro
 
@@ -76,6 +82,7 @@ kuro> /agents
 | `/collections` | bases de conhecimento |
 | `/runs` · `/runs show <run_id>` | execuções recentes e o detalhe de uma |
 | `/runs tail` · `/runs stats` | execuções ao vivo e o resumo com custo |
+| `/dash` | painel em tela cheia: execuções ao vivo, trace e panorama ([detalhes](tui.md)) |
 | `/sessions` · `/sessions show <id>` | conversas guardadas e a transcrição de uma |
 | `/providers` · `/credentials` | provedores e chaves de modelo |
 | `/health` | diagnóstico do serviço |
@@ -148,6 +155,14 @@ uv run kuro sessions show <session_id>          # a transcrição, mensagem a me
 `runs` lê as execuções registradas (tokens, custo, spans); `sessions` lê a
 conversa em si. Os dois funcionam sem Langfuse.
 
+Para acompanhar com calma, o painel em tela cheia junta as duas coisas: as execuções
+chegando, o trace de cada uma (Enter) e o panorama do período. Ele precisa do extra
+`tui`, e o guia está em [tui.md](tui.md).
+
+```bash
+uv run --extra tui kuro dash --agent suporte
+```
+
 **Tools, conhecimento e modelos**
 
 ```bash
@@ -193,3 +208,8 @@ A mesma CLI funciona sem ninguém no teclado: `--json` devolve dados no stdout
 e erros em JSON no stderr, os códigos de saída são previsíveis (`0` sucesso,
 `1` falha, `2` uso incorreto, `3` serviço inacessível) e `--no-input` garante
 que nada fica esperando resposta. As receitas estão em **[AGENTS.md](../AGENTS.md)**.
+
+Para um agente que fala MCP, como o Claude Code, o caminho mais direto é o
+**[servidor MCP](mcp.md)** (`kuro-mcp`). Ele expõe as mesmas operações como tools
+tipadas, sem o agente montar comandos nem interpretar o stdout. Nele, remover,
+restaurar e promover pedem confirmação à pessoa, em vez de aceitar um `--yes`.

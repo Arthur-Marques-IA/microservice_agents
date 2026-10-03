@@ -23,7 +23,9 @@ src/agent_service/
   memory/         memória comum (Agno) e Mem0
   documents/      collections de documentos (pgvector)
   observability/  trace store local (Postgres), exportador Langfuse opcional e leitura de traces
-  cli/            CLI kuro
+  cli/            CLI kuro; client.py é o cliente HTTP que a CLI, o MCP e a TUI compartilham
+  mcp_server.py   servidor MCP (kuro-mcp): as operações da CLI como tools, por stdio
+  tui/            kuro dash (Textual): execuções ao vivo, trace e panorama
   main.py         FastAPI + AgentOS
 frontend/         console Next.js (App Router, Tailwind, componentes próprios em components/ui/)
 tests/            pytest
@@ -32,4 +34,6 @@ tests/            pytest
 **Stack:** Python 3.12, [Agno](https://docs.agno.com) (agentes, memória, tools,
 knowledge) e [AgentOS](https://docs.agno.com/agent-os) (sessões e ingestão),
 FastAPI, PostgreSQL + pgvector, Langfuse (opcional), Next.js + TypeScript +
-Tailwind, Docker Compose.
+Tailwind, Docker Compose. Do lado de quem opera: Typer + Rich (CLI), o SDK `mcp`
+(servidor MCP) e Textual (TUI). Os três são clientes da API e não entram na imagem
+do serviço.

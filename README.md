@@ -28,7 +28,7 @@ uv run kuro runs list --agent suporte         # vê o que aconteceu, com tokens 
 | ✅ **Mudança provada antes de publicar** | Draft → `kuro eval` → promote, e modo shadow para comparar com o agente que já existe antes de trocar. |
 | 🔍 **Cada execução explicada** | Chamadas ao modelo, tools, tokens, latência e custo de cada run, pelo console, pela CLI ou pela API. |
 | 📈 **Melhora com o uso** | O feedback do admin sobre uma conversa vira uma regra que o agente segue nas próximas. |
-| 🤖 **Feito para agentes operarem** | CLI com `--json`, códigos de saída previsíveis e nenhum prompt interativo sem TTY. Receitas em [AGENTS.md](AGENTS.md). |
+| 🤖 **Feito para agentes operarem** | Um [servidor MCP](docs/mcp.md) com as operações da CLI como tools, e ações destrutivas confirmadas pela pessoa. Ou a própria CLI, com `--json`, códigos de saída previsíveis e nenhum prompt interativo sem TTY. Receitas em [AGENTS.md](AGENTS.md). |
 
 ## Três portas para o mesmo serviço
 
@@ -38,7 +38,10 @@ uv run kuro runs list --agent suporte         # vê o que aconteceu, com tokens 
 </picture>
 
 - **API** para integrar: o contrato estável que os outros módulos chamam.
-- **CLI (`kuro`)** para operar e corrigir, por humanos ou por IAs.
+- **CLI (`kuro`)** para operar e corrigir, por humanos ou por IAs. Inclui o
+  [`kuro dash`](docs/tui.md), um painel em tela cheia com as execuções ao vivo, e
+  vem acompanhada do [servidor MCP (`kuro-mcp`)](docs/mcp.md), que dá as mesmas
+  operações a agentes de IA como tools.
 - **Console web** para inspecionar quando precisar: playground, logs e edição visual.
 
 As três fazem a mesma coisa. A [matriz de paridade](docs/cli.md#paridade-entre-api-cli-e-console)
@@ -97,6 +100,8 @@ curl -X POST http://127.0.0.1:58000/chat -H "Content-Type: application/json" \
 | [docs/conceitos.md](docs/conceitos.md) | agentes, tools, base de conhecimento (RAG), memória, modelos, anexos |
 | [docs/integracao.md](docs/integracao.md) | como outro sistema chama o Kuro: contrato, erros, shadow, exemplo em PHP |
 | [docs/cli.md](docs/cli.md) | o shell, os comandos e o uso por agentes de IA |
+| [docs/mcp.md](docs/mcp.md) | o servidor MCP: configurar no Claude Code, as tools e a confirmação de ações destrutivas |
+| [docs/tui.md](docs/tui.md) | `kuro dash`: execuções ao vivo, trace e panorama no terminal |
 | [docs/console.md](docs/console.md) | o console web |
 | [docs/observabilidade.md](docs/observabilidade.md) | runs, trace store, Langfuse |
 | [docs/arquitetura.md](docs/arquitetura.md) | componentes, stack e o fluxo de uma mensagem |

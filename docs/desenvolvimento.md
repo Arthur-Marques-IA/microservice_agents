@@ -3,7 +3,7 @@
 ```bash
 # backend fora do Docker (precisa do postgres do compose rodando)
 docker compose up -d postgres
-uv sync                     # o grupo dev já traz o extra `observability`, usado nos testes
+uv sync                     # o grupo dev já traz os extras `observability`, `mcp` e `tui`, usados nos testes
 uv run uvicorn agent_service.main:app --app-dir src --reload
 
 # frontend
@@ -17,6 +17,13 @@ uv run kuro-migrate
 # testes
 uv run pytest
 ```
+
+**CLI, MCP e TUI** são clientes da API e dividem o mesmo `Client`
+(`src/agent_service/cli/client.py`). Uma operação nova entra primeiro nele e na
+CLI e depois, se fizer sentido, como tool em `mcp_server.py`. O que não for
+apresentação (agregar o stream do chat, rodar o eval) fica em funções sem
+`typer`, para os três reaproveitarem. Os testes do MCP (`tests/test_mcp_server.py`)
+e da TUI (`tests/test_tui.py`) rodam contra uma API falsa, sem serviço no ar.
 
 **Diagramas:** as fontes ficam em `docs/diagramas/*.mmd` e o README e os documentos exibem os
 SVGs gerados a partir delas (uma versão clara e uma escura), porque o
@@ -40,6 +47,8 @@ Ao mudar algo que quem integra ou opera percebe, registre em
 |---|---|
 | agentes, tools, RAG, memória, modelos, anexos | [conceitos.md](conceitos.md) |
 | o shell, os comandos, o uso por agentes de IA | [cli.md](cli.md) |
+| o servidor MCP para agentes de IA | [mcp.md](mcp.md) |
+| o painel no terminal (`kuro dash`) | [tui.md](tui.md) |
 | o console web | [console.md](console.md) |
 | runs, trace store, Langfuse, shadow | [observabilidade.md](observabilidade.md) |
 | componentes e fluxo de uma mensagem | [arquitetura.md](arquitetura.md) |
