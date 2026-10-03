@@ -5,6 +5,9 @@ Os agentes são criados e mantidos **no repositório do sistema integrado**, e e
 fazer isso: o contrato de chamada, o que fazer em cada erro, o modo shadow e o fluxo de mudança
 draft → eval → promote.
 
+Ao atualizar o Kuro, leia as [notas de versão](notas-de-versao.md): cada versão diz o que exige
+ação do sistema integrado. A versão no ar aparece em `GET /health` (`version`).
+
 ## 1. Quem faz o quê
 
 O Kuro decide e o sistema integrado valida e executa.
@@ -80,14 +83,19 @@ id da decisão na trilha de auditoria (decisão → validação → efeito), e
 | 404 | `agent_type` não existe | Erro de configuração: alertar, não repetir |
 | 422 | Requisição inválida: dependency faltando ou de tipo errado, texto grande demais, agente não é `analysis` | Bug de quem chama: não repetir, alertar |
 | 502 | Falha do provedor de modelo ou saída que não fecha com o schema | **Fallback.** Pode tentar no próximo ciclo |
-| 503 | Sem vaga de execução (header `Retry-After`) ou banco fora | **Fallback agora**, repetir depois do `Retry-After` |
+| 503 com `Retry-After` | Sem vaga de execução, ou banco fora | **Fallback agora**, repetir depois do `Retry-After` |
+| 503 com `error` | Configuração do Kuro: `model_provider_not_configured` (sem chave do provedor do modelo) ou `encryption_not_configured` (sem `CREDENTIALS_ENCRYPTION_KEY`). O `detail` diz o que falta | **Fallback** e alertar quem opera o Kuro: repetir não resolve |
 | 504 | A execução passou do `timeout_seconds` do agente | **Fallback.** Veja o run no `kuro runs` |
 | Rede ou timeout do cliente | O Kuro não respondeu | **Fallback** |
 
 - **Repetir é seguro.** O `/analyze` não tem efeito colateral: repetir só gera outro run. Quem
   garante que a mesma mensagem não vire duas ações é o claim do seu sistema, como já acontece hoje.
 - **O timeout do cliente deve ser maior que o do agente**, algo como `timeout_seconds + 5`. Assim
-  o 504 do Kuro chega antes, e o run fica registrado como erro com o motivo.
+  o 504 do Kuro chega antes, e o run fica registrado como erro com o motivo. Um run com status
+  `interrupted` quer dizer exatamente isto: quem chamou desistiu antes do fim. Credencial faltando
+  não aparece assim — ela responde 503 antes de o run começar.
+- `GET /health` mostra `model_credentials`: `enabled`, ou o motivo de não dar para cadastrar chaves
+  de modelo. `kuro health` mostra o mesmo.
 - **Fallback** é o que o seu sistema já faz sem IA: transferir para humano, não responder, ou
   deixar para o próximo ciclo. Para o R6 a regra é firme: sem decisão válida, nada de efeito
   financeiro.
@@ -124,14 +132,76 @@ O repositório do sistema integrado guarda um JSON por agente. O formato é o me
 - **`enum`** restringe a saída: o provedor recebe os valores permitidos, e uma resposta fora
   deles vira 502, em vez de uma `acao` inventada. Vale para `string`, `integer` e `number`, dentro
   de `items` também.
-- **`model_params`** aceita `temperature`, `top_p`, `max_tokens` e `thinking_budget` (este só no
-  Gemini 2.5: `0` desliga o raciocínio e corta latência e custo). Sem ele, vale o padrão do
-  provedor. Para ter paridade com o agente legado, repita a temperatura dele.
+- **`model_params`** aceita `temperature`, `top_p`, `max_tokens`, `reasoning` (`off`, `low`,
+  `medium`, `high`; google e openai), `thinking_budget` (ajuste fino do Gemini 2.5) e
+  `prompt_cache`. Sem ele, vale o padrão do provedor. Para ter paridade com o agente legado,
+  repita a temperatura dele.
+- **`prompt_cache`** (`5m` ou `1h`, só anthropic) guarda as instructions e as tools no cache do
+  Claude, e as chamadas seguintes pagam uma fração desse trecho. Gemini e OpenAI fazem esse cache
+  sozinhos quando o começo do prompt se repete. Em todos, os tokens lidos do cache aparecem na span
+  do modelo (`kuro runs show <run_id>`, `metadata.cache_read_tokens`). O que cresce ao longo de uma
+  conversa é o **histórico**, e isso o cache não resolve: limite com `num_history_runs` ou ligue
+  `session_summary`.
+- **`model_id`**: `kuro providers models google` marca os modelos `preview` e `alias` (`-latest`).
+  Os dois podem mudar sem aviso; em produção, fixe um modelo estável. A marcação é deduzida do
+  nome, porque nenhum provedor a informa na listagem.
 - **`timeout_seconds`** vai de 1 a 600. Sem ele, vale o `RUN_TIMEOUT_SECONDS` do serviço (90 s).
 
 Qualquer mudança nesses campos gera uma versão nova da configuração (`kuro agents revisions r8`).
 
-## 6. Mudar um agente sem risco: draft → eval → promote
+## 6. Tools que chamam o seu sistema
+
+### Rede Docker
+
+Quando o Kuro e o seu sistema rodam em Docker na mesma máquina, as tools alcançam o seu sistema pelo
+nome do container. Não use `docker network connect`: a ligação some no próximo `docker compose up`.
+Use o override que o compose lê sozinho:
+
+```bash
+cp docker-compose.override.example.yml docker-compose.override.yml
+# ajuste o nome da rede (docker network ls) e o host
+docker compose up -d
+```
+
+O exemplo faz duas coisas, e as duas são necessárias:
+
+1. põe o `agent-service` na rede do seu sistema (`networks`, com `external: true`);
+2. libera o host em `TOOL_EGRESS_ALLOWLIST`. Dentro da rede Docker o container responde num IP
+   privado, e as tools só alcançam endereços públicos por padrão. Sem a liberação, a chamada volta
+   como "Chamada recusada".
+
+O sentido inverso já funciona com a mesma rede: o seu sistema chama o Kuro em
+`http://agent-service:8000`.
+
+### Modo teste (`dry_run`)
+
+Mande `"dry_run": true` no `/chat` ou no `/analyze` quando a execução for um teste. O Kuro não
+decide o que simular. Ele avisa as tools, e a API de cada uma decide:
+
+- toda chamada HTTP de tool (`kind="api"` e `kind="python"`) leva o header `X-Kuro-Dry-Run: true`;
+- um parâmetro `{"source": "dependency", "dependency": "dry_run"}` recebe `true` ou `false`. O agente
+  não precisa declarar esse campo em `dependency_fields`, e um `dry_run` enviado nas `dependencies`
+  não tem efeito: vale o flag da requisição;
+- o run fica com `metadata.dry_run = "true"` (`kuro runs list --meta dry_run=true`).
+
+O Playground do console manda `dry_run` ligado por padrão. Na CLI, use `--dry-run` em `kuro chat`,
+`kuro analyze`, `kuro eval` e `kuro tools invoke`. Tool com efeito colateral (cobrança, acordo,
+mensagem) deve tratar o header e, nesse caso, só registrar a intenção.
+
+### Provisionar tools e agentes
+
+Não faça "GET para ver se existe, POST se der 404". Use o `apply`, que cria ou atualiza:
+
+```bash
+kuro --json tools apply -f tools/consulta_lead.json
+kuro --json agents apply -f agentes/
+```
+
+Se fizer pela API, trate os status separadamente: **401** é chave ausente, **403** é chave inválida
+ou sem escopo admin, e só **404** quer dizer que o item não existe. Tratar "qualquer coisa que não
+seja 200" como "não existe" esconde erro de autenticação e tenta criar o que já existe.
+
+## 7. Mudar um agente sem risco: draft → eval → promote
 
 ```bash
 export KURO_API_URL=https://kuro.exemplo KURO_API_KEY=<ADMIN_API_KEY>
@@ -167,7 +237,7 @@ Regras de política (`regras/r8.json`), para o que nenhuma saída pode fazer:
 A comparação é determinística, campo a campo. Os operadores são `eq`, `ne`, `in`, `not_in`, `lt`,
 `lte`, `gt`, `gte`, `exists` e `not_exists`. `{"$dep": "x"}` lê o valor das `dependencies` do caso.
 
-## 7. Modo shadow
+## 8. Modo shadow
 
 O agente legado continua respondendo ao usuário. O Kuro decide em silêncio, sobre a mesma
 entrada:
@@ -203,7 +273,7 @@ Promova do shadow para produção quando a concordância nos campos de decisão 
 `departamento`, `oferta_id`...) atingir a meta que vocês definirem. As discordâncias vêm listadas,
 e cada uma aponta para um `run_id`.
 
-## 8. Esboço de cliente em PHP
+## 9. Esboço de cliente em PHP
 
 ```php
 final class KuroClient
@@ -246,7 +316,7 @@ final class KuroClient
 }
 ```
 
-## 9. Checklist antes de ligar em produção
+## 10. Checklist antes de ligar em produção
 
 - [ ] Profile `tls` ativo e `ADMIN_API_KEY`/`RUNTIME_API_KEY` definidas; o sistema integrado usa só
       a runtime.
@@ -258,3 +328,8 @@ final class KuroClient
 - [ ] O dataset e as regras do `kuro eval` estão no repositório, e o promote depende do eval.
 - [ ] O shadow rodou até a concordância atingir a meta (`kuro runs agreement`).
 - [ ] `MAX_CONCURRENT_RUNS` está dimensionado para o pico de conversas simultâneas.
+- [ ] `kuro health` mostra o cadastro de chaves de modelo ligado e o provedor do agente com credencial.
+- [ ] O modelo do agente é estável (nem `preview` nem `alias` em `kuro providers models`).
+- [ ] Tools com efeito colateral tratam `X-Kuro-Dry-Run`, e os testes usam `dry_run`.
+- [ ] Se as tools chamam o seu sistema pela rede Docker, a rede está no
+      `docker-compose.override.yml` e o host em `TOOL_EGRESS_ALLOWLIST`.

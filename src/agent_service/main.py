@@ -12,7 +12,7 @@ from fastapi import FastAPI
 
 from agent_service.agents.registry import all_agents
 from agent_service.agents.seed import seed_default_agents
-from agent_service.api import auth
+from agent_service.api import auth, errors
 from agent_service.api.agents_routes import router as agents_router
 from agent_service.api.collections_routes import router as collections_router
 from agent_service.api.integration_routes import router as integration_router
@@ -67,6 +67,7 @@ app = agent_os.get_app()
 # Depois do AgentOS montar as rotas dele: o middleware precisa cobrir `/sessions`
 # e `/knowledge/...` também, que é onde a conversa fica.
 auth.install(app)
+errors.install(app)
 
 
 if __name__ == "__main__":

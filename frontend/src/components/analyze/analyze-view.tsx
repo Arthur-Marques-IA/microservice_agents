@@ -1,5 +1,6 @@
 "use client";
 
+import { DryRunToggle, useDryRun } from "@/components/tools/dry-run-toggle";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { FileSearch, Paperclip, Play, X } from "lucide-react";
@@ -33,6 +34,7 @@ export function AnalyzeView() {
   const [rodando, setRodando] = useState(false);
   const [resultado, setResultado] = useState<AnalyzeResponse | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+  const [dryRun, setDryRun] = useDryRun();
 
   const escolhido = analistas.find((a) => a.agent_type === agentType) ?? analistas[0];
 
@@ -58,6 +60,7 @@ export function AnalyzeView() {
             document,
             dependencies,
             attachments: anexos.map((a) => a.attachment),
+            dry_run: dryRun || undefined,
           },
           fallbackError: "Falha ao analisar",
         })
@@ -146,6 +149,8 @@ export function AnalyzeView() {
             placeholder="Cole aqui o texto a analisar."
           />
         </Field>
+
+        <DryRunToggle checked={dryRun} onChange={setDryRun} />
 
         <div className="flex flex-wrap items-center gap-2">
           <label className={buttonVariants({ variant: "outline", size: "sm" })}>

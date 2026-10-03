@@ -1,6 +1,6 @@
 [project]
 name = "agent-service"
-version = "0.1.0"
+version = "0.2.0"
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "agno>=3.0.9",
+    "aiofiles>=25.1.0",
     "alembic>=1.14",
     "anthropic>=0.40",
     "asyncpg>=0.31.0",
@@ -19,16 +20,21 @@ dependencies = [
     "httpx>=0.28",
     "ollama>=0.4",
     "openai>=1.0",
+    "openpyxl>=3.1.5",
     "pgvector>=0.5.0",
     "psycopg[binary]>=3.3.5",
     "pydantic-settings>=2.15.0",
+    "pypdf>=6.19.0",
+    "python-docx>=1.2.0",
     "python-multipart>=0.0.32",
+    "python-pptx>=1.0.2",
     "questionary>=2.1",
     "rich>=13",
     "sqlalchemy>=2.0.52",
     "sse-starlette>=3.4.11",
     "typer>=0.15",
     "uvicorn[standard]>=0.53.0",
+    "xlrd>=2.0.2",
 ]
 
 [project.scripts]

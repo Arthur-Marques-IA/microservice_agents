@@ -36,7 +36,8 @@ from agno.agent import Agent
 from agno.run.agent import RunEvent, RunOutputEvent
 
 from agent_service.config import get_settings
-from agent_service.tools.context import set_dependencies
+from agent_service.tools import failures
+from agent_service.tools.context import set_dependencies, set_dry_run
 
 if TYPE_CHECKING:
     from langfuse import Langfuse
@@ -45,7 +46,10 @@ logger = logging.getLogger(__name__)
 
 FEEDBACK = "feedback"
 RUN_FAILED = "Falha ao executar o agente."
-RUN_INTERRUPTED = "Execução interrompida antes de terminar (cliente desconectou ou cancelou)."
+RUN_INTERRUPTED = (
+    "Execução interrompida antes de terminar: quem chamou desconectou ou cancelou "
+    "(ex.: timeout do cliente menor que o timeout_seconds do agente)."
+)
 
 
 class RunTimeoutError(RuntimeError):
@@ -83,6 +87,8 @@ class RunContext:
     """Tempo limite da execução inteira; `None` = sem limite."""
     metadata: dict[str, str] = field(default_factory=dict)
     """Correlação de quem chamou (ex.: `conversation_id`), gravada com o run."""
+    dry_run: bool = False
+    """Execução de teste — avisada às tools (ver `tools/context.py`)."""
 
     @property
     def trace_id(self) -> str:
@@ -183,6 +189,8 @@ def _agent_events(agent: Agent, run: RunContext) -> AsyncIterator[RunOutputEvent
     # Além de irem para o contexto do prompt, as dependências ficam disponíveis para
     # as tools com parâmetros `source="dependency"` (ver tools/context.py).
     set_dependencies(run.dependencies)
+    set_dry_run(run.dry_run)
+    failures.start_run()
     return agent.arun(
         run.message,
         user_id=run.user_id,
@@ -237,9 +245,21 @@ def _model_spans(metrics: Any, started_at: datetime) -> list[Any]:
                     total_tokens=getattr(entry, "total_tokens", 0) or 0,
                     cost_usd=cost,
                     latency_ms=_ms(getattr(entry, "duration", None)),
+                    metadata=_cache_metadata(entry),
                 )
             )
     return spans
+
+
+def _cache_metadata(entry: Any) -> dict[str, int]:
+    """Tokens servidos do cache de prompt (implícito no Gemini e no OpenAI; o do
+    Claude com `model_params.prompt_cache`). É o jeito de ver se o prefixo — as
+    instructions e as tools — está mesmo sendo reaproveitado entre chamadas."""
+    return {
+        name: value
+        for name in ("cache_read_tokens", "cache_write_tokens")
+        if (value := getattr(entry, name, 0) or 0)
+    }
 
 
 def _tool_output(tool: Any) -> Any:
@@ -258,17 +278,32 @@ def _tool_span(event: Any, now: datetime) -> Any:
 
     tool = event.tool
     tool_metrics = getattr(tool, "metrics", None)
-    failed = event.event == RunEvent.tool_call_error.value or bool(getattr(tool, "tool_call_error", False))
+    name = getattr(tool, "tool_name", None) or "tool"
+    output = _tool_output(tool)
+    raised = event.event == RunEvent.tool_call_error.value or bool(getattr(tool, "tool_call_error", False))
+    # A tool de API devolve o erro como texto (o modelo precisa ler), e para o
+    # Agno isso é sucesso — o registro de `tools/failures.py` é que diz que falhou.
+    registered = failures.lookup_failure(name, getattr(tool, "result", None))
+    metadata: dict[str, Any] = {}
+    status_message = None
+    if registered is not None:
+        kind, http_status = registered
+        metadata = {"failure": kind, **({"http_status": http_status} if http_status else {})}
+        status_message = str(getattr(tool, "result", "") or "")[:500]
+    elif raised:
+        metadata = {"failure": "exception"}
+        status_message = getattr(event, "error", None) or str(getattr(tool, "result", "") or "")[:500] or None
     return SpanRecord(
         type="TOOL",
-        name=getattr(tool, "tool_name", None) or "tool",
+        name=name,
         started_at=_utc(getattr(tool_metrics, "start_time", None)) or now,
         ended_at=_utc(getattr(tool_metrics, "end_time", None)),
-        level="ERROR" if failed else "DEFAULT",
-        status_message=getattr(event, "error", None) if failed else None,
+        level=failures.span_level(metadata["failure"]) if metadata else "DEFAULT",
+        status_message=status_message,
         input=getattr(tool, "tool_args", None),
-        output=_tool_output(tool),
+        output=output,
         latency_ms=_ms(getattr(tool_metrics, "duration", None)),
+        metadata=metadata,
     )
 
 

@@ -12,6 +12,8 @@ interface SendOptions {
   dependencies?: Record<string, unknown> | null;
   /** Imagem, áudio, vídeo ou arquivo — o modelo do agente precisa suportar o tipo. */
   attachments?: Attachment[];
+  /** Execução de teste: as tools recebem `X-Kuro-Dry-Run: true` e decidem o que simular. */
+  dryRun?: boolean;
 }
 
 /**
@@ -41,7 +43,7 @@ export function useChat({
   }, []);
 
   const send = useCallback(
-    async ({ text, sessionId, dependencies, attachments }: SendOptions): Promise<boolean> => {
+    async ({ text, sessionId, dependencies, attachments, dryRun }: SendOptions): Promise<boolean> => {
       const message = text.trim();
       if ((!message && !attachments?.length) || streamingRef.current) return false;
 
@@ -80,6 +82,7 @@ export function useChat({
             message,
             dependencies: dependencies ?? undefined,
             attachments: attachments?.length ? attachments : undefined,
+            dry_run: dryRun || undefined,
           }),
           signal: controller.signal,
         });

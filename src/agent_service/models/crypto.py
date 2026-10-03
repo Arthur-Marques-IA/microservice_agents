@@ -31,6 +31,18 @@ def _fernet() -> Fernet:
         raise EncryptionNotConfiguredError(f"CREDENTIALS_ENCRYPTION_KEY inválida: {exc}") from exc
 
 
+def encryption_status() -> str:
+    """Para o `/health`: `enabled`, ou o motivo de não dar para cadastrar chaves.
+    Não diz nada da chave em si — só se ela existe e é uma chave Fernet válida."""
+    try:
+        _fernet()
+    except EncryptionNotConfiguredError:
+        if not get_settings().credentials_encryption_key:
+            return "disabled — CREDENTIALS_ENCRYPTION_KEY não configurada"
+        return "invalid — CREDENTIALS_ENCRYPTION_KEY não é uma chave Fernet válida"
+    return "enabled"
+
+
 def encrypt_secret(plaintext: str) -> str:
     return _fernet().encrypt(plaintext.encode()).decode()
 

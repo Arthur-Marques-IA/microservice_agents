@@ -50,6 +50,10 @@ kuro --json chat suporte -m "meu wifi caiu" -d cpf=12345678900
 kuro --json chat suporte -m "recomeçar" --new-session
 echo "mensagem longa" | kuro --json chat suporte
 # retorna {content, run_id, trace_id, session_id, usage, error}
+kuro --json chat suporte -m "fecha o acordo" --dry-run   # teste: tools recebem X-Kuro-Dry-Run: true
+# `dry_run: true` no /chat e no /analyze (também `--dry-run` em analyze, eval e tools invoke):
+# as tools recebem o header e `dependencies.dry_run` (sem declarar em dependency_fields);
+# o run fica com metadata.dry_run=true. Quem implementa a tool decide o que simular.
 
 # Anexos: imagem, áudio, vídeo ou arquivo (PDF, DOCX, CSV, TXT...) direto ao modelo
 kuro --json chat suporte -m "o que tem nessa foto?" --attach foto.png       # -a, repetível
@@ -82,7 +86,8 @@ cat conversa.json | kuro --json analyze classificador        # texto/JSON por st
 # /analyze aceita `session_id` (agrupa por conversa) e `metadata` (correlação; não vai ao modelo).
 # Memória de longo prazo: `memory_backend` = none (padrão) | auto (extraída em paralelo, modelo auxiliar AUX_MODEL_ID)
 #   | agentic (o modelo decide, tool update_user_memory) | mem0. `session_summary: true` resume o que sai de num_history_runs.
-# Campos do agente: `model_params` {temperature, top_p, max_tokens, reasoning: off|low|medium|high}, `timeout_seconds`
+# Campos do agente: `model_params` {temperature, top_p, max_tokens, reasoning: off|low|medium|high,
+#   prompt_cache: off|5m|1h (só anthropic; Gemini/OpenAI cacheiam sozinhos)}, `timeout_seconds`
 # (504 ao estourar) e `enum` em qualquer campo de response_schema/dependency_fields.
 # Integração de outro sistema (erros, fallback, shadow): docs/integracao.md.
 
@@ -131,6 +136,14 @@ kuro --json runs tail --agent suporte           # acompanha ao vivo; um objeto J
 kuro --json runs sessions --agent suporte       # execuções agrupadas por sessão (tokens, custo, erros)
 kuro --json runs list --agent r8 --meta conversation_id=98231   # pela metadata que quem chamou mandou
 kuro --json runs list --agent r8 --version 7    # só runs de uma versão da configuração
+# Fila de revisão: o que vale um humano olhar (complexidade 1–3 pelas tools de negócio distintas)
+kuro --json runs list -a r8 -c 3 --no-tests      # complexidade 3, sem os testes do Playground
+kuro --json runs list -a r8 --tool-failed        # o agente respondeu, mas alguma tool falhou
+kuro --json runs list -a r8 --side-effect --min-chars 20   # chamou tool com efeito colateral; sem "ok"/"oi"
+kuro --json runs list -a r8 --feedback down      # com 👎
+kuro --json runs list -a r8 --sample 20 --no-tests   # amostra aleatória (pega o erro que nenhum filtro aponta)
+# Panorama do dashboard (totais vs período anterior, série, agentes e versões, tools falhando):
+# GET /observability/overview?since=...&agent_type=...&include_dry_run=false&tz=America/Sao_Paulo
 
 # Modo shadow (o legado responde; o Kuro decide em silêncio e é comparado)
 kuro --json runs reference <run_id> -f decisao_legado.json   # o sistema integrado usa POST /observability/references
@@ -142,7 +155,7 @@ kuro --json runs export -a r8 -o casos.jsonl    # runs com referência viram dat
 kuro --json sessions list --agent suporte
 kuro --json sessions show <session_id>          # transcrição: cada mensagem, a resposta e os tokens
 kuro --json sessions rename <session_id> "Cliente X"
-kuro --json sessions delete <session_id> --yes  # apaga a conversa e as execuções dela (não tem volta)
+kuro --json sessions delete <session_id> --yes  # apaga a conversa (não tem volta); o registro em `kuro runs` continua
 
 # Integração: como outro módulo chama este agente (endpoint, cURL, dependências obrigatórias)
 kuro --json agents integrate suporte
@@ -167,6 +180,7 @@ kuro --json agents set suporte knowledge_collection=manuais
 # Modelos: provedores suportados e credenciais
 kuro --json providers list
 kuro --json providers models google          # modelos que o provedor oferece AGORA (lidos da API dele; cache 15 min, --refresh)
+# cada modelo traz `channel`: stable | preview | alias (-latest) — deduzido do nome; não use preview/alias em produção
 kuro --json credentials list --provider google
 kuro --json credentials test <credential_id>    # valida a chave sem gastar tokens; sai com 1 se falhar
 KEY=... kuro --json credentials add -p google -l "Produção" --api-key-env KEY
@@ -205,9 +219,24 @@ chamada (com a URL já montada, porque um parâmetro `location="path"` pode comp
 uma tool apontando para dentro falha com 422; uma chamada recusada devolve o motivo ao modelo.
 Para um serviço interno legítimo, libere o host em `TOOL_EGRESS_ALLOWLIST`. O mesmo vale para o
 `httpx` das tools `kind="python"`.
+Tools chamando outro container Docker: copie `docker-compose.override.example.yml` para
+`docker-compose.override.yml` (rede externa + `TOOL_EGRESS_ALLOWLIST` com o nome do host) —
+`docker network connect` some no próximo `up`. Detalhes em `docs/integracao.md`.
+
+Configuração faltando no serviço responde **503** com `{"detail", "error"}`:
+`model_provider_not_configured` (sem chave do provedor do agente) ou `encryption_not_configured`
+(sem `CREDENTIALS_ENCRYPTION_KEY`; o `/health` mostra em `model_credentials`).
+
 Para testar sem montar agente: `kuro tools invoke <tool> --args-json '{"x": 1}'`,
 com `-d campo=valor` para os parâmetros `source="dependency"`.
 
 O formato do `apply` é o mesmo do `POST /agents`: `agent_type`, `name`, `instructions`, `tools`,
 `model_provider`, `model_id`, `model_credential_id`, `knowledge_collection`, `dependency_fields`,
 `memory_backend`, `num_history_runs`, `kind` e `response_schema`. Editar `instructions` gera uma nova versão do prompt.
+
+## Notas de versão
+
+Mudou algo que quem integra ou opera percebe (campo, status HTTP, texto de erro, default,
+variável de ambiente, passo de deploy)? Registre em `docs/notas-de-versao.md`, na seção
+`## Não lançada` do topo, no mesmo commit — o formato e as regras de numeração estão no fim do
+arquivo. A versão no ar sai de `pyproject.toml` e aparece em `GET /health` (`version`).

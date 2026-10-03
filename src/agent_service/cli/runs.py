@@ -75,8 +75,16 @@ def list_runs(
     cursor: str | None = typer.Option(None, "--cursor"),
     meta: list[str] = typer.Option([], "--meta", "-m", help="Filtro por metadata chave=valor (repetível), ex.: conversation_id=123."),
     version: int | None = typer.Option(None, "--version", help="Só runs desta versão da configuração (agent_version)."),
+    complexity: list[int] = typer.Option([], "--complexity", "-c", min=1, max=3, help="Só este nível de complexidade (repetível): 1, 2 ou 3."),
+    tool_failed: bool = typer.Option(False, "--tool-failed", help="Só runs com alguma tool falhando."),
+    side_effect: bool = typer.Option(False, "--side-effect", help="Só runs que chamaram tool com efeito colateral."),
+    min_chars: int | None = typer.Option(None, "--min-chars", min=1, help="Esconde mensagens mais curtas que isto."),
+    feedback: str | None = typer.Option(None, "--feedback", help="up | down | none"),
+    no_tests: bool = typer.Option(False, "--no-tests", help="Tira os testes do Playground (dry_run)."),
+    sample: int | None = typer.Option(None, "--sample", min=1, max=100, help="Amostra aleatória deste tamanho."),
 ) -> None:
-    """Execuções mais recentes."""
+    """Execuções mais recentes. Os filtros de revisão montam a fila do que vale olhar,
+    ex.: `kuro runs list -a r8 -c 3 --no-tests` ou `kuro runs list -a r8 --sample 20 --no-tests`."""
     st = state(ctx)
     page = call(
         st,
@@ -89,6 +97,13 @@ def list_runs(
         cursor=cursor,
         meta=meta or None,
         agent_version=version,
+        complexity=complexity or None,
+        tool_failed=True if tool_failed else None,
+        side_effect=True if side_effect else None,
+        min_message_chars=min_chars,
+        feedback=feedback,
+        include_dry_run=False if no_tests else None,
+        sample=sample,
     )
     emit(st, page, _render_runs)
 

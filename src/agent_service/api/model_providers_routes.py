@@ -4,6 +4,8 @@ console montar o diálogo de nova chave e agrupar a tela de credenciais por
 provedor. CRUD e teste de credenciais em `api/model_credentials_routes.py`.
 """
 
+from typing import Literal
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -49,6 +51,9 @@ class ProviderModelOut(BaseModel):
     id: str
     label: str
     created: int | None = None
+    channel: Literal["stable", "preview", "alias"] | None = None
+    """Deduzido do nome — o provedor não informa (ver `models/listing.py`).
+    `preview` e `alias` (`-latest`) podem mudar sem aviso: evite em produção."""
 
 
 class ProviderModelsOut(BaseModel):
@@ -90,7 +95,7 @@ def list_provider_models(provider: str, credential_id: str | None = None, refres
         raise HTTPException(status_code=502, detail=f"{spec.label} não listou os modelos: {exc}") from exc
     return ProviderModelsOut(
         provider=provider,
-        models=[ProviderModelOut(**as_dict(m)) for m in models],
+        models=[ProviderModelOut(**as_dict(m, provider)) for m in models],
         default_model_id=spec.default_model_id,
         fetched_at=fetched_at,
     )

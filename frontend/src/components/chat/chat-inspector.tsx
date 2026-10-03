@@ -1,5 +1,6 @@
 "use client";
 
+import { DryRunToggle } from "@/components/tools/dry-run-toggle";
 import { ReactNode, useId } from "react";
 import Link from "next/link";
 import { Activity, CodeXml, ExternalLink, Pencil, Users, X } from "lucide-react";
@@ -29,6 +30,8 @@ export function ChatInspector({
   onDependenciesReset,
   dependenciesError,
   dependenciesCount,
+  dryRun,
+  onDryRunChange,
   onEditAgent,
   onShowCode,
   onClose,
@@ -46,6 +49,8 @@ export function ChatInspector({
   onDependenciesReset: () => void;
   dependenciesError: string | null;
   dependenciesCount: number;
+  dryRun: boolean;
+  onDryRunChange: (value: boolean) => void;
   onEditAgent: () => void;
   onShowCode: () => void;
   onClose: () => void;
@@ -195,6 +200,9 @@ export function ChatInspector({
                 </Button>
               )}
             </div>
+          </div>
+          <div className="mt-3">
+            <DryRunToggle checked={dryRun} onChange={onDryRunChange} />
           </div>
         </InspectorSection>
 

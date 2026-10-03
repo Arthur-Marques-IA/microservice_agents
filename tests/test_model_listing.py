@@ -105,3 +105,24 @@ def test_route_maps_provider_failure_and_missing_key(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         list_provider_models("inexistente")
     assert exc.value.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("provider", "model_id", "label", "channel"),
+    [
+        ("google", "gemini-2.5-flash", "Gemini 2.5 Flash", "stable"),
+        ("google", "gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", "preview"),
+        ("google", "gemini-omni-flash-preview", "", "preview"),
+        ("google", "gemini-2.0-flash-exp", "", "preview"),
+        ("google", "gemini-exp-1206", "", "preview"),
+        ("google", "gemini-flash-latest", "", "alias"),
+        ("anthropic", "claude-3-7-sonnet-latest", "", "alias"),
+        ("openai", "gpt-4.1-mini", "gpt-4.1-mini", "stable"),
+        ("openai", "gpt-4o-2024-08-06", "", "stable"),
+        ("ollama", "llama3:latest", "", None),
+    ],
+)
+def test_channel_deduzido_do_nome(provider, model_id, label, channel):
+    from agent_service.models.listing import model_channel
+
+    assert model_channel(provider, model_id, label) == channel

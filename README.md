@@ -444,6 +444,9 @@ fica no histórico da sessão, então para arquivos grandes prefira `analyze`.
 erros e fallback, agentes como código, draft → eval → promote, modo shadow e um cliente PHP de
 exemplo.
 
+**Ao atualizar o Kuro, leia as [notas de versão](docs/notas-de-versao.md):** o que cada versão
+exige de quem integra e como atualizar. `GET /health` mostra a versão no ar.
+
 Cada agente publica o próprio contrato: endpoint, corpo, `dependencies`
 obrigatórias e exemplos. A documentação sai dos dados e não fica desatualizada.
 
@@ -728,7 +731,9 @@ Tailwind, Docker Compose.
 | `AGENT_SERVICE_BIND` | `127.0.0.1:58000` | onde a API é publicada no host |
 | `TRACE_STORE_BACKEND` | `db` | de onde `kuro runs` e `/observability/*` leem: `db` ou `langfuse` |
 | `RUN_TIMEOUT_SECONDS` | `90` | tempo limite padrão de uma execução (o agente pode ter `timeout_seconds`); estourou, 504 |
-| `MAX_CONCURRENT_RUNS` | `16` | execuções simultâneas por processo; acima disso, 503 com `Retry-After` |
+| `MAX_CONCURRENT_RUNS` | `16` | execuções simultâneas por processo; acima disso, a chamada espera na fila |
+| `QUEUE_MAX_SIZE` | `64` | chamadas esperando vaga, por processo; fila cheia = 503 com `Retry-After` |
+| `QUEUE_MAX_WAIT_SECONDS` | `30` | espera máxima na fila antes do 503; `0` desliga a fila. Deixe abaixo do timeout de quem chama |
 | `AUX_MODEL_ID` / `AUX_MODEL_PROVIDER` | — (o do agente) | modelo barato para extrair memória e resumir a sessão |
 | `MEMORY_CONTEXT_LIMIT` | `10` | quantas memórias de longo prazo (as mais recentes) entram no prompt |
 | `MODEL_PRICES` | tabela embutida | JSON `{"modelo": [USD/1M entrada, USD/1M saída]}` para o custo estimado sem Langfuse |

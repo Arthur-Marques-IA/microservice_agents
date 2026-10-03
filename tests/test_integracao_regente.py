@@ -40,6 +40,7 @@ from agent_service.api.observability_routes import (
 from agent_service.api.routes import AnalyzeRequest, analyze, ready
 from agent_service.cli import main as cli_main
 from agent_service.cli.client import Client
+from agent_service.config import get_settings
 from agent_service.field_schema import FieldSchemaError, json_schema_for
 from agent_service.models.params import ModelParamsError, provider_kwargs, validate_model_params
 from agent_service.observability import trace_store, tracing
@@ -183,11 +184,41 @@ def test_run_over_the_timeout_is_504_and_recorded_as_error(monkeypatch, r8):
 def test_no_free_slot_is_503_with_retry_after(monkeypatch, r8):
     fake_agent(monkeypatch, lambda doc: {"acao": "nada"})
     monkeypatch.setattr(routes, "_slots", asyncio.Semaphore(0))
+    monkeypatch.setattr(get_settings(), "queue_max_wait_seconds", 0.05)
 
     with pytest.raises(HTTPException) as exc:
         asyncio.run(analyze(AnalyzeRequest(agent_type=r8, document="doc")))
 
     assert exc.value.status_code == 503 and exc.value.headers["Retry-After"]
+    assert routes._waiting == 0
+
+
+def test_full_queue_is_503_without_waiting(monkeypatch, r8):
+    fake_agent(monkeypatch, lambda doc: {"acao": "nada"})
+    monkeypatch.setattr(routes, "_slots", asyncio.Semaphore(0))
+    monkeypatch.setattr(get_settings(), "queue_max_size", 0)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(analyze(AnalyzeRequest(agent_type=r8, document="doc")))
+
+    assert exc.value.status_code == 503
+
+
+def test_call_over_the_limit_waits_for_a_slot_and_succeeds(monkeypatch, r8):
+    fake_agent(monkeypatch, lambda doc: {"acao": "nada"})
+
+    async def scenario():
+        monkeypatch.setattr(routes, "_slots", asyncio.Semaphore(1))
+        await routes._slots.acquire()  # a única vaga está ocupada
+        task = asyncio.create_task(analyze(AnalyzeRequest(agent_type=r8, document="doc")))
+        await asyncio.sleep(0.2)
+        assert not task.done() and routes._waiting == 1
+        routes._slots.release()
+        return await asyncio.wait_for(task, 10)
+
+    monkeypatch.setattr(get_settings(), "queue_max_wait_seconds", 5)
+    assert asyncio.run(scenario()).result["acao"] == "nada"
+    assert routes._waiting == 0
 
 
 # -- correlação, referência, concordância e export ------------------------------------------

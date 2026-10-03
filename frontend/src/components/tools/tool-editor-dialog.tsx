@@ -116,6 +116,10 @@ export function ToolEditorDialog({
   const [label, setLabel] = useState(tool?.label ?? "");
   const [description, setDescription] = useState(tool?.description ?? "");
   const [enabled, setEnabled] = useState(tool?.enabled ?? true);
+  const [sideEffect, setSideEffect] = useState<"" | "yes" | "no">(
+    tool?.side_effect === true ? "yes" : tool?.side_effect === false ? "no" : ""
+  );
+  const sideEffectValue = sideEffect === "" ? null : sideEffect === "yes";
 
   const [catalog, setCatalog] = useState<BuiltinCatalogEntry[] | null>(null);
   const [pythonEnabled, setPythonEnabled] = useState<boolean | null>(null);
@@ -198,7 +202,13 @@ export function ToolEditorDialog({
     setSubmitError(null);
     try {
       if (isEdit) {
-        const payload: ToolUpdateInput = { label: label.trim(), description: description.trim() || null, enabled, config: buildConfig() };
+        const payload: ToolUpdateInput = {
+          label: label.trim(),
+          description: description.trim() || null,
+          enabled,
+          side_effect: sideEffectValue,
+          config: buildConfig(),
+        };
         await requestJson(`/api/tools/${encodeURIComponent(tool.tool_name)}`, {
           method: "PUT",
           json: payload,
@@ -211,6 +221,7 @@ export function ToolEditorDialog({
           label: label.trim(),
           description: description.trim() || null,
           enabled,
+          side_effect: sideEffectValue,
           config: buildConfig(),
         };
         await requestJson("/api/tools", { method: "POST", json: payload, fallbackError: "Falha ao criar a tool" });
@@ -289,6 +300,27 @@ export function ToolEditorDialog({
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-primary" />
           Ativada (desligue para tirar de uso sem excluir)
         </label>
+
+        <Field
+          label="Efeito colateral"
+          htmlFor="tool-side-effect"
+          hint={
+            sideEffect === "" ? (
+              <span className="text-warning">
+                Não classificada. Pode salvar assim, mas defina depois: a fila de revisão dos Logs usa isto para
+                destacar as execuções que gravaram, cobraram ou enviaram algo.
+              </span>
+            ) : (
+              "Usado na fila de revisão dos Logs para destacar as execuções que mudaram algo no sistema chamado."
+            )
+          }
+        >
+          <Select id="tool-side-effect" value={sideEffect} onChange={(e) => setSideEffect(e.target.value as typeof sideEffect)}>
+            <option value="">Não classificada</option>
+            <option value="yes">Sim — grava, cobra, transfere ou envia algo</option>
+            <option value="no">Não — só consulta</option>
+          </Select>
+        </Field>
 
         <div className="border-t border-border pt-4">
           {kind === "builtin" && (

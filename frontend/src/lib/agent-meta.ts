@@ -4,6 +4,8 @@ export interface ModelOption {
   provider: string;
   id: string;
   label: string;
+  /** Deduzido do nome pelo backend: `preview` e `alias` (`-latest`) podem mudar sem aviso. */
+  channel?: "stable" | "preview" | "alias" | null;
 }
 
 /**

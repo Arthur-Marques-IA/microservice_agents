@@ -79,6 +79,8 @@ interface FormValues {
   /** Ajuste fino antigo (Gemini); só é preservado, não se edita mais pela tela. */
   thinkingBudget: string;
   reasoning: "" | "off" | "low" | "medium" | "high";
+  /** Cache do prefixo (instructions + tools) no Claude; "" = desligado. */
+  promptCache: "" | "5m" | "1h";
   sessionSummary: boolean;
   /** "" = RUN_TIMEOUT_SECONDS do serviço. */
   timeoutSeconds: string;
@@ -118,6 +120,7 @@ function paramsFrom(values: FormValues, provider: string | undefined): ModelPara
   } else if (values.thinkingBudget.trim() && (provider ?? "google") === "google") {
     params.thinking_budget = Number(values.thinkingBudget);
   }
+  if (values.promptCache && provider === "anthropic") params.prompt_cache = values.promptCache;
   return Object.keys(params).length ? params : null;
 }
 
@@ -142,6 +145,7 @@ function valuesFrom(agent?: AgentDefinition, instructions?: string[]): FormValue
     // Agente novo nasce sem memória de longo prazo: liga quem precisa.
     memoryBackend: agent?.memory_backend ?? "none",
     reasoning: agent?.model_params?.reasoning ?? "",
+    promptCache: agent?.model_params?.prompt_cache ?? "",
     sessionSummary: agent?.session_summary ?? false,
     numHistoryRuns: agent?.num_history_runs ?? 10,
     temperature: asText(agent?.model_params?.temperature),
@@ -266,6 +270,7 @@ export function AgentForm({
   }, [agent, providerModels.models]);
 
   const currentProvider = models.find((m) => m.id === values.modelId)?.provider;
+  const currentChannel = models.find((m) => m.id === values.modelId)?.channel;
   const credentialsForProvider = useMemo(
     () => modelCredentials.filter((c) => c.provider === currentProvider && c.enabled),
     [modelCredentials, currentProvider]
@@ -522,6 +527,16 @@ export function AgentForm({
                     : Object.keys(providerModels.errors).length > 0
                       ? `Lista fixa para ${Object.keys(providerModels.errors).join(", ")} (o provedor não respondeu). `
                       : "Lista lida agora dos provedores. "}
+                  {currentChannel === "preview" && (
+                    <span className="text-warning">
+                      Modelo preview: pode mudar ou sair do ar sem aviso — evite em produção.{" "}
+                    </span>
+                  )}
+                  {currentChannel === "alias" && (
+                    <span className="text-warning">
+                      Apelido (-latest): o provedor troca o modelo por trás dele — fixe uma versão em produção.{" "}
+                    </span>
+                  )}
                   {availableProviders.size <= 1 && (
                     <Link href="/models" className="hover:underline">
                       Configure outros provedores em Chaves de API
@@ -542,6 +557,7 @@ export function AgentForm({
                     {options.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.label}
+                        {m.channel === "preview" ? " · preview" : m.channel === "alias" ? " · alias" : ""}
                       </option>
                     ))}
                   </optgroup>
@@ -683,6 +699,25 @@ export function AgentForm({
                         {level.label}
                       </option>
                     ))}
+                  </Select>
+                </label>
+              )}
+              {currentProvider === "anthropic" && (
+                <label
+                  htmlFor={`${id}-prompt-cache`}
+                  className="flex flex-col gap-1 text-xs text-muted-foreground"
+                  title="Guarda as instructions e as tools no cache do Claude: as chamadas seguintes pagam só uma fração desse trecho. 1h compensa quando as conversas são espaçadas. Gemini e OpenAI fazem isso sozinhos."
+                >
+                  Cache do prompt
+                  <Select
+                    id={`${id}-prompt-cache`}
+                    value={values.promptCache}
+                    onChange={(e) => update("promptCache", e.target.value as FormValues["promptCache"])}
+                    className="h-8"
+                  >
+                    <option value="">Desligado</option>
+                    <option value="5m">5 minutos</option>
+                    <option value="1h">1 hora</option>
                   </Select>
                 </label>
               )}

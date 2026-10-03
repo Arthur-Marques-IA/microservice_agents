@@ -75,15 +75,17 @@ def _run_case(
     rules: list[dict[str, Any]],
     tolerance: float,
     score: bool,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     document = case["input"] if isinstance(case["input"], str) else json.dumps(case["input"], ensure_ascii=False)
     dependencies = case.get("dependencies") or {}
     expected = case.get("expected") or {}
     base: dict[str, Any] = {"id": case["id"], "run_id": None, "error": None, "result": None}
     try:
-        response = st.client.analyze(
-            {"agent_type": agent_type, "document": document, "dependencies": dependencies or None}
-        )
+        body = {"agent_type": agent_type, "document": document, "dependencies": dependencies or None}
+        if dry_run:
+            body["dry_run"] = True
+        response = st.client.analyze(body)
     except (ServiceUnavailable, ApiError) as exc:
         detail = exc.detail if isinstance(exc, ApiError) else str(exc)
         return {**base, "error": str(detail), "passed": False, "mismatches": [], "violations": [], "fields_compared": 0}
@@ -156,6 +158,9 @@ def eval_command(
     tolerance: float = typer.Option(0.01, "--tolerance", min=0.0, help="Diferença aceita em campos numéricos."),
     concurrency: int = typer.Option(4, "--concurrency", "-c", min=1, max=16, help="Casos em paralelo."),
     no_score: bool = typer.Option(False, "--no-score", help="Não grava a nota `eval` (1/0) em cada run."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Execução de teste: as tools recebem `X-Kuro-Dry-Run: true` e decidem o que simular."
+    ),
 ) -> None:
     """Avalia um agente analista contra um dataset, de forma determinística.
 
@@ -181,6 +186,7 @@ def eval_command(
         "rules": rules,
         "tolerance": tolerance,
         "score": not no_score,
+        "dry_run": dry_run,
     }
 
     try:

@@ -7,12 +7,13 @@ de um `run_id` e registrar avaliações (feedback do usuário final, notas de ev
 """
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
 from agent_service.observability import tracing
+from agent_service.observability.overview import DEFAULT_TIMEZONE, Granularity, Overview, build_overview
 from agent_service.observability.trace_store import (
     RunPage,
     RunQuery,
@@ -103,8 +104,11 @@ def _list_runs(
     cursor: str | None,
     agent_version: int | None = None,
     meta: list[str] | None = None,
+    search: str | None = None,
+    review: dict[str, Any] | None = None,
 ) -> RunPage:
     query = RunQuery(
+        **(review or {}),
         agent_type=agent_type,
         prompt_version=prompt_version,
         agent_version=agent_version,
@@ -116,6 +120,7 @@ def _list_runs(
         limit=limit,
         cursor=cursor,
         metadata=_parse_meta(meta),
+        search=search,
     )
     try:
         return _store().list_runs(query)
@@ -136,11 +141,25 @@ def list_runs(
     cursor: str | None = None,
     agent_version: Annotated[int | None, Query(ge=1)] = None,
     meta: Annotated[list[str] | None, Query(description="Filtro por metadata, `chave=valor` (repetível).")] = None,
+    search: Annotated[str | None, Query(max_length=200, description="Trecho do session_id, user_id ou de um valor de metadata.")] = None,
+    complexity: Annotated[
+        list[Annotated[int, Field(ge=1, le=3)]] | None, Query(description="Só estes níveis de complexidade (repetível).")
+    ] = None,
+    tool_failed: Annotated[bool | None, Query(description="true: só com tool falhando; false: só sem.")] = None,
+    side_effect: Annotated[bool | None, Query(description="true: só os que chamaram tool com efeito colateral.")] = None,
+    min_message_chars: Annotated[int | None, Query(ge=1, le=1000, description="Esconde mensagens mais curtas que isto.")] = None,
+    feedback: Annotated[Literal["up", "down", "none"] | None, Query()] = None,
+    include_dry_run: Annotated[bool, Query(description="false tira os testes do Playground.")] = True,
+    sample: Annotated[int | None, Query(ge=1, le=100, description="Amostra aleatória deste tamanho, sem paginação.")] = None,
 ) -> RunPage:
     """Execuções de todos os agentes (ou de um só, com `agent_type`), mais recentes
     primeiro, com tokens, custo e feedback — a página `/observability` do console usa isto.
 
     Um run aparece logo depois de terminar (a gravação sai do caminho da resposta).
+
+    Os filtros de revisão (`complexity`, `tool_failed`, `side_effect`,
+    `min_message_chars`, `feedback`, `include_dry_run`, `sample`) montam a fila do
+    que vale um humano olhar. Só no trace store local.
     """
     return _list_runs(
         agent_type=agent_type,
@@ -154,6 +173,16 @@ def list_runs(
         cursor=cursor,
         agent_version=agent_version,
         meta=meta,
+        search=search,
+        review={
+            "complexity": tuple(complexity or ()),
+            "tool_failed": tool_failed,
+            "side_effect": side_effect,
+            "min_message_chars": min_message_chars,
+            "feedback": feedback,
+            "exclude_dry_run": not include_dry_run,
+            "sample": sample,
+        },
     )
 
 
@@ -198,6 +227,7 @@ def list_sessions(
     since: datetime | None = None,
     until: datetime | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    search: Annotated[str | None, Query(max_length=200, description="Trecho do session_id, user_id ou de um valor de metadata.")] = None,
 ) -> SessionPage:
     """Sessões recentes (execuções agrupadas por `session_id`), com tokens, custo e feedback somados.
 
@@ -205,11 +235,47 @@ def list_sessions(
     quantas execuções entraram. Com `TRACE_STORE_BACKEND=langfuse` a API não agrupa
     por sessão, e isto varre só um lote das execuções mais recentes.
     """
-    query = RunQuery(agent_type=agent_type, status=status, user_id=user_id, since=since, until=until, limit=limit)
+    query = RunQuery(agent_type=agent_type, status=status, user_id=user_id, since=since, until=until, limit=limit, search=search)
     try:
         return _store().list_sessions(query)
     except TraceStoreError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/overview", response_model=Overview)
+def overview(
+    since: datetime | None = None,
+    until: datetime | None = None,
+    agent_type: str | None = None,
+    include_dry_run: bool = False,
+    tz: Annotated[str, Query(max_length=64, description="Fuso dos baldes da série (IANA).")] = DEFAULT_TIMEZONE,
+    granularity: Granularity | None = None,
+) -> Overview:
+    """O panorama do dashboard dos Logs (`observability/overview.py`): totais com o
+    período anterior, série no tempo sem buracos, uma linha por agente com as versões
+    da configuração, e as tools que estão falhando. Sem `since`, desde o primeiro run.
+
+    Os testes do Playground (`dry_run`) ficam de fora, a menos que `include_dry_run`.
+    Só no trace store local: com `TRACE_STORE_BACKEND=langfuse` responde 501."""
+    from zoneinfo import ZoneInfoNotFoundError
+
+    from agent_service.observability.run_store import DbTraceStore
+
+    if not isinstance(_store(), DbTraceStore):
+        raise HTTPException(status_code=501, detail="O panorama só existe com o trace store local (TRACE_STORE_BACKEND=db).")
+    if since and until and since >= until:
+        raise HTTPException(status_code=422, detail="since precisa ser anterior a until")
+    try:
+        return build_overview(
+            since=since,
+            until=until,
+            agent_type=agent_type,
+            include_dry_run=include_dry_run,
+            timezone_name=tz,
+            granularity=granularity,
+        )
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Fuso desconhecido: {tz!r}") from exc
 
 
 @router.get("/stats", response_model=RunStats)
@@ -221,6 +287,7 @@ def run_stats(
     session_id: str | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    search: Annotated[str | None, Query(max_length=200)] = None,
 ) -> RunStats:
     """Série diária (execuções, erros, tokens, custo) mais contagem por status — os gráficos do console.
 
@@ -235,6 +302,7 @@ def run_stats(
         session_id=session_id,
         since=since,
         until=until,
+        search=search,
     )
     try:
         return _store().get_stats(query)

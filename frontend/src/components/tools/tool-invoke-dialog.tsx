@@ -11,6 +11,8 @@ import { Dialog, DialogBody, DialogDescription, DialogFooter, DialogHeader, Dial
 import { Field, Spinner } from "@/components/ui/primitives";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { DryRunToggle, useDryRun } from "@/components/tools/dry-run-toggle";
+import { TOOL_FAILURE_META } from "@/lib/tool-failures";
 
 /** Roda uma tool uma vez, fora de qualquer agente — pra conferir se ela está configurada certo. */
 export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; onOpenChange: (open: boolean) => void }) {
@@ -21,6 +23,9 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
   const [dependenciesText, setDependenciesText] = useState("{}");
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<ToolInvokeResult | null>(null);
+  const [dryRun, setDryRun] = useDryRun();
+  // Builtin não faz chamada HTTP nossa: não há a quem avisar.
+  const avisaDryRun = tool.kind === "api" || tool.kind === "python";
 
   useEffect(() => {
     let cancelled = false;
@@ -56,6 +61,7 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
           arguments: argumentsCheck.value ?? {},
           function_name: tool.kind === "builtin" ? functionName || null : null,
           dependencies: dependenciesCheck.value ?? {},
+          dry_run: avisaDryRun && dryRun,
         },
         fallbackError: "Falha ao testar a tool",
       });
@@ -127,11 +133,20 @@ export function ToolInvokeDialog({ tool, onOpenChange }: { tool: ToolSummary; on
           />
         </Field>
 
+        {avisaDryRun && <DryRunToggle checked={dryRun} onChange={setDryRun} />}
+
         {result && (
           <div className="flex flex-col gap-2">
             <p className={`text-[13px] font-medium ${result.ok ? "text-success" : "text-destructive"}`}>
-              {result.ok ? "Sucesso" : "Erro"}
+              {result.ok
+                ? result.failure
+                  ? `Respondeu ${TOOL_FAILURE_META[result.failure].label.toLowerCase()}${result.http_status ? ` (HTTP ${result.http_status})` : ""} — não conta como falha`
+                  : "Sucesso"
+                : result.failure
+                  ? `Falhou — ${TOOL_FAILURE_META[result.failure].label}${result.http_status ? ` (HTTP ${result.http_status})` : ""}`
+                  : "Erro"}
             </p>
+            {result.failure && <p className="text-xs text-muted-foreground">{TOOL_FAILURE_META[result.failure].action}</p>}
             <CodeBlock
               title={result.ok ? "result" : "error"}
               code={result.ok ? formatResult(result.result) : (result.error ?? "")}

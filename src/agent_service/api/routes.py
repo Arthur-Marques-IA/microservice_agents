@@ -37,25 +37,44 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _slots: asyncio.Semaphore | None = None
+_waiting = 0
+
+
+def _busy() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="Serviço no limite de execuções simultâneas. Tente de novo em instantes.",
+        headers={"Retry-After": "5"},
+    )
 
 
 @asynccontextmanager
 async def _run_slot() -> AsyncIterator[None]:
-    """Uma vaga de execução. Sem vaga, 503 com `Retry-After` na hora: quem chama
-    (o daemon do Regente, por exemplo) tenta no próximo ciclo, em vez de a
-    requisição esperar numa fila que ninguém vê. O limite é por processo
-    (`MAX_CONCURRENT_RUNS`)."""
-    global _slots
+    """Uma vaga de execução (`MAX_CONCURRENT_RUNS`, por processo). Sem vaga, a
+    chamada espera na fila, em ordem de chegada, até `QUEUE_MAX_WAIT_SECONDS`; o
+    contrato HTTP não muda — só demora mais. Fila cheia ou espera esgotada: 503
+    com `Retry-After`, para quem chama (o daemon do Regente, por exemplo) tentar
+    de novo, em vez de acumular conexões até derrubar o serviço."""
+    global _slots, _waiting
+    settings = get_settings()
     if _slots is None:
-        _slots = asyncio.Semaphore(get_settings().max_concurrent_runs)
+        _slots = asyncio.Semaphore(settings.max_concurrent_runs)
     if _slots.locked():
-        raise HTTPException(
-            status_code=503,
-            detail="Serviço no limite de execuções simultâneas. Tente de novo em instantes.",
-            headers={"Retry-After": "5"},
-        )
-    async with _slots:
+        if settings.queue_max_wait_seconds <= 0 or _waiting >= settings.queue_max_size:
+            raise _busy()
+        _waiting += 1
+        try:
+            await asyncio.wait_for(_slots.acquire(), settings.queue_max_wait_seconds)
+        except TimeoutError:
+            raise _busy() from None
+        finally:
+            _waiting -= 1
+    else:
+        await _slots.acquire()
+    try:
         yield
+    finally:
+        _slots.release()
 
 
 def _timeout_for(definition: dict[str, Any]) -> float:
@@ -85,6 +104,13 @@ def _normalize_metadata(value: dict[str, Any] | None) -> dict[str, str]:
     return normalized
 
 
+def _run_metadata(value: dict[str, Any] | None, dry_run: bool) -> dict[str, str]:
+    metadata = _normalize_metadata(value)
+    if dry_run:
+        metadata["dry_run"] = "true"
+    return metadata
+
+
 class ChatRequest(BaseModel):
     agent_type: str = "conversational"
     user_id: str
@@ -100,6 +126,11 @@ class ChatRequest(BaseModel):
     metadata: dict[str, MetadataValue] | None = None
     """Correlação com o sistema que chama (ex.: `{"conversation_id": "123"}`):
     não vai para o modelo, fica gravada no run e serve de filtro em `/observability/runs`."""
+    dry_run: bool = False
+    """Execução de teste: toda chamada HTTP de tool leva `X-Kuro-Dry-Run: true`
+    e `dependencies.dry_run` vale true para parâmetros `source="dependency"`.
+    Quem implementa a tool decide o que simular. O run fica com
+    `metadata.dry_run = "true"` (filtrável em `/observability/runs`)."""
 
     @field_validator("metadata")
     @classmethod
@@ -153,7 +184,8 @@ def _resolve(request: ChatRequest, endpoint: str) -> tuple[Agent, RunContext]:
         agent_version=definition.get("agent_version"),
         config_hash=definition.get("config_hash"),
         timeout_seconds=_timeout_for(definition),
-        metadata=_normalize_metadata(request.metadata),
+        metadata=_run_metadata(request.metadata, request.dry_run),
+        dry_run=request.dry_run,
         user_id=request.user_id,
         session_id=request.session_id,
         message=request.message,
@@ -182,10 +214,33 @@ def health() -> dict[str, str]:
 
     `auth` aparece aqui porque é a primeira coisa que alguém precisa saber ao
     olhar um serviço que não conhece, e não é segredo: quem não tem chave
-    descobre no primeiro request de qualquer jeito."""
-    from agent_service.api.auth import auth_enabled
+    descobre no primeiro request de qualquer jeito.
 
-    return {"status": "ok", "auth": "enabled" if auth_enabled() else "disabled"}
+    `version` é a versão do serviço (`pyproject.toml`), a mesma das notas de
+    versão em `docs/notas-de-versao.md` — é por ela que quem integra sabe o que
+    já está no ar.
+
+    `model_credentials` diz se dá para cadastrar chaves de provedor: sem
+    `CREDENTIALS_ENCRYPTION_KEY`, o `/model-credentials` responde 503. O serviço
+    sobe mesmo assim — o google ainda funciona pela `GOOGLE_API_KEY` do ambiente."""
+    from agent_service.api.auth import auth_enabled
+    from agent_service.models.crypto import encryption_status
+
+    return {
+        "status": "ok",
+        "version": service_version(),
+        "auth": "enabled" if auth_enabled() else "disabled",
+        "model_credentials": encryption_status(),
+    }
+
+
+def service_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("agent-service")
+    except PackageNotFoundError:  # rodando do código-fonte sem o projeto instalado
+        return "desconhecida"
 
 
 @router.get("/ready")
@@ -263,6 +318,8 @@ class AnalyzeRequest(BaseModel):
     (nesse caso `document` pode ser só uma instrução curta, como 'veja o anexo')."""
     metadata: dict[str, MetadataValue] | None = None
     """Correlação com o sistema que chama — ver `ChatRequest.metadata`."""
+    dry_run: bool = False
+    """Ver `ChatRequest.dry_run`."""
     session_id: str | None = Field(default=None, max_length=200)
     """Agrupa as decisões de uma mesma conversa em `/observability/sessions`
     (ex.: o `conversation_id` do WhatsApp). Não cria histórico: o analista
@@ -321,7 +378,8 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         agent_version=definition.get("agent_version"),
         config_hash=definition.get("config_hash"),
         timeout_seconds=_timeout_for(definition),
-        metadata=_normalize_metadata(request.metadata),
+        metadata=_run_metadata(request.metadata, request.dry_run),
+        dry_run=request.dry_run,
         user_id=request.user_id or "analysis",
         session_id=request.session_id or f"analyze-{uuid.uuid4().hex}",
         message=request.document,

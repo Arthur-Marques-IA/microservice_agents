@@ -13,6 +13,8 @@ export interface ChatRequest {
   message: string;
   dependencies?: Record<string, unknown>;
   attachments?: Attachment[];
+  /** Execução de teste: as tools recebem `X-Kuro-Dry-Run: true`. */
+  dry_run?: boolean;
 }
 
 export interface AnalyzeRequest {
@@ -257,6 +259,8 @@ export interface ModelParams {
   thinking_budget?: number;
   /** Nível de raciocínio, traduzido para cada modelo; ausente = padrão do modelo. */
   reasoning?: "off" | "low" | "medium" | "high";
+  /** Cache do prefixo no Claude (só anthropic); ausente = desligado. */
+  prompt_cache?: "5m" | "1h";
 }
 
 export interface AgentDefinition {
@@ -387,6 +391,8 @@ export interface ToolSummary {
   config: Record<string, unknown>;
   enabled: boolean;
   is_seed: boolean;
+  /** A tool muda algo no sistema chamado? `null` = ainda não classificada. */
+  side_effect?: boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -404,6 +410,7 @@ export interface ToolInput {
   description?: string | null;
   config: Record<string, unknown>;
   enabled?: boolean;
+  side_effect?: boolean | null;
 }
 
 export type ToolUpdateInput = Partial<Omit<ToolInput, "tool_name" | "kind">>;
@@ -478,12 +485,18 @@ export interface ToolInvokeInput {
   function_name?: string | null;
   /** Simula o `dependencies` do `/chat` para parâmetros `source: "dependency"`. */
   dependencies?: Record<string, unknown>;
+  dry_run?: boolean;
 }
+
+/** Tipo de falha de tool (`tools/failures.py`). */
+export type ToolFailureKind = "invalid_arguments" | "not_found" | "auth" | "unavailable" | "config" | "exception";
 
 export interface ToolInvokeResult {
   ok: boolean;
   result?: unknown;
   error?: string | null;
+  failure?: ToolFailureKind | null;
+  http_status?: number | null;
 }
 
 // -- Provedores e credenciais de modelo ----------------------------------
@@ -593,6 +606,12 @@ export interface RunSummary {
   feedback_down: number | null;
   /** Correlação mandada por quem chamou (ex.: `conversation_id`). */
   metadata?: Record<string, string>;
+  /** Chamadas de tool no run; `null` = não informado. */
+  tool_calls?: number | null;
+  /** Chamadas que falharam (HTTP 4xx/5xx, rede, exceção). O `status` do run não muda por isso. */
+  tool_failures?: number | null;
+  /** 1 = nenhuma tool de negócio; 2 = uma ou duas distintas; 3 = três ou mais. */
+  complexity?: number | null;
   attachments?: AttachmentInfo[];
 }
 
@@ -706,4 +725,84 @@ export interface RunStats {
   total_cost_usd?: number | null;
   avg_latency_ms?: number | null;
   scanned: number;
+}
+
+// -- Panorama dos Logs (`GET /observability/overview`) -----------------------
+
+export interface OverviewTotals {
+  runs: number;
+  success: number;
+  errors: number;
+  interrupted: number;
+  /** Runs `success` com pelo menos uma tool falhando. */
+  tool_failure_runs: number;
+  tool_calls: number;
+  tool_failures: number;
+  sessions: number;
+  total_tokens: number;
+  cost_usd: number | null;
+  p50_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  feedback_up: number;
+  feedback_down: number;
+}
+
+export interface OverviewBucket {
+  /** Início do balde no fuso pedido (ISO com offset). */
+  start: string;
+  runs: number;
+  success: number;
+  tool_failure_runs: number;
+  /** `error` + `interrupted`. */
+  errors: number;
+  cost_usd: number;
+  total_tokens: number;
+  p95_latency_ms: number | null;
+}
+
+export interface OverviewVersion {
+  agent_version: number | null;
+  runs: number;
+  error_rate: number;
+  tool_failure_rate: number;
+  cost_per_run_usd: number | null;
+  p95_latency_ms: number | null;
+  feedback_up: number;
+  feedback_down: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface OverviewAgent {
+  agent_type: string;
+  agent_name: string | null;
+  totals: OverviewTotals;
+  cost_per_session_usd: number | null;
+  last_run_at: string;
+  /** Execuções por balde, alinhado com `Overview.buckets`. */
+  trend: number[];
+  /** Da versão mais nova para a mais antiga. */
+  versions: OverviewVersion[];
+}
+
+export interface OverviewToolFailure {
+  tool_name: string;
+  failure: ToolFailureKind;
+  count: number;
+  last_at: string;
+  agent_types: string[];
+  http_status: number[];
+}
+
+export interface Overview {
+  since: string;
+  until: string;
+  timezone: string;
+  granularity: "hour" | "day" | "week";
+  include_dry_run: boolean;
+  buckets: OverviewBucket[];
+  totals: OverviewTotals;
+  previous: OverviewTotals | null;
+  agents: OverviewAgent[];
+  tool_failures: OverviewToolFailure[];
 }

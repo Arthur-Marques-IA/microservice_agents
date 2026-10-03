@@ -44,6 +44,10 @@ tool_definitions = SATable(
     Column("config", JSON, nullable=False),
     Column("enabled", Boolean, nullable=False, default=True),
     Column("is_seed", Boolean, nullable=False, default=False),
+    # A tool muda algo no sistema chamado (grava, cobra, transfere, envia)? Fora do
+    # hash da configuração do agente de propósito: classificar não cria versão nova.
+    # `None` = ainda não classificada (o console avisa). Ver a fila de revisão nos Logs.
+    Column("side_effect", Boolean, nullable=True),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column(
         "updated_at",
@@ -53,6 +57,9 @@ tool_definitions = SATable(
         nullable=False,
     ),
 )
+
+
+_UNSET: Any = object()
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -84,6 +91,7 @@ def create_tool(
     config: dict[str, Any],
     enabled: bool = True,
     is_seed: bool = False,
+    side_effect: bool | None = None,
 ) -> dict[str, Any]:
     engine = get_db().db_engine
     with engine.begin() as conn:
@@ -96,6 +104,7 @@ def create_tool(
                 config=config,
                 enabled=enabled,
                 is_seed=is_seed,
+                side_effect=side_effect,
             )
         )
     tool = get_tool(tool_name)
@@ -117,7 +126,9 @@ def update_tool(
     description: str | None = None,
     config: dict[str, Any] | None = None,
     enabled: bool | None = None,
+    side_effect: Any = _UNSET,
 ) -> dict[str, Any]:
+    """`side_effect`: omitido = não mexe; `None` volta para "não classificada"."""
     current = get_tool(tool_name)
     if current is None:
         raise ToolNotFoundError(tool_name)
@@ -131,6 +142,8 @@ def update_tool(
         values["config"] = config
     if enabled is not None:
         values["enabled"] = enabled
+    if side_effect is not _UNSET:
+        values["side_effect"] = side_effect
 
     if values:
         engine = get_db().db_engine

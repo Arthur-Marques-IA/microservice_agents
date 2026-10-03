@@ -192,6 +192,7 @@ class Client:
         arguments: dict[str, Any],
         function_name: str | None,
         dependencies: dict[str, Any] | None = None,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -200,6 +201,7 @@ class Client:
                 "arguments": arguments,
                 "function_name": function_name,
                 "dependencies": dependencies or {},
+                "dry_run": dry_run,
             },
         )
 

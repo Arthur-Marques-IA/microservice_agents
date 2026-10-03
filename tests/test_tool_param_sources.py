@@ -227,3 +227,55 @@ def test_tool_cannot_start_requiring_a_dependency_its_agents_do_not_declare(fich
         assert "agente_ficha" in exc.value.detail and "conta_id" in exc.value.detail
     finally:
         delete_agent("agente_ficha")
+
+
+# -- dry_run ---------------------------------------------------------------------
+
+CONFIG_DRY_RUN = {
+    "method": "POST",
+    "url": "https://exemplo.test/acordos",
+    "parameters": [
+        {"name": "valor", "type": "number", "location": "body", "required": True},
+        {"name": "simular", "type": "boolean", "location": "body", "required": True,
+         "source": "dependency", "dependency": "dry_run"},
+    ],
+}
+
+
+@pytest.fixture
+def acordo_tool():
+    create_tool(ToolIn(tool_name="fechar_acordo", kind="api", label="Fechar acordo", config=CONFIG_DRY_RUN))
+    yield "fechar_acordo"
+    delete_tool("fechar_acordo")
+
+
+def test_dry_run_avisa_a_api_pelo_header_e_pela_dependency(acordo_tool):
+    import json
+
+    with RedeFalsa({"ok": True}) as rede:
+        invocar(acordo_tool, ToolInvokeIn(arguments={"valor": 100}, dry_run=True))
+    enviada = rede.requests[-1]
+    assert enviada.headers["X-Kuro-Dry-Run"] == "true"
+    assert json.loads(enviada.content) == {"valor": 100, "simular": True}
+
+
+def test_sem_dry_run_nao_ha_header_e_a_dependency_vale_false(acordo_tool):
+    import json
+
+    with RedeFalsa({"ok": True}) as rede:
+        invocar(acordo_tool, ToolInvokeIn(arguments={"valor": 100}, dependencies={"dry_run": True}))
+    enviada = rede.requests[-1]
+    assert "X-Kuro-Dry-Run" not in enviada.headers
+    # Quem manda é o flag do servidor, não um `dry_run` vindo nas dependencies.
+    assert json.loads(enviada.content)["simular"] is False
+
+
+def test_dry_run_nao_precisa_ser_declarado_pelo_agente():
+    assert required_dependencies(validate_api_config(CONFIG_DRY_RUN)) == []
+
+
+def test_dry_run_marca_o_run():
+    from agent_service.api.routes import _run_metadata
+
+    assert _run_metadata({"conversation_id": 7}, True) == {"conversation_id": "7", "dry_run": "true"}
+    assert _run_metadata(None, False) == {}

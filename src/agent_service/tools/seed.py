@@ -19,6 +19,7 @@ def seed_default_tools() -> None:
         description=None,
         config={"builtin_id": "calculator", "params": {}},
         is_seed=True,
+        side_effect=False,
     )
     create_tool_if_missing(
         tool_name="hackernews",
@@ -27,6 +28,7 @@ def seed_default_tools() -> None:
         description=None,
         config={"builtin_id": "hackernews", "params": {}},
         is_seed=True,
+        side_effect=False,
     )
     create_tool_if_missing(
         tool_name="cat_fact",
@@ -35,4 +37,5 @@ def seed_default_tools() -> None:
         description="Devolve um fato curto e aleatório sobre gatos — exemplo de tool via API, sem parâmetros nem autenticação.",
         config={"method": "GET", "url": "https://catfact.ninja/fact", "parameters": []},
         is_seed=True,
+        side_effect=False,
     )

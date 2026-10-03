@@ -18,7 +18,7 @@ const PAGE_SIZE = 25;
  * Busca e pagina `/api/observability/runs` com os filtros dados — reaproveitado
  * pela aba Execuções de um agente e pela página `/observability` (todos os agentes).
  */
-export function useRunsPager(params: Record<string, string>) {
+export function useRunsPager(params: Record<string, string | string[]>) {
   const [items, setItems] = useState<RunSummary[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -28,7 +28,11 @@ export function useRunsPager(params: Record<string, string>) {
 
   const fetchPage = useCallback(
     async (pageCursor: string | null) => {
-      const query = new URLSearchParams({ ...params, limit: String(PAGE_SIZE) });
+      const query = new URLSearchParams({ limit: String(PAGE_SIZE) });
+      // Lista vira parâmetro repetido (`complexity=2&complexity=3`), como a API espera.
+      for (const [key, value] of Object.entries(params)) {
+        for (const item of Array.isArray(value) ? value : [value]) query.append(key, item);
+      }
       if (pageCursor) query.set("cursor", pageCursor);
       return requestJson<RunPage>(`/api/observability/runs?${query}`, { fallbackError: "Falha ao carregar execuções" });
     },
@@ -149,12 +153,13 @@ export function RunsTable({
     <>
       <Card className="overflow-hidden">
         <div className="scrollbar-thin overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
+          <table className="w-full min-w-[1040px] text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                <th className="w-[32%] px-4 py-2.5 font-medium">Mensagem</th>
+                <th className="w-[30%] min-w-64 px-4 py-2.5 font-medium">Mensagem</th>
                 {showAgentColumn && <th className="px-3 py-2.5 font-medium">Agente</th>}
                 <th className="px-3 py-2.5 font-medium">Status</th>
+                <th className="px-3 py-2.5 font-medium" title="Complexidade pelas tools de negócio distintas (1 a 3)">Tools</th>
                 <th className="px-3 py-2.5 font-medium">Versão</th>
                 <th className="px-3 py-2.5 text-right font-medium">Latência</th>
                 <th className="px-3 py-2.5 text-right font-medium">Tokens</th>
@@ -203,6 +208,21 @@ function RunRow({ run, showAgentColumn }: { run: RunSummary; showAgentColumn: bo
       )}
       <td className="px-3 py-2.5">
         <RunStatusBadge status={run.status} title={run.status_message} />
+      </td>
+      <td className="whitespace-nowrap px-3 py-2.5">
+        <span className="inline-flex items-center gap-1.5">
+          {run.complexity != null && (
+            <Badge variant="outline" title={`Complexidade ${run.complexity} · ${run.tool_calls ?? 0} chamadas de tool`}>
+              C{run.complexity}
+            </Badge>
+          )}
+          {!!run.tool_failures && (
+            <Badge variant="warning" title="O agente respondeu, mas estas chamadas de tool falharam">
+              {run.tool_failures} {run.tool_failures === 1 ? "falhou" : "falharam"}
+            </Badge>
+          )}
+          {run.complexity == null && !run.tool_failures && <span className="text-muted-foreground">—</span>}
+        </span>
       </td>
       <td className="px-3 py-2.5">
         {run.agent_version != null ? (

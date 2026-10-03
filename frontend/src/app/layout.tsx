@@ -1,21 +1,19 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Sans, JetBrains_Mono } from "next/font/google";
+// Fontes servidas pelo próprio app (@fontsource), sem `next/font/google`: aquele
+// baixa do Google durante o build, e o build do CI quebrava sem conseguir resolver.
+// Cada arquivo de peso traz todos os subsets com `unicode-range` — o navegador só
+// baixa o que a página usa.
+import "@fontsource/ibm-plex-sans/400.css";
+import "@fontsource/ibm-plex-sans/500.css";
+import "@fontsource/ibm-plex-sans/600.css";
+import "@fontsource/ibm-plex-sans/700.css";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
+import "@fontsource/jetbrains-mono/600.css";
 import { ConfirmProvider } from "@/components/ui/confirm";
 import { ToastProvider } from "@/components/ui/toast";
 import { themeInitScript } from "@/lib/theme-script";
 import "./globals.css";
-
-const appSans = IBM_Plex_Sans({
-  variable: "--font-app-sans",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-});
-
-const appMono = JetBrains_Mono({
-  variable: "--font-app-mono",
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-});
 
 export const metadata: Metadata = {
   title: { default: "agent-service", template: "%s · agent-service" },
@@ -26,7 +24,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="pt-BR"
-      className={`${appSans.variable} ${appMono.variable} h-full antialiased`}
+      className="h-full antialiased"
       suppressHydrationWarning
     >
       <head>

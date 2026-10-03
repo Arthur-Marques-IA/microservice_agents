@@ -1,0 +1,31 @@
+# Liga o agent-service à rede Docker de outro sistema — para as tools chamarem
+# esse sistema de volta pelo nome do container (ex.: http://r8-backend:8080).
+#
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#   # ajuste o nome da rede e o host abaixo
+#   docker compose up -d
+#
+# O `docker compose` lê o `docker-compose.override.yml` sozinho, junto do
+# `docker-compose.yml`. Por isso a ligação sobrevive a recreate e a rebuild, ao
+# contrário de um `docker network connect` manual, que some no próximo `up`.
+# O override está no .gitignore: cada ambiente tem o seu.
+#
+# Descubra o nome da rede do outro sistema com `docker network ls`. Num projeto
+# compose costuma ser `<pasta-do-projeto>_default`.
+
+services:
+  agent-service:
+    networks:
+      - default        # a rede deste compose (Postgres, console, Langfuse)
+      - sistema-externo
+    environment:
+      # Sem isto, as tools continuam bloqueadas. Dentro da rede Docker o outro
+      # container responde num IP privado (172.x), e toda tool só alcança endereço
+      # público por padrão (ver agent_service/tools/egress.py). Libere pelo NOME
+      # do host, separado por vírgula. Isto sobrepõe o TOOL_EGRESS_ALLOWLIST do .env.
+      TOOL_EGRESS_ALLOWLIST: r8-backend
+
+networks:
+  sistema-externo:
+    external: true
+    name: r8_default   # o nome real da rede, como aparece em `docker network ls`

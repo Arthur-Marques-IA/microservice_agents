@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Activity, RefreshCw, X } from "lucide-react";
+import { Activity, RefreshCw, Search, X } from "lucide-react";
 import type { RunStatus } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/primitives";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -13,6 +14,8 @@ import { PERIODS, usePeriodSince, type Period } from "@/components/observability
 import { RUN_STATUS_OPTIONS } from "@/components/observability/run-status";
 import { RunsTable, useRunsPager } from "@/components/observability/runs-table";
 import { SessionsTable } from "@/components/observability/sessions-table";
+import { OverviewPanel, useOverview } from "@/components/observability/overview-panel";
+import { EMPTY_REVIEW, ReviewFilters, reviewParams, type ReviewState } from "@/components/observability/review-filters";
 import { StatsPanel } from "@/components/observability/stats-panel";
 import { PageBody, PageHeader } from "@/components/workspace/page-header";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
@@ -32,8 +35,17 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
   const router = useRouter();
   const { agents, observability } = useWorkspace();
   const [filters, setFilters] = useState<Filters>({ agentType: "", status: "", period: "7d" });
+  // Os testes do Playground (dry_run) ficam fora das métricas por padrão: não são clientes.
+  const [includeTests, setIncludeTests] = useState(false);
   const [tab, setTab] = useState<"sessions" | "runs">(sessionId ? "runs" : "sessions");
   const since = usePeriodSince(filters.period);
+  // O texto digitado só vira filtro (e chamada à API) depois de uma pausa.
+  const [searchText, setSearchText] = useState("");
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearch(searchText.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchText]);
 
   const params = useMemo(() => {
     const p: Record<string, string> = {};
@@ -42,10 +54,22 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
     if (userId) p.user_id = userId;
     if (sessionId) p.session_id = sessionId;
     if (since) p.since = since;
+    if (search) p.search = search;
     return p;
-  }, [filters.agentType, filters.status, userId, sessionId, since]);
+  }, [filters.agentType, filters.status, userId, sessionId, since, search]);
 
-  const runsPager = useRunsPager(params);
+  const [review, setReview] = useState<ReviewState>(EMPTY_REVIEW);
+  const runsParams = useMemo(() => ({ ...params, ...reviewParams(review) }), [params, review]);
+  const runsPager = useRunsPager(runsParams);
+
+  const overviewParams = useMemo(() => {
+    const p: Record<string, string> = {};
+    if (filters.agentType) p.agent_type = filters.agentType;
+    if (since) p.since = since;
+    if (includeTests) p.include_dry_run = "true";
+    return p;
+  }, [filters.agentType, since, includeTests]);
+  const overview = useOverview(overviewParams);
 
   if (!observability.enabled) {
     return (
@@ -64,7 +88,7 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
     );
   }
 
-  const filtered = Boolean(filters.agentType || filters.status);
+  const filtered = Boolean(filters.agentType || filters.status || search);
   const fixedFilter = userId
     ? { label: "Usuário", value: userId }
     : sessionId
@@ -77,13 +101,22 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
         title="Logs"
         description="Sessões e execuções de todos os agentes — pelo console, pela API ou por outros módulos."
         actions={
-          <Button variant="outline" size="sm" onClick={() => void runsPager.reload()} disabled={runsPager.state === "loading"}>
-            <RefreshCw className={runsPager.state === "loading" ? "animate-spin" : undefined} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void runsPager.reload();
+              overview.reload();
+            }}
+            disabled={runsPager.state === "loading"}
+          >
+            <RefreshCw className={runsPager.state === "loading" || overview.state === "loading" ? "animate-spin" : undefined} />
             Atualizar
           </Button>
         }
       />
       <PageBody className="flex flex-col gap-4">
+        {/* Filtros do panorama: valem para tudo o que vem abaixo. */}
         <div className="flex flex-wrap items-center gap-2">
           {fixedFilter && (
             <span className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-sm">
@@ -99,10 +132,22 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
             </span>
           )}
           <Select
+            aria-label="Filtrar por período"
+            value={filters.period}
+            onChange={(e) => setFilters((f) => ({ ...f, period: e.target.value as Filters["period"] }))}
+            wrapperClassName="w-44"
+          >
+            {PERIODS.map((period) => (
+              <option key={period.value} value={period.value}>
+                {period.label}
+              </option>
+            ))}
+          </Select>
+          <Select
             aria-label="Filtrar por agente"
             value={filters.agentType}
             onChange={(e) => setFilters((f) => ({ ...f, agentType: e.target.value }))}
-            wrapperClassName="w-48"
+            wrapperClassName="w-52"
           >
             <option value="">Todos os agentes</option>
             {agents.map((agent) => (
@@ -111,49 +156,75 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
               </option>
             ))}
           </Select>
-          <Select
-            aria-label="Filtrar por status"
-            value={filters.status}
-            onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value as Filters["status"] }))}
-            wrapperClassName="w-40"
-          >
-            <option value="">Todos os status</option>
-            {RUN_STATUS_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </Select>
-          <Select
-            aria-label="Filtrar por período"
-            value={filters.period}
-            onChange={(e) => setFilters((f) => ({ ...f, period: e.target.value as Filters["period"] }))}
-            wrapperClassName="w-40"
-          >
-            {PERIODS.map((period) => (
-              <option key={period.value} value={period.value}>
-                {period.label}
-              </option>
-            ))}
-          </Select>
-          {filtered && (
-            <Button variant="ghost" size="sm" onClick={() => setFilters((f) => ({ ...f, agentType: "", status: "" }))}>
-              Limpar filtros
-            </Button>
+          {!fixedFilter && (
+            <label
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-[13px]"
+              title="Execuções do Playground e de testes com dry_run. Ficam fora das métricas por padrão."
+            >
+              <input
+                type="checkbox"
+                checked={includeTests}
+                onChange={(e) => setIncludeTests(e.target.checked)}
+                className="accent-primary"
+              />
+              Incluir testes
+            </label>
           )}
         </div>
 
-        <StatsPanel params={params} />
+        {fixedFilter ? <StatsPanel params={params} /> : <OverviewPanel overview={overview} />}
 
         <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)}>
-          <TabsList>
-            <TabsTrigger value="sessions">Sessões</TabsTrigger>
-            <TabsTrigger value="runs">Execuções</TabsTrigger>
-          </TabsList>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <TabsList>
+              <TabsTrigger value="sessions">Sessões</TabsTrigger>
+              <TabsTrigger value="runs">Execuções</TabsTrigger>
+            </TabsList>
+            {/* Filtros das listas: só recortam as sessões e execuções abaixo. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative w-full sm:w-64">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+                <Input
+                  type="search"
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
+                  placeholder="Buscar sessão, usuário ou conversa…"
+                  aria-label="Buscar por sessão, usuário ou conversation_id"
+                  className="pl-9"
+                />
+              </div>
+              <Select
+                aria-label="Filtrar por status"
+                value={filters.status}
+                onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value as Filters["status"] }))}
+                wrapperClassName="w-40"
+              >
+                <option value="">Todos os status</option>
+                {RUN_STATUS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+              {filtered && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setFilters((f) => ({ ...f, agentType: "", status: "" }));
+                    setSearchText("");
+                  }}
+                >
+                  Limpar filtros
+                </Button>
+              )}
+            </div>
+          </div>
           <TabsContent value="sessions" className="mt-3">
             <SessionsTable params={params} />
           </TabsContent>
-          <TabsContent value="runs" className="mt-3">
+          <TabsContent value="runs" className="mt-3 flex flex-col gap-3">
+            <ReviewFilters review={review} onChange={setReview} />
             <RunsTable
               items={runsPager.items}
               state={runsPager.state}
@@ -162,7 +233,9 @@ export function LogsView({ userId, sessionId }: { userId?: string; sessionId?: s
               loadingMore={runsPager.loadingMore}
               onLoadMore={() => void runsPager.loadMore()}
               onRetry={() => void runsPager.reload()}
-              emptyTitle={filtered || fixedFilter ? "Nenhuma execução com esses filtros" : "Nenhuma execução registrada"}
+              emptyTitle={
+                filtered || fixedFilter || review !== EMPTY_REVIEW ? "Nenhuma execução com esses filtros" : "Nenhuma execução registrada"
+              }
               showAgentColumn
             />
           </TabsContent>

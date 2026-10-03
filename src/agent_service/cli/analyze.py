@@ -27,6 +27,9 @@ def analyze(
         [], "--attach", "-a", help="Anexa um arquivo (PDF, imagem, áudio...) direto ao modelo (repetível)."
     ),
     dep: list[str] = typer.Option([], "--dep", "-d", help="Dependency nome=valor (repetível)."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Execução de teste: as tools recebem `X-Kuro-Dry-Run: true` e decidem o que simular."
+    ),
 ) -> None:
     """Analisa um documento com um agente one-shot. Ex.: `kuro analyze extrator -f contrato.txt --json`,
     `kuro analyze classificador -m '{"mensagens": [...]}'` ou, com PDF direto,
@@ -62,5 +65,7 @@ def analyze(
     body: dict[str, Any] = {"agent_type": agent_type, "document": document, "dependencies": dependencies or None}
     if attachments:
         body["attachments"] = attachments
+    if dry_run:
+        body["dry_run"] = True
     result = call(st, st.client.analyze, body)
     emit(st, result, lambda r: console.print_json(json.dumps(r["result"], ensure_ascii=False)))

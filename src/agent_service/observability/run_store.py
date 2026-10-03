@@ -38,11 +38,13 @@ from sqlalchemy import (
     exists,
     func,
     insert,
+    not_,
     or_,
     select,
 )
 
 from agent_service.db import get_db
+from agent_service.tools.failures import complexity
 from agent_service.observability.trace_store import (
     RunPage,
     RunQuery,
@@ -91,6 +93,12 @@ runs = Table(
     Column("latency_ms", Float, nullable=True),
     Column("started_at", DateTime(timezone=True), nullable=False, index=True),
     Column("ended_at", DateTime(timezone=True), nullable=True),
+    # Resumo das tools do run (ver `tools/failures.py`): quantas chamadas, quantas
+    # falharam (o run continua `success` se o agente respondeu) e a complexidade
+    # 1–3 pelas tools de negócio distintas. `None` em runs anteriores à 0006 sem tools.
+    Column("tool_calls", Integer, nullable=True),
+    Column("tool_failures", Integer, nullable=True),
+    Column("complexity", Integer, nullable=True),
 )
 
 run_spans = Table(
@@ -270,6 +278,7 @@ def _write_run(record: RunRecord) -> None:
                 latency_ms=latency,
                 started_at=record.started_at,
                 ended_at=ended_at,
+                **_tool_summary(record.spans),
             )
         )
         conn.execute(insert(run_spans), span_rows)
@@ -278,6 +287,15 @@ def _write_run(record: RunRecord) -> None:
                 insert(run_metadata),
                 [{"run_id": record.run_id, "key": k, "value": v} for k, v in record.metadata.items()],
             )
+
+
+def _tool_summary(spans: list[SpanRecord]) -> dict[str, int]:
+    tools = [span for span in spans if span.type == "TOOL"]
+    return {
+        "tool_calls": len(tools),
+        "tool_failures": sum(1 for span in tools if span.level == "ERROR"),
+        "complexity": complexity([span.name for span in tools]),
+    }
 
 
 def _submit(fn: Callable[[], None]) -> None:
@@ -357,9 +375,57 @@ def _filters(query: RunQuery, *, with_session: bool = False) -> list[Any]:
         conditions.append(runs.c.started_at < query.until)
     if with_session:
         conditions.append(runs.c.session_id.is_not(None))
+    if query.search and (term := query.search.strip()):
+        escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
+        conditions.append(
+            or_(
+                runs.c.session_id.ilike(like, escape="\\"),
+                runs.c.user_id.ilike(like, escape="\\"),
+                exists().where(run_metadata.c.run_id == runs.c.run_id, run_metadata.c.value.ilike(like, escape="\\")),
+            )
+        )
     for key, value in query.metadata:
         conditions.append(
             exists().where(run_metadata.c.run_id == runs.c.run_id, run_metadata.c.key == key, run_metadata.c.value == value)
+        )
+    conditions.extend(_review_filters(query))
+    return conditions
+
+
+def _review_filters(query: RunQuery) -> list[Any]:
+    """Os filtros da fila de revisão. Efeito colateral é resolvido na hora, pela
+    classificação atual das tools — classificar uma tool depois vale também para
+    os runs antigos."""
+    from agent_service.tools.store import tool_definitions
+
+    conditions: list[Any] = []
+    if query.complexity:
+        conditions.append(runs.c.complexity.in_(query.complexity))
+    if query.tool_failed is not None:
+        failed = runs.c.tool_failures > 0
+        conditions.append(failed if query.tool_failed else or_(runs.c.tool_failures.is_(None), runs.c.tool_failures == 0))
+    if query.side_effect is not None:
+        called = exists().where(
+            run_spans.c.run_id == runs.c.run_id,
+            run_spans.c.type == "TOOL",
+            run_spans.c.name.in_(select(tool_definitions.c.tool_name).where(tool_definitions.c.side_effect.is_(True))),
+        )
+        conditions.append(called if query.side_effect else not_(called))
+    if query.min_message_chars:
+        conditions.append(func.length(func.trim(func.coalesce(runs.c.message, ""))) >= query.min_message_chars)
+    if query.feedback in ("up", "down"):
+        voted = run_scores.c.value > 0 if query.feedback == "up" else run_scores.c.value <= 0
+        conditions.append(exists().where(run_scores.c.run_id == runs.c.run_id, run_scores.c.name == FEEDBACK, voted))
+    elif query.feedback == "none":
+        conditions.append(not_(exists().where(run_scores.c.run_id == runs.c.run_id, run_scores.c.name == FEEDBACK)))
+    if query.exclude_dry_run:
+        conditions.append(
+            not_(
+                exists().where(
+                    run_metadata.c.run_id == runs.c.run_id, run_metadata.c.key == "dry_run", run_metadata.c.value == "true"
+                )
+            )
         )
     return conditions
 
@@ -458,6 +524,9 @@ def _summary(
         feedback_down=down,
         metadata=meta or {},
         attachments=attachments or [],
+        tool_calls=row.tool_calls,
+        tool_failures=row.tool_failures,
+        complexity=row.complexity,
     )
 
 
@@ -466,6 +535,14 @@ class DbTraceStore:
 
     def list_runs(self, query: RunQuery) -> RunPage:
         stmt = select(runs).where(*_filters(query))
+        if query.sample:
+            # Amostra: o que nenhum filtro apontaria também precisa ser visto às vezes.
+            with get_db().db_engine.connect() as conn:
+                page = list(conn.execute(stmt.order_by(func.random()).limit(query.sample)))
+                votes = _feedback_votes(conn, [r.run_id for r in page])
+                meta = _metadata_of(conn, [r.run_id for r in page])
+                files = _attachments_of(conn, [r.run_id for r in page])
+            return RunPage(items=[_summary(r, votes[r.run_id], meta[r.run_id], files[r.run_id]) for r in page])
         if query.cursor and (position := _decode_cursor(query.cursor)):
             started_at, run_id = position
             stmt = stmt.where(

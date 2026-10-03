@@ -156,7 +156,8 @@ def test_parametro_de_path_nao_consegue_escolher_um_host_interno(monkeypatch):
     try:
         resolve_para(monkeypatch, "169.254.169.254")
         result = asyncio.run(invoke_tool("host_variavel", ToolInvokeIn(arguments={"host": "metadata.google.internal"})))
-        assert result["ok"] is True  # a tool responde, mas com a recusa no texto
+        # O modelo lê a recusa no texto; o teste da tool marca como falha de configuração.
+        assert result["ok"] is False and result["failure"] == "config"
         assert "recusada" in result["result"] and "link-local" in result["result"]
     finally:
         delete_tool("host_variavel")
@@ -243,3 +244,46 @@ def test_tool_python_alcanca_a_rede_publica(monkeypatch):
         httpx.Client(transport=transporte, event_hooks={"request": [egress.guard_request]}),
     )
     assert fn() == "conteudo publico"
+
+
+def test_tool_python_em_dry_run_manda_o_header():
+    from agent_service.tools.context import dependencies_scope
+
+    request = httpx.Request("POST", "https://exemplo.com/acordos")
+    python_tool._mark_dry_run(request)
+    assert "X-Kuro-Dry-Run" not in request.headers
+    with dependencies_scope({}, dry_run=True):
+        python_tool._mark_dry_run(request)
+    assert request.headers["X-Kuro-Dry-Run"] == "true"
+
+
+def test_tool_python_em_dry_run_manda_o_header_pelo_cliente_real(monkeypatch):
+    """Ponta a ponta: o cliente que a tool usa de verdade (com os dois hooks), rodando
+    como o Agno roda tool síncrona (`asyncio.to_thread`) — o flag tem que chegar lá."""
+    import asyncio
+
+    from agent_service.tools.context import dependencies_scope
+
+    recebidos: list[httpx.Request] = []
+    cliente_real = httpx.Client
+
+    def cliente_com_rede_falsa(*args, **kwargs):
+        transporte = httpx.MockTransport(lambda r: (recebidos.append(r), httpx.Response(200, text="ok"))[1])
+        return cliente_real(*args, transport=transporte, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", cliente_com_rede_falsa)
+    monkeypatch.setattr(python_tool, "_guarded_httpx_client", None)
+    resolve_para(monkeypatch, "93.184.216.34")
+    fn = _tool_python(
+        "import httpx\ndef handler() -> str:\n    return httpx.post('https://exemplo.com/acordos').text\n",
+        monkeypatch,
+    )
+
+    async def como_o_agno(dry_run: bool) -> str:
+        with dependencies_scope({}, dry_run=dry_run):
+            return await asyncio.to_thread(fn)
+
+    assert asyncio.run(como_o_agno(True)) == "ok"
+    assert recebidos[-1].headers["X-Kuro-Dry-Run"] == "true"
+    asyncio.run(como_o_agno(False))
+    assert "X-Kuro-Dry-Run" not in recebidos[-1].headers

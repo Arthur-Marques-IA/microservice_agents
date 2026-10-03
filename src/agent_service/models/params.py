@@ -22,6 +22,12 @@ fica em `provider_kwargs`, para o resto do serviço não saber disso.
 Anthropic e Ollama ainda não: são recusados no cadastro, em vez de ignorados.
 `thinking_budget` (Gemini) continua aceito como ajuste fino e, quando vem junto,
 vale no lugar do nível.
+
+`prompt_cache` liga o cache do prefixo (instructions + tools) no Claude: `5m` ou
+`1h` de validade (o de 1h custa mais para gravar e compensa em tráfego espaçado).
+Gemini e OpenAI já fazem esse cache sozinhos a partir de ~1–2k tokens de prefixo
+idêntico — lá não há o que ligar, e o campo é recusado em vez de ignorado. Os
+tokens lidos do cache aparecem na span do modelo (`metadata.cache_read_tokens`).
 """
 
 from typing import Any
@@ -34,6 +40,7 @@ PARAM_RANGES: dict[str, tuple[type, float, float]] = {
 }
 
 REASONING_LEVELS = ("off", "low", "medium", "high")
+PROMPT_CACHE_TTLS = ("off", "5m", "1h")
 _GEMINI2_BUDGET = {"off": 0, "low": 1024, "medium": 4096, "high": 16384}
 
 
@@ -58,8 +65,22 @@ def validate_model_params(params: Any, provider: str | None) -> dict[str, Any] |
                 raise ModelParamsError("model_params.reasoning ainda só vale para google e openai")
             normalized[name] = value
             continue
+        if name == "prompt_cache":
+            if value is None or value == "off":
+                continue
+            if value not in PROMPT_CACHE_TTLS:
+                raise ModelParamsError(f"model_params.prompt_cache deve ser um de {list(PROMPT_CACHE_TTLS)}")
+            if (provider or "google").lower() != "anthropic":
+                raise ModelParamsError(
+                    "model_params.prompt_cache só vale para anthropic — google e openai já fazem "
+                    "cache automático do prefixo repetido (veja metadata.cache_read_tokens nos runs)"
+                )
+            normalized[name] = value
+            continue
         if name not in PARAM_RANGES:
-            raise ModelParamsError(f"model_params.{name} não existe (use {sorted([*PARAM_RANGES, 'reasoning'])})")
+            raise ModelParamsError(
+                f"model_params.{name} não existe (use {sorted([*PARAM_RANGES, 'reasoning', 'prompt_cache'])})"
+            )
         if value is None:
             continue
         kind, low, high = PARAM_RANGES[name]
@@ -111,4 +132,7 @@ def provider_kwargs(provider: str, params: dict[str, Any] | None, model_id: str 
         kwargs.update(_reasoning_kwargs(provider, model_id, params["reasoning"]))
     if "thinking_budget" in params and provider == "google":
         kwargs["thinking_budget"] = params["thinking_budget"]
+    if params.get("prompt_cache") in ("5m", "1h") and provider == "anthropic":
+        kwargs["cache_system_prompt"] = True
+        kwargs["extended_cache_time"] = params["prompt_cache"] == "1h"
     return kwargs

@@ -82,6 +82,13 @@ class RunSummary(BaseModel):
     """Correlação mandada por quem chamou (ex.: `conversation_id`)."""
     attachments: list[dict[str, Any]] = []
     """Anexos da mensagem: `{filename, mime_type, kind, size_bytes?, url?}` — sem o conteúdo."""
+    tool_calls: int | None = None
+    """Chamadas de tool no run. `None` = não informado (backend Langfuse)."""
+    tool_failures: int | None = None
+    """Chamadas que falharam (HTTP 4xx/5xx, rede, exceção) — o `status` do run não
+    muda por isso. `None` = não informado; 0 = nenhuma falha."""
+    complexity: int | None = None
+    """1 = nenhuma tool de negócio; 2 = uma ou duas distintas; 3 = três ou mais (`tools/failures.py`)."""
 
 
 class RunPage(BaseModel):
@@ -186,8 +193,25 @@ class RunQuery:
     cursor: str | None = None
     tenant_id: str | None = None
     """Reservado para isolar clientes da API: filtra `metadata.tenant_id`."""
+    search: str | None = None
+    """Trecho do `session_id`, `user_id` ou de um valor de metadata (ex.: `conversation_id`) — só no trace store local."""
     metadata: tuple[tuple[str, str], ...] = ()
     """Pares chave/valor que o run precisa ter (todos) — só no trace store local."""
+    # Fila de revisão (só no trace store local): o que vale um humano olhar.
+    complexity: tuple[int, ...] = ()
+    """Só estes níveis (1–3, ver `tools/failures.py`)."""
+    tool_failed: bool | None = None
+    """`True`: só runs com alguma tool falhando; `False`: só sem."""
+    side_effect: bool | None = None
+    """`True`: só runs que chamaram uma tool com `side_effect=true`; `False`: só os que não."""
+    min_message_chars: int | None = None
+    """Esconde mensagens curtas ("ok", "oi"): só runs com a mensagem pelo menos deste tamanho."""
+    feedback: str | None = None
+    """`down`: com algum 👎; `up`: com algum 👍; `none`: sem voto."""
+    exclude_dry_run: bool = False
+    """Tira os testes do Playground (`metadata.dry_run = "true"`)."""
+    sample: int | None = None
+    """Amostra aleatória deste tamanho, em vez das mais recentes (sem paginação)."""
 
 
 class TraceStore(Protocol):
