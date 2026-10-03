@@ -41,6 +41,9 @@ timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` pa
   confirmação ao usuário pelo cliente MCP (elicitation); cliente sem esse suporte recebe erro com
   o comando equivalente da CLI. `chat`, `analyze`, `tool_invoke` e `eval` rodam em `dry_run` por
   padrão. Guia em `docs/mcp.md`.
+- **`kuro dash`** (extra `tui`): painel em tela cheia no terminal, com as execuções ao vivo
+  (Enter abre o trace, com os spans de modelo e tools) e o panorama do dashboard dos Logs. Funciona
+  contra o serviço local ou remoto, com as mesmas flags da CLI. Guia em `docs/tui.md`.
 
 ---
 
