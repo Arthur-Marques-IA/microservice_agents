@@ -3,8 +3,7 @@
 > Feito a partir da leitura do código em 2026-09-18 (commit `298a869`) e revisado a cada batelada
 > (última revisão: 2026-10-03, depois da batelada 0.2.0 e da fila de espera)
 > — os itens entregues ficam riscados, com o que foi feito e o que sobrou, em vez de sumirem.
-> Complementa a seção "Roadmap (fase 2+)" do README: reordena os itens de lá, acrescenta o que não
-> aparecia e diz o que cortar.
+> É o único lugar do roadmap: o README só aponta para cá. Diz o que fazer, em que ordem e o que cortar.
 >
 > **Repriorizado em 2026-09-24** para a migração dos agentes R4/R6/R8 do RegenteUDSP e para o
 > modo enxuto sem Langfuse. A ordem que vale agora é a da §0; as seções seguintes continuam como
@@ -152,7 +151,7 @@ procedural (§4.2, que migra depois a ficha do R8 e o reset do R4), sandbox Pyth
 
 Três superfícies com papéis bem separados: **API** para integrar (contrato estável), **CLI/MCP** para
 operar e corrigir, **UI** opcional para inspecionar. Toda feature nova deveria chegar primeiro na API +
-CLI e só depois na UI. A paridade entre as três está fechada e documentada como matriz no README
+CLI e só depois na UI. A paridade entre as três está fechada e documentada como matriz em [docs/cli.md](docs/cli.md#paridade-entre-api-cli-e-console)
 (ver §6 para o que sobrou de fora e por quê).
 
 A palavra que sustenta o produto é **validada**. O ciclo que une as peças — *mudei o agente → provo
@@ -359,7 +358,7 @@ Regras de design:
 A paridade fechou. O upload de arquivo saiu do `/knowledge/content` do AgentOS
 (que só alimenta a collection padrão) para uma rota própria,
 `POST /collections/{nome}/files`, que resolve a collection por nome e usa o
-embedder dela. Sobraram três exceções, todas com motivo declarado no README:
+embedder dela. Sobraram três exceções, todas com motivo declarado na [matriz](docs/cli.md#paridade-entre-api-cli-e-console):
 indexar por **URL** (ainda no pipeline do AgentOS, só na padrão), **`runs tail`**
 e **testar uma chave antes de salvá-la**. O fluxo de CI (`eval`, `runs export`,
 `agents export`/`apply -f dir`, `--dry-run`) é só da CLI de propósito: trabalha com
@@ -392,7 +391,7 @@ promote e concordância do shadow estão também no console.
 | Anexos | O base64 fica no histórico da sessão e volta a cada turno (o `AGENTS.md` já avisa) | `POST /files` que devolve `file_id`, guardar em storage de objetos e no histórico manter só a referência (o MinIO do compose é do Langfuse e está no profile opcional: usar o Postgres ou um volume evita trazer ele de volta ao núcleo) |
 | ~~`documents/collections.py`~~ | **corrigido em parte**: o embedder era fixo em Gemini com a `GOOGLE_API_KEY` do ambiente | Embedder e credencial por collection (`documents/embedder.py`), escolhidos na criação e vindos do cofre. O `lru_cache` agora é chaveado pelo embedder, mas **rotação de credencial ainda exige restart** — a chave já está dentro do cliente |
 | AgentOS no boot | Agentes e collections criados depois do boot não aparecem nas rotas do AgentOS | Se o playground do os.agno.com não for essencial, deixe o AgentOS só para ingestão, ou remova (ver §8) |
-| Seleção de modelo | Ainda não há fallback (o README já prevê) | Com vários provedores já cadastrados, dá para ligar `fallback_models` por agente agora |
+| Seleção de modelo | Ainda não há fallback (já previsto) | Com vários provedores já cadastrados, dá para ligar `fallback_models` por agente agora |
 | Streaming | O `/chat` síncrono agrega o stream em memória | ~~Timeout por run~~ **feito** (`timeout_seconds`, 504) e o cancelamento na desconexão já existe; falta `max_tool_calls` por agente contra loops de tool |
 | ~~Tool de API travando o event loop~~ | **corrigido**: o entrypoint era síncrono e o Agno chama entrypoint síncrono direto no caminho `async` (`Function.aexecute`), então uma chamada de 15s parava todas as requisições do worker | Entrypoint `async` com `httpx.AsyncClient` único — o pool também evita refazer o handshake TLS a cada chamada |
 | Escala | Cache por processo; `MAX_CONCURRENT_RUNS` também é por processo; migração no startup sem lock | Com o `LISTEN/NOTIFY` do H0 dá para rodar com `--workers N` ou várias réplicas sem cache velho; advisory lock do Postgres no `upgrade_database` antes de subir mais de um processo |
@@ -443,5 +442,5 @@ Os prazos são estimativas grosseiras para dar ordem de grandeza, não compromis
 | **Regente**, contínuo | R8 shadow → prod, R4 shadow → prod, R6 shadow → assistido → autônomo | Regente fora do `ServiceLLM::chatJson()` |
 | **Depois** | `api_keys`/tenant/RLS, procedural, `tool_only`, cache com `LISTEN/NOTIFY`, lock de migração, sandbox Python, LLM-juiz no eval, `agente@versão`, `kuro up/down`, MCP, GitOps de tools/collections, `kuro dash` | Plataforma completa, por necessidade |
 
-A paridade CLI × console está fechada e documentada como matriz no README (as exceções, com motivo,
+A paridade CLI × console está fechada e documentada como matriz em [docs/cli.md](docs/cli.md#paridade-entre-api-cli-e-console) (as exceções, com motivo,
 estão na §6). O console foi atualizado com o que os Sprints 2 e 3 trouxeram em 2026-09-25.
