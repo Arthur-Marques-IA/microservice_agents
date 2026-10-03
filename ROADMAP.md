@@ -1,7 +1,7 @@
 # Roadmap do Kuro (agent-service)
 
 > Feito a partir da leitura do código em 2026-09-18 (commit `298a869`) e revisado a cada batelada
-> (última revisão: 2026-09-25, depois do Sprint 3 e da atualização do console)
+> (última revisão: 2026-10-03, depois da batelada 0.2.0 e da fila de espera)
 > — os itens entregues ficam riscados, com o que foi feito e o que sobrou, em vez de sumirem.
 > Complementa a seção "Roadmap (fase 2+)" do README: reordena os itens de lá, acrescenta o que não
 > aparecia e diz o que cortar.
@@ -101,9 +101,18 @@ R8 em shadow → prod, depois R4, e por último R6 (shadow → assistido com
 de cada mensagem mantido), feedback por resposta e da conversa inteira com a transcrição vinda das
 execuções, anexos visíveis na conversa (só nome/tipo/tamanho gravados, nunca o conteúdo) e **modelos
 lidos ao vivo do provedor** (`/model-providers/{p}/models`), em vez da lista fixa — o Gemini 2.5 está
-saindo, e a lista já traz os 3.x. Pendente: a tabela de preço (`models/pricing.py`) não conhece os
-modelos novos (custo `null` até entrarem lá ou em `MODEL_PRICES`), e o modelo padrão do serviço ainda é
+saindo, e a lista já traz os 3.x. ~~A tabela de preço não conhecia os modelos novos~~ **Feito
+(2026-10-01)**: `models/pricing.py` cobre os Gemini 3.x. Pendente: o modelo padrão do serviço ainda é
 `gemini-2.5-flash` (`DEFAULT_MODEL_ID`).
+
+**Batelada 0.2.0 (2026-09-28 a 2026-10-02), vinda da integração do R8 em produção — feita:**
+erros de configuração claros (503 com `error` em vez de 500), `dry_run` nas tools, `prompt_cache`,
+lista de modelos sem esperar o provedor, contexto de teste pré-preenchido no Playground, busca nos
+Logs por sessão/usuário/metadata, falha de tool no trace (404 não conta), complexidade do run e tools
+com efeito colateral, dashboard dos Logs por perguntas (falhas, custo, versões, tendência) com fila de
+revisão (`kuro runs list -c/--tool-failed/--side-effect/--feedback/--sample`), fila de espera por vaga
+de execução (§0, Sprint 3 item 3) e fontes do frontend servidas pelo app, sem `next/font/google` no
+build. O detalhe para quem integra está em `docs/notas-de-versao.md`.
 
 **Adiado de propósito** (há um consumidor só): tabela `api_keys` multi-chave, multi-tenancy
 estrutural/RLS, RBAC no console, snapshot com cache e `LISTEN/NOTIFY`, dependências `tool_only`,
