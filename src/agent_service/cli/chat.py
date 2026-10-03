@@ -10,12 +10,13 @@ import mimetypes
 import os
 import sys
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import typer
 
-from agent_service.cli.client import ApiError, ServiceUnavailable
+from agent_service.cli.client import ApiError, Client, ServiceUnavailable
 from agent_service.cli.common import (
     EXIT_FAILED,
     EXIT_USAGE,
@@ -135,9 +136,14 @@ def resolve_dependencies(st: State, definition: dict[str, Any], given: dict[str,
 # -- execução ------------------------------------------------------------------------
 
 
-def send(st: State, body: dict[str, Any], *, live: bool) -> dict[str, Any]:
-    """Envia uma mensagem pelo stream. Com `live`, imprime o texto conforme chega.
-    Devolve o resultado consolidado; `error` preenchido se o run falhou."""
+def collect_stream(
+    client: Client, body: dict[str, Any], on_text: Callable[[str], None] | None = None
+) -> dict[str, Any]:
+    """Envia uma mensagem pelo stream e consolida o resultado — sem console nem
+    código de saída, para a CLI, o servidor MCP e a TUI usarem igual.
+
+    `error` vem preenchido se o run falhou; falha de transporte ou HTTP sobe como
+    `ServiceUnavailable`/`ApiError`."""
     result: dict[str, Any] = {
         "agent_type": body["agent_type"],
         "session_id": body["session_id"],
@@ -148,24 +154,32 @@ def send(st: State, body: dict[str, Any], *, live: bool) -> dict[str, Any]:
         "error": None,
     }
     chunks: list[str] = []
+    for event, data in client.chat_stream(body):
+        if event == "run":
+            result["run_id"], result["trace_id"] = data.get("run_id"), data.get("trace_id")
+        elif event == "message":
+            text = data.get("content") or ""
+            chunks.append(text)
+            if on_text is not None:
+                on_text(text)
+        elif event == "usage":
+            result["usage"] = data
+        elif event == "error":
+            result["error"] = data.get("message") or "falha na execução do agente"
+    result["content"] = "".join(chunks)
+    return result
+
+
+def send(st: State, body: dict[str, Any], *, live: bool) -> dict[str, Any]:
+    """Envia uma mensagem pelo stream. Com `live`, imprime o texto conforme chega.
+    Devolve o resultado consolidado; `error` preenchido se o run falhou."""
+    on_text = (lambda text: console.out(text, end="", highlight=False)) if live else None
     try:
-        for event, data in st.client.chat_stream(body):
-            if event == "run":
-                result["run_id"], result["trace_id"] = data.get("run_id"), data.get("trace_id")
-            elif event == "message":
-                text = data.get("content") or ""
-                chunks.append(text)
-                if live:
-                    console.out(text, end="", highlight=False)
-            elif event == "usage":
-                result["usage"] = data
-            elif event == "error":
-                result["error"] = data.get("message") or "falha na execução do agente"
+        result = collect_stream(st.client, body, on_text)
     except (ServiceUnavailable, ApiError) as exc:
         fail_from(st, exc)
-    if live and chunks:
+    if live and result["content"]:
         console.out("")
-    result["content"] = "".join(chunks)
     return result
 
 

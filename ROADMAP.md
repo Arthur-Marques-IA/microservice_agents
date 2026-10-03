@@ -1,10 +1,9 @@
 # Roadmap do Kuro (agent-service)
 
 > Feito a partir da leitura do código em 2026-09-18 (commit `298a869`) e revisado a cada batelada
-> (última revisão: 2026-10-03, depois da batelada 0.2.0 e da fila de espera)
+> (última revisão: 2026-10-03, depois do servidor MCP, do `kuro dash` e da divisão da documentação)
 > — os itens entregues ficam riscados, com o que foi feito e o que sobrou, em vez de sumirem.
-> Complementa a seção "Roadmap (fase 2+)" do README: reordena os itens de lá, acrescenta o que não
-> aparecia e diz o que cortar.
+> É o único lugar do roadmap: o README só aponta para cá. Diz o que fazer, em que ordem e o que cortar.
 >
 > **Repriorizado em 2026-09-24** para a migração dos agentes R4/R6/R8 do RegenteUDSP e para o
 > modo enxuto sem Langfuse. A ordem que vale agora é a da §0; as seções seguintes continuam como
@@ -114,10 +113,22 @@ revisão (`kuro runs list -c/--tool-failed/--side-effect/--feedback/--sample`), 
 de execução (§0, Sprint 3 item 3) e fontes do frontend servidas pelo app, sem `next/font/google` no
 build. O detalhe para quem integra está em `docs/notas-de-versao.md`.
 
+**Operação por agentes e pelo terminal (2026-10-03) — feito:** três trilhas em paralelo.
+1. ~~Servidor MCP~~ **Feito** (`mcp_server.py`, extra `mcp`, ver §5.5): as operações da CLI como
+   tools, por stdio, na máquina de quem opera e falando com o serviço local ou na VPS.
+2. ~~TUI~~ **Feito** (`tui/`, extra `tui`, ver §4.1): `kuro dash` com as execuções ao vivo, o trace e
+   o panorama.
+3. ~~Documentação distribuída~~ **Feito**: o README virou vitrine e índice, com um assunto por
+   arquivo em `docs/`. `tests/test_docs_links.py` quebra a CI com link quebrado.
+
+A base comum dos três é o `Client` da CLI. O que não é apresentação (o stream do chat, o eval) saiu
+do `typer` para os três reaproveitarem.
+
 **Adiado de propósito** (há um consumidor só): tabela `api_keys` multi-chave, multi-tenancy
 estrutural/RLS, RBAC no console, snapshot com cache e `LISTEN/NOTIFY`, dependências `tool_only`,
 procedural (§4.2, que migra depois a ficha do R8 e o reset do R4), sandbox Python (manter
-`CUSTOM_PYTHON_TOOLS_ENABLED` desligado em produção), exportador OpenTelemetry, MCP e GitOps.
+`CUSTOM_PYTHON_TOOLS_ENABLED` desligado em produção), exportador OpenTelemetry e GitOps de tools e
+collections.
 
 ## 1. Onde o produto está
 
@@ -152,7 +163,7 @@ procedural (§4.2, que migra depois a ficha do R8 e o reset do R4), sandbox Pyth
 
 Três superfícies com papéis bem separados: **API** para integrar (contrato estável), **CLI/MCP** para
 operar e corrigir, **UI** opcional para inspecionar. Toda feature nova deveria chegar primeiro na API +
-CLI e só depois na UI. A paridade entre as três está fechada e documentada como matriz no README
+CLI e só depois na UI. A paridade entre as três está fechada e documentada como matriz em [docs/cli.md](docs/cli.md#paridade-entre-api-cli-e-console)
 (ver §6 para o que sobrou de fora e por quê).
 
 A palavra que sustenta o produto é **validada**. O ciclo que une as peças — *mudei o agente → provo
@@ -236,11 +247,12 @@ Para ficar redondo:
   `GROUP BY` sobre o histórico inteiro, e "taxa de 👍 por versão" é uma consulta. O Langfuse virou
   um exportador *adicional*, e nem vem mais na imagem padrão (extra `[observability]`).
 - Com a UI desligada, a CLI precisa cobrir tudo. Ver a tabela de paridade na §6.
-- **TUI de verdade.** O que existe hoje (`1eb1049 CLI/TUI v1`) é o shell/REPL interativo do `kuro`
-  (typer + rich + questionary), não uma interface de tela cheia. Para quem desliga a UI, o próximo
-  passo natural é um `kuro dash` em [Textual](https://textual.textualize.io): execuções chegando ao
-  vivo, funil das etapas, gasto de tokens e trace de um run navegável. O trace store local, de que
-  ele dependia, já existe.
+- ~~**TUI de verdade.**~~ **Feito** (2026-10-03, [docs/tui.md](docs/tui.md)): `kuro dash` em
+  [Textual](https://textual.textualize.io), com as execuções chegando ao vivo (filtro por agente,
+  status e testes), o trace navegável (spans de modelo e tools, com o caminho até um erro já
+  aberto) e o panorama do `/observability/overview`. **Falta:** o funil por etapa, que depende do
+  procedural (§4.2), e operar pelo painel (testar e editar um agente). Decidir sobre essa parte
+  depois de usar, porque o shell já cobre.
 
 ### 4.2 Agente procedural (etapas)
 
@@ -331,10 +343,16 @@ Regras de design:
    - modo "proposta", em que as regras caem em `draft` e passam pelo `kuro eval` antes de ir para prod
      — hoje elas valem na próxima mensagem de produção, sem revisão;
    - agrupar vários 👎 comentados num merge só (lote semanal), em vez de um merge por feedback.
-5. **Servidor MCP do Kuro.** Mesmas operações da CLI expostas como tools MCP (`create_agent`,
-   `chat_agent`, `list_runs`, `run_eval`...). O Claude Code e outros agentes passam a operar sem
-   passar pelo shell nem interpretar stdout. O `AGENTS.md` continua sendo a documentação, e o MCP
-   vira o transporte. Vale publicar também uma *skill* do Claude Code com as receitas.
+5. ~~**Servidor MCP do Kuro.**~~ **Feito** (2026-10-03, [docs/mcp.md](docs/mcp.md)): `kuro-mcp` por
+   stdio, com 43 tools que espelham a CLI. O Claude Code e outros agentes operam sem passar pelo
+   shell. Toda operação que na CLI pede `--yes` pede confirmação à pessoa por elicitation, sem
+   parâmetro que o modelo possa preencher. Os testes rodam em `dry_run` por padrão, e chave de
+   modelo não passa pelo MCP.
+   **Falta:**
+   - transporte HTTP, se algum agente remoto precisar (o stdio basta para a máquina de quem opera);
+   - decidir se editar um agente de produção (`agent_set`/`agent_apply`) também pede confirmação.
+     Hoje segue a CLI e não pede;
+   - a *skill* do Claude Code com o ciclo draft → eval → promote.
 6. **Agentes como código (GitOps).** **Feito para agentes** no Sprint 3: `kuro agents export -o dir`
    grava um JSON por agente, `kuro agents apply -f dir --dry-run` valida no servidor e mostra o que
    mudaria, e `apply -f dir` só envia o que mudou (o fluxo de CI está em `docs/integracao.md` §6).
@@ -359,7 +377,7 @@ Regras de design:
 A paridade fechou. O upload de arquivo saiu do `/knowledge/content` do AgentOS
 (que só alimenta a collection padrão) para uma rota própria,
 `POST /collections/{nome}/files`, que resolve a collection por nome e usa o
-embedder dela. Sobraram três exceções, todas com motivo declarado no README:
+embedder dela. Sobraram três exceções, todas com motivo declarado na [matriz](docs/cli.md#paridade-entre-api-cli-e-console):
 indexar por **URL** (ainda no pipeline do AgentOS, só na padrão), **`runs tail`**
 e **testar uma chave antes de salvá-la**. O fluxo de CI (`eval`, `runs export`,
 `agents export`/`apply -f dir`, `--dry-run`) é só da CLI de propósito: trabalha com
@@ -392,7 +410,7 @@ promote e concordância do shadow estão também no console.
 | Anexos | O base64 fica no histórico da sessão e volta a cada turno (o `AGENTS.md` já avisa) | `POST /files` que devolve `file_id`, guardar em storage de objetos e no histórico manter só a referência (o MinIO do compose é do Langfuse e está no profile opcional: usar o Postgres ou um volume evita trazer ele de volta ao núcleo) |
 | ~~`documents/collections.py`~~ | **corrigido em parte**: o embedder era fixo em Gemini com a `GOOGLE_API_KEY` do ambiente | Embedder e credencial por collection (`documents/embedder.py`), escolhidos na criação e vindos do cofre. O `lru_cache` agora é chaveado pelo embedder, mas **rotação de credencial ainda exige restart** — a chave já está dentro do cliente |
 | AgentOS no boot | Agentes e collections criados depois do boot não aparecem nas rotas do AgentOS | Se o playground do os.agno.com não for essencial, deixe o AgentOS só para ingestão, ou remova (ver §8) |
-| Seleção de modelo | Ainda não há fallback (o README já prevê) | Com vários provedores já cadastrados, dá para ligar `fallback_models` por agente agora |
+| Seleção de modelo | Ainda não há fallback (já previsto) | Com vários provedores já cadastrados, dá para ligar `fallback_models` por agente agora |
 | Streaming | O `/chat` síncrono agrega o stream em memória | ~~Timeout por run~~ **feito** (`timeout_seconds`, 504) e o cancelamento na desconexão já existe; falta `max_tool_calls` por agente contra loops de tool |
 | ~~Tool de API travando o event loop~~ | **corrigido**: o entrypoint era síncrono e o Agno chama entrypoint síncrono direto no caminho `async` (`Function.aexecute`), então uma chamada de 15s parava todas as requisições do worker | Entrypoint `async` com `httpx.AsyncClient` único — o pool também evita refazer o handshake TLS a cada chamada |
 | Escala | Cache por processo; `MAX_CONCURRENT_RUNS` também é por processo; migração no startup sem lock | Com o `LISTEN/NOTIFY` do H0 dá para rodar com `--workers N` ou várias réplicas sem cache velho; advisory lock do Postgres no `upgrade_database` antes de subir mais de um processo |
@@ -440,8 +458,9 @@ Os prazos são estimativas grosseiras para dar ordem de grandeza, não compromis
 | ~~**S1**~~ feito | Trace store em Postgres, Langfuse como extra opcional, Redis fora do core, `_resolve` em threadpool | Produção enxuta com runs auditáveis |
 | ~~**S2**~~ feito | Alembic, `config_hash` + `agent_versions`, `kuro eval` v0 determinístico, draft como agente comum + `promote` | Mudança de agente provada antes de ir para prod |
 | ~~**S3**~~ feito | Parâmetros do modelo, `enum`, timeout, limite de simultâneas, metadata, shadow (referência, concordância, export), `/ready`, agentes como código, guia de integração | O Regente integra sozinho |
+| ~~**Operação**~~ feito | Servidor MCP (`kuro-mcp`), `kuro dash`, documentação dividida por assunto | Agentes de IA operam o Kuro por tools; humanos, pelo terminal |
 | **Regente**, contínuo | R8 shadow → prod, R4 shadow → prod, R6 shadow → assistido → autônomo | Regente fora do `ServiceLLM::chatJson()` |
-| **Depois** | `api_keys`/tenant/RLS, procedural, `tool_only`, cache com `LISTEN/NOTIFY`, lock de migração, sandbox Python, LLM-juiz no eval, `agente@versão`, `kuro up/down`, MCP, GitOps de tools/collections, `kuro dash` | Plataforma completa, por necessidade |
+| **Depois** | `api_keys`/tenant/RLS, procedural, `tool_only`, cache com `LISTEN/NOTIFY`, lock de migração, sandbox Python, LLM-juiz no eval, `agente@versão`, `kuro up/down`, MCP por HTTP, GitOps de tools/collections | Plataforma completa, por necessidade |
 
-A paridade CLI × console está fechada e documentada como matriz no README (as exceções, com motivo,
+A paridade CLI × console está fechada e documentada como matriz em [docs/cli.md](docs/cli.md#paridade-entre-api-cli-e-console) (as exceções, com motivo,
 estão na §6). O console foi atualizado com o que os Sprints 2 e 3 trouxeram em 2026-09-25.

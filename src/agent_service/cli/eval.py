@@ -37,38 +37,46 @@ from typing import Any
 import typer
 from rich.table import Table
 
-from agent_service.cli.client import ApiError, ServiceUnavailable
-from agent_service.cli.common import EXIT_FAILED, EXIT_USAGE, call, console, emit, fail, fail_from, state
+from agent_service.cli.client import ApiError, Client, ServiceUnavailable
+from agent_service.cli.common import EXIT_FAILED, EXIT_USAGE, console, emit, fail, fail_from, state
 from agent_service.evaluation import check_rules, compare, flatten, summarize, validate_rules
 
 
-# -- execução ------------------------------------------------------------------------
+# -- núcleo (sem typer: a CLI e o servidor MCP chamam o mesmo) -----------------------
 
 
-def _load_cases(st: Any, path: str) -> list[dict[str, Any]]:
-    try:
-        lines = open(path, encoding="utf-8").read().splitlines()
-    except OSError as exc:
-        fail(st, f"não consegui ler {path}: {exc}", EXIT_USAGE)
+class EvalInputError(ValueError):
+    """Dataset, regras ou agente inadequados — erro de uso, não de execução."""
+
+
+def parse_cases(text: str, source: str) -> list[dict[str, Any]]:
     cases = []
-    for number, line in enumerate(lines, start=1):
+    for number, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
             continue
         try:
             case = json.loads(line)
         except ValueError as exc:
-            fail(st, f"{path}:{number}: JSON inválido ({exc})", EXIT_USAGE)
+            raise EvalInputError(f"{source}:{number}: JSON inválido ({exc})") from exc
         if not isinstance(case, dict) or "input" not in case:
-            fail(st, f"{path}:{number}: cada caso precisa de `input` (e normalmente de `expected`)", EXIT_USAGE)
+            raise EvalInputError(f"{source}:{number}: cada caso precisa de `input` (e normalmente de `expected`)")
         case.setdefault("id", str(number))
         cases.append(case)
     if not cases:
-        fail(st, f"{path}: nenhum caso", EXIT_USAGE)
+        raise EvalInputError(f"{source}: nenhum caso")
     return cases
 
 
+def check_rules_spec(rules: Any) -> list[dict[str, Any]]:
+    if not isinstance(rules, list):
+        raise EvalInputError("as regras devem ser uma lista de objetos")
+    if problems := validate_rules(rules):
+        raise EvalInputError("; ".join(problems))
+    return rules
+
+
 def _run_case(
-    st: Any,
+    client: Client,
     agent_type: str,
     case: dict[str, Any],
     fields: list[str] | None,
@@ -85,7 +93,7 @@ def _run_case(
         body = {"agent_type": agent_type, "document": document, "dependencies": dependencies or None}
         if dry_run:
             body["dry_run"] = True
-        response = st.client.analyze(body)
+        response = client.analyze(body)
     except (ServiceUnavailable, ApiError) as exc:
         detail = exc.detail if isinstance(exc, ApiError) else str(exc)
         return {**base, "error": str(detail), "passed": False, "mismatches": [], "violations": [], "fields_compared": 0}
@@ -97,7 +105,7 @@ def _run_case(
     passed = not mismatches and not violations
     if score:
         try:
-            st.client.score(
+            client.score(
                 {"run_id": response["run_id"], "name": "eval", "value": 1 if passed else 0, "comment": f"caso {case['id']}"}
             )
         except (ServiceUnavailable, ApiError):
@@ -115,9 +123,60 @@ def _run_case(
     }
 
 
-def _run_all(st: Any, agent_type: str, cases: list[dict[str, Any]], concurrency: int, **options: Any) -> list[dict[str, Any]]:
+def _run_all(client: Client, agent_type: str, cases: list[dict[str, Any]], concurrency: int, **options: Any) -> list[dict[str, Any]]:
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        return list(pool.map(lambda case: _run_case(st, agent_type, case, **options), cases))
+        return list(pool.map(lambda case: _run_case(client, agent_type, case, **options), cases))
+
+
+def run_evaluation(
+    client: Client,
+    agent_type: str,
+    cases: list[dict[str, Any]],
+    *,
+    compare_with: str | None = None,
+    rules: list[dict[str, Any]] | None = None,
+    fields: list[str] | None = None,
+    min_pass: float = 0.9,
+    tolerance: float = 0.01,
+    concurrency: int = 4,
+    score: bool = True,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Roda o dataset e devolve `{summary, results, compare?, verdict}`.
+
+    Agente que não é `analysis` sobe como `EvalInputError`, e a falha ao buscá-lo
+    como `ApiError`/`ServiceUnavailable`. A falha de um caso fica no `error` dele."""
+    for name in [agent_type] + ([compare_with] if compare_with else []):
+        if client.get_agent(name).get("kind") != "analysis":
+            raise EvalInputError(f"{name!r} não é um agente 'analysis' — o eval v0 compara saídas estruturadas")
+
+    options = {"fields": fields, "rules": rules or [], "tolerance": tolerance, "score": score, "dry_run": dry_run}
+    results = _run_all(client, agent_type, cases, concurrency, **options)
+    compare_results = _run_all(client, compare_with, cases, concurrency, **options) if compare_with else None
+
+    summary = summarize(agent_type, results)
+    report: dict[str, Any] = {"summary": summary, "results": results}
+    if summary["errors"] == summary["cases"]:
+        verdict = {"ok": False, "reason": "todos os casos falharam ao executar — veja `error` em cada um"}
+    elif summary["policy_violations"]:
+        verdict = {"ok": False, "reason": f"{summary['policy_violations']} violação(ões) de política"}
+    elif compare_results is not None:
+        other = summarize(compare_with, compare_results)
+        report["compare"] = {"summary": other, "results": compare_results}
+        worse = summary["passed"] < other["passed"]
+        verdict = {
+            "ok": not worse,
+            "reason": f"{agent_type} {'pior que' if worse else 'não é pior que'} {compare_with} "
+            f"({summary['passed']} × {other['passed']} casos ok)",
+        }
+    else:
+        ok = summary["pass_rate"] >= min_pass
+        verdict = {"ok": ok, "reason": f"{summary['pass_rate']:.0%} dos casos ok (mínimo {min_pass:.0%})"}
+    report["verdict"] = verdict
+    return report
+
+
+# -- comando -------------------------------------------------------------------------
 
 
 def _render(report: dict[str, Any]) -> None:
@@ -167,54 +226,37 @@ def eval_command(
     Ex.: `kuro eval r8-draft -f casos.jsonl --rules regras.json --compare r8 --json`.
     Sai com 1 se piorou (ou não atingiu --min-pass, ou violou alguma regra)."""
     st = state(ctx)
-    for name in [agent_type] + ([compare_with] if compare_with else []):
-        definition = call(st, st.client.get_agent, name)
-        if definition.get("kind") != "analysis":
-            fail(st, f"{name!r} não é um agente 'analysis' — o eval v0 compara saídas estruturadas", EXIT_USAGE)
-
-    cases = _load_cases(st, file)
-    rules: list[dict[str, Any]] = []
-    if rules_file:
-        try:
-            rules = json.loads(open(rules_file, encoding="utf-8").read())
-        except (OSError, ValueError) as exc:
-            fail(st, f"não consegui ler as regras de {rules_file}: {exc}", EXIT_USAGE)
-        if problems := validate_rules(rules):
-            fail(st, "; ".join(problems), EXIT_USAGE)
-    options = {
-        "fields": [f.strip() for f in fields.split(",") if f.strip()] if fields else None,
-        "rules": rules,
-        "tolerance": tolerance,
-        "score": not no_score,
-        "dry_run": dry_run,
-    }
-
     try:
-        results = _run_all(st, agent_type, cases, concurrency, **options)
-        compare_results = _run_all(st, compare_with, cases, concurrency, **options) if compare_with else None
-    except ServiceUnavailable as exc:
+        text = open(file, encoding="utf-8").read()
+    except OSError as exc:
+        fail(st, f"não consegui ler {file}: {exc}", EXIT_USAGE)
+    rules: list[dict[str, Any]] = []
+    try:
+        cases = parse_cases(text, file)
+        if rules_file:
+            try:
+                raw_rules = json.loads(open(rules_file, encoding="utf-8").read())
+            except (OSError, ValueError) as exc:
+                raise EvalInputError(f"não consegui ler as regras de {rules_file}: {exc}") from exc
+            rules = check_rules_spec(raw_rules)
+        report = run_evaluation(
+            st.client,
+            agent_type,
+            cases,
+            compare_with=compare_with,
+            rules=rules,
+            fields=[f.strip() for f in fields.split(",") if f.strip()] if fields else None,
+            min_pass=min_pass,
+            tolerance=tolerance,
+            concurrency=concurrency,
+            score=not no_score,
+            dry_run=dry_run,
+        )
+    except EvalInputError as exc:
+        fail(st, str(exc), EXIT_USAGE)
+    except (ServiceUnavailable, ApiError) as exc:
         fail_from(st, exc)
 
-    summary = summarize(agent_type, results)
-    report: dict[str, Any] = {"summary": summary, "results": results}
-    if summary["errors"] == summary["cases"]:
-        verdict = {"ok": False, "reason": "todos os casos falharam ao executar — veja `error` em cada um"}
-    elif summary["policy_violations"]:
-        verdict = {"ok": False, "reason": f"{summary['policy_violations']} violação(ões) de política"}
-    elif compare_results is not None:
-        other = summarize(compare_with, compare_results)
-        report["compare"] = {"summary": other, "results": compare_results}
-        worse = summary["passed"] < other["passed"]
-        verdict = {
-            "ok": not worse,
-            "reason": f"{agent_type} {'pior que' if worse else 'não é pior que'} {compare_with} "
-            f"({summary['passed']} × {other['passed']} casos ok)",
-        }
-    else:
-        ok = summary["pass_rate"] >= min_pass
-        verdict = {"ok": ok, "reason": f"{summary['pass_rate']:.0%} dos casos ok (mínimo {min_pass:.0%})"}
-    report["verdict"] = verdict
-
     emit(st, report, _render)
-    if not verdict["ok"]:
+    if not report["verdict"]["ok"]:
         raise typer.Exit(EXIT_FAILED)

@@ -18,6 +18,13 @@ própria, aponte-a com `KURO_CA_BUNDLE=/caminho/ca.pem`; num teste local com cer
 autoassinado, `--insecure`. Erro de certificado sai com 3 e diz "o certificado de ... não
 foi aceito" — é diferente de serviço fora do ar, não adianta reiniciar container.
 
+**Tem as tools `kuro` (servidor MCP `kuro-mcp`)?** Prefira-as à CLI: são as mesmas operações,
+tipadas, e o guia está em `docs/mcp.md`. Diferenças que importam:
+- `chat`, `analyze`, `tool_invoke` e `eval` rodam em `dry_run` por padrão;
+- `chat` não reaproveita a sessão da CLI, então repasse o `session_id` que ele devolve;
+- remover, restaurar e promover pedem confirmação à pessoa. Não tente contornar: se o
+  cliente não suportar, a tool devolve o comando da CLI para a pessoa rodar.
+
 ## Convenções
 
 - **Sempre use `--json`** (aceito em qualquer posição: `kuro agents list --json`).
@@ -240,3 +247,11 @@ Mudou algo que quem integra ou opera percebe (campo, status HTTP, texto de erro,
 variável de ambiente, passo de deploy)? Registre em `docs/notas-de-versao.md`, na seção
 `## Não lançada` do topo, no mesmo commit — o formato e as regras de numeração estão no fim do
 arquivo. A versão no ar sai de `pyproject.toml` e aparece em `GET /health` (`version`).
+
+## Onde está o resto
+
+Este arquivo é só a receita rápida da CLI. Conceitos em `docs/conceitos.md`, comandos em
+`docs/cli.md`, o servidor MCP em `docs/mcp.md`, o painel `kuro dash` (só para humanos, precisa
+de TTY) em `docs/tui.md`, integração em `docs/integracao.md`, configuração e segurança em
+`docs/operacao.md`, testes e estrutura do código em `docs/desenvolvimento.md`. O índice está
+no `README.md`. Links relativos entre documentos são conferidos por `tests/test_docs_links.py`.

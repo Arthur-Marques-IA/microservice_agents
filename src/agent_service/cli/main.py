@@ -32,10 +32,7 @@ from agent_service.cli.common import (
     print_json,
     state,
 )
-
-# 127.0.0.1, não localhost: no Windows `localhost` tenta IPv6 (::1) primeiro e o
-# port-forward do Docker Desktop nesse caminho derruba conexões de forma intermitente.
-DEFAULT_URL = "http://127.0.0.1:58000"
+from agent_service.cli.connection import DEFAULT_URL
 
 app = typer.Typer(
     name="kuro",
@@ -170,6 +167,26 @@ def health(ctx: typer.Context) -> None:
             console.print(f"{'[green]●[/]' if ready else '[yellow]●[/]'} provedores com credencial ativa: {', '.join(ready) or 'nenhum'}{hint}")
 
     emit(st, report, render)
+
+
+# -- dash --------------------------------------------------------------------------
+
+
+@app.command("dash")
+def dash(
+    ctx: typer.Context,
+    agent: str | None = typer.Option(None, "--agent", "-a", help="Começa filtrado neste agente."),
+    interval: float = typer.Option(3.0, "--interval", min=1.0, help="Segundos entre as atualizações das execuções."),
+) -> None:
+    """Painel em tela cheia: execuções ao vivo (enter abre o trace) e o panorama. Precisa do extra `tui`."""
+    st = state(ctx)
+    if not (sys.stdin.isatty() and sys.stdout.isatty()) or st.json_mode:
+        fail(st, "dash é uma tela interativa e precisa de TTY; sem TTY use `kuro runs tail --json`", EXIT_USAGE)
+    try:
+        from agent_service.tui.app import KuroDash
+    except ImportError:
+        fail(st, "kuro dash precisa do extra tui: `uv sync --extra tui` (ou `uv run --extra tui kuro dash`)", EXIT_USAGE)
+    KuroDash(st.client, interval=interval, agent=agent).run()
 
 
 # -- providers / credentials -----------------------------------------------------
@@ -375,6 +392,7 @@ _SHELL_HELP = """[bold]Comandos[/] (a `/` é opcional; qualquer comando da CLI f
   /tools               escolher uma tool → ver e invocar
   /collections         bases de conhecimento (RAG) dos agentes
   /runs                execuções recentes   ·  /runs show <run_id>  ·  /runs tail
+  /dash                painel em tela cheia: execuções ao vivo e panorama
   /sessions            conversas guardadas  ·  /sessions show <session_id>
   /providers           provedores de modelo ·  /credentials  chaves cadastradas
   /health              diagnóstico
