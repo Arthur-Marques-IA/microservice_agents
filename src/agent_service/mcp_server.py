@@ -46,7 +46,11 @@ from agent_service.cli.tools import EDITABLE_FIELDS as TOOL_FIELDS
 MAX_TEXT = 4000
 
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+# Só acrescenta (uma nota, um documento novo).
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=False)
+# Sobrescreve o que existia (definição, regras), mas tem histórico/versão para voltar
+# — como na CLI, não pede confirmação. A dica deixa o cliente decidir se pergunta.
+OVERWRITE = ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=False)
 # `chat`/`analyze`/`tool_invoke` chamam o modelo e as tools do agente, que alcançam
 # sistemas de fora — por isso open_world.
 RUN = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True)
@@ -67,6 +71,12 @@ Para investigar uma resposta ruim: runs_list(agent_type=...) → run_show(run_id
 
 class Confirmacao(BaseModel):
     confirmar: bool = Field(default=False, title="Confirmar", description="Marque para executar a ação.")
+
+
+class NadaAFazer(Confirmacao):
+    """O resolver viu que a ação não mudaria nada e não perguntou. Não autoriza
+    escrita: se o estado mudou até o corpo da tool rodar, ela recusa em vez de
+    gravar sem ninguém ter confirmado."""
 
 
 def _ask(ctx: Context, cli: str, message: str) -> Elicit[Confirmacao]:
@@ -214,7 +224,7 @@ def build_server(client: Client) -> MCPServer:
         definition = _call(client.get_agent, agent_type)
         return agent_editable(definition) if editable else definition
 
-    @server.tool(annotations=WRITE)
+    @server.tool(annotations=OVERWRITE)
     def agent_apply(definition: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
         """Cria o agente se não existir; senão envia só os campos que mudaram. Mesmo formato
         de `kuro agents apply`: agent_type, name, instructions, tools, model_provider,
@@ -234,7 +244,7 @@ def build_server(client: Client) -> MCPServer:
         agent = _call(client.update_agent, agent_type, changes, dry_run=dry_run)
         return {"action": "update", "dry_run": dry_run, "changed": sorted(changes), "agent": agent}
 
-    @server.tool(annotations=WRITE)
+    @server.tool(annotations=OVERWRITE)
     def agent_set(agent_type: str, changes: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
         """Altera só os campos informados, ex.: {"num_history_runs": 5, "tools": ["calculator"]}.
         `instructions` aceita lista de strings (ou uma string só)."""
@@ -285,7 +295,7 @@ def build_server(client: Client) -> MCPServer:
     def _confirm_rollback(agent_type: str, version: int, ctx: Context) -> Elicit[Confirmacao] | Confirmacao:
         target = _rollback_target(agent_type, version)
         if _call(client.get_agent, agent_type)["instructions"] == target["instructions"]:
-            return Confirmacao(confirmar=True)  # nada vai mudar: não incomoda a pessoa
+            return NadaAFazer()  # nada vai mudar: não incomoda a pessoa
         preview = "\n".join(target["instructions"])
         return _ask(ctx, f"kuro agents rollback {agent_type} {version} --yes", f"Restaurar as instructions da v{version} de {agent_type!r}? Vira uma versão nova.\n\n{_clip(preview, 1500)}")
 
@@ -295,12 +305,15 @@ def build_server(client: Client) -> MCPServer:
     ) -> dict[str, Any]:
         """Reaplica as instructions de uma versão anterior do prompt (pede confirmação).
         Não apaga histórico: grava uma versão nova com o texto antigo."""
-        if not ok.confirmar:
+        asked = not isinstance(ok, NadaAFazer)
+        if asked and not ok.confirmar:
             return {"cancelled": True}
         target = _rollback_target(agent_type, version)
         current = _call(client.get_agent, agent_type)
         if current["instructions"] == target["instructions"]:
             return {"agent_type": agent_type, "unchanged": True, "prompt_version": current["prompt_version"]}
+        if not asked:
+            raise ToolError(f"o prompt de {agent_type} mudou durante a chamada — rode agent_rollback de novo")
         return _call(client.update_agent, agent_type, {"instructions": target["instructions"]})
 
     def _confirm_promote(source: str, to: str, ctx: Context) -> Elicit[Confirmacao]:
@@ -333,14 +346,14 @@ def build_server(client: Client) -> MCPServer:
         """Histórico de versões da nota de feedback."""
         return {"items": _call(client.feedback_versions, agent_type)}
 
-    @server.tool(annotations=WRITE)
+    @server.tool(annotations=OVERWRITE)
     def feedback_send(agent_type: str, session_id: str, message: str) -> dict[str, Any]:
         """Ensina o agente a partir de uma conversa (a `session_id` que o chat devolveu):
         o feedback é mesclado nas regras e a resposta traz o `diff`. Só para agentes
         conversacionais. Vale na próxima mensagem — prefira fazer isso num draft."""
         return _call(client.send_feedback, agent_type, session_id, message)
 
-    @server.tool(annotations=WRITE)
+    @server.tool(annotations=OVERWRITE)
     def feedback_remove(agent_type: str, rule_ids: list[str]) -> dict[str, Any]:
         """Apaga regras da nota pelo id (veja feedback_show). Fica no histórico."""
         current = _call(client.get_feedback, agent_type)
@@ -351,7 +364,7 @@ def build_server(client: Client) -> MCPServer:
             raise ToolError("isso apagaria todas as regras — use feedback_clear")
         return _call(client.replace_feedback, agent_type, keep)
 
-    @server.tool(annotations=WRITE)
+    @server.tool(annotations=OVERWRITE)
     def feedback_rollback(agent_type: str, version: int) -> dict[str, Any]:
         """Reaplica as regras de uma versão anterior da nota (vira uma versão nova)."""
         return _call(client.rollback_feedback, agent_type, version)
@@ -493,7 +506,7 @@ def build_server(client: Client) -> MCPServer:
         """Toolkits builtin disponíveis para criar uma tool kind=builtin."""
         return {"items": _call(client.tool_catalog)}
 
-    @server.tool(annotations=WRITE)
+    @server.tool(annotations=OVERWRITE)
     def tool_apply(definition: dict[str, Any]) -> dict[str, Any]:
         """Cria a tool (precisa de tool_name e kind: builtin | api | python) ou atualiza
         os campos informados. O kind de uma tool existente não muda. Ver AGENTS.md,

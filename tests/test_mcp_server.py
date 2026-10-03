@@ -37,6 +37,11 @@ def anyio_backend():
     return "asyncio"
 
 
+# As duas gerações do protocolo: `legacy` (elicitation no meio da chamada) e `auto`
+# (>= 2026-07-28: InputRequiredResult e nova tentativa). A confirmação tem de valer nas duas.
+MODES = pytest.mark.parametrize("mode", ["legacy", "auto"])
+
+
 @pytest.fixture
 def api():
     calls: list[httpx.Request] = []
@@ -45,6 +50,8 @@ def api():
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         response = routes.get((request.method, request.url.path))
+        if callable(response):  # rota com estado: responde diferente a cada chamada
+            response = response(request)
         return response if response is not None else httpx.Response(404, json={"detail": "não encontrado"})
 
     client = Client("http://kuro.test", transport=httpx.MockTransport(handler))
@@ -83,17 +90,22 @@ async def test_lists_tools_with_annotations_and_hides_confirmation_from_schema(a
     # Não existe parâmetro que o modelo preencha para se autoconfirmar.
     assert set(tools["agent_delete"].input_schema["properties"]) == {"agent_type"}
     assert set(tools["agent_promote"].input_schema["properties"]) == {"source", "to"}
-    assert tools["agent_delete"].annotations.destructive_hint is True
     assert tools["agents_list"].annotations.read_only_hint is True
+    # `destructive_hint=False` significa "só acrescenta": quem sobrescreve ou apaga é True.
+    for name in ("agent_delete", "agent_promote", "agent_set", "agent_apply", "tool_apply", "feedback_send"):
+        assert tools[name].annotations.destructive_hint is True, name
+    for name in ("run_score", "collection_add"):
+        assert tools[name].annotations.destructive_hint is False, name
     # Chave de modelo não passa pelo contexto do modelo.
     assert not any(name.startswith("credential") and name != "credentials_list" for name in tools)
 
 
-async def test_delete_runs_only_after_user_confirms(api):
+@MODES
+async def test_delete_runs_only_after_user_confirms(api, mode):
     server, routes, calls = api
     routes[("DELETE", "/agents/suporte")] = httpx.Response(204)
     callback, asked = _answer("accept")
-    async with McpClient(server, elicitation_callback=callback) as mcp:
+    async with McpClient(server, mode=mode, elicitation_callback=callback) as mcp:
         result = await mcp.call_tool("agent_delete", {"agent_type": "suporte"})
     assert not result.is_error, _text(result)
     assert _data(result) == {"deleted": "suporte"}
@@ -102,31 +114,34 @@ async def test_delete_runs_only_after_user_confirms(api):
 
 
 @pytest.mark.parametrize("action", ["decline", "cancel"])
-async def test_delete_declined_sends_nothing(api, action):
+@MODES
+async def test_delete_declined_sends_nothing(api, mode, action):
     server, routes, calls = api
     routes[("DELETE", "/agents/suporte")] = httpx.Response(204)
     callback, asked = _answer(action)
-    async with McpClient(server, elicitation_callback=callback) as mcp:
+    async with McpClient(server, mode=mode, elicitation_callback=callback) as mcp:
         result = await mcp.call_tool("agent_delete", {"agent_type": "suporte"})
     assert len(asked) == 1
     assert result.is_error, "recusar não pode virar sucesso"
     assert _mutations(calls) == []
 
 
-async def test_delete_accepted_without_checkbox_is_cancelled(api):
+@MODES
+async def test_delete_accepted_without_checkbox_is_cancelled(api, mode):
     server, routes, calls = api
     routes[("DELETE", "/agents/suporte")] = httpx.Response(204)
     callback, _ = _answer("accept", confirmar=False)
-    async with McpClient(server, elicitation_callback=callback) as mcp:
+    async with McpClient(server, mode=mode, elicitation_callback=callback) as mcp:
         result = await mcp.call_tool("agent_delete", {"agent_type": "suporte"})
     assert _data(result) == {"cancelled": True}
     assert _mutations(calls) == []
 
 
-async def test_client_without_elicitation_cannot_delete(api):
+@MODES
+async def test_client_without_elicitation_cannot_delete(api, mode):
     server, routes, calls = api
     routes[("DELETE", "/agents/suporte")] = httpx.Response(204)
-    async with McpClient(server) as mcp:
+    async with McpClient(server, mode=mode) as mcp:
         try:
             result = await mcp.call_tool("agent_delete", {"agent_type": "suporte"})
             failure = _text(result) if result.is_error else None
@@ -136,36 +151,78 @@ async def test_client_without_elicitation_cannot_delete(api):
     assert _mutations(calls) == []
 
 
-async def test_promote_asks_and_posts(api):
+@MODES
+async def test_promote_asks_and_posts(api, mode):
     server, routes, calls = api
     routes[("POST", "/agents/r8-draft/promote")] = httpx.Response(200, json={"unchanged": False, "agent_version": 4})
     callback, asked = _answer("accept")
-    async with McpClient(server, elicitation_callback=callback) as mcp:
+    async with McpClient(server, mode=mode, elicitation_callback=callback) as mcp:
         result = await mcp.call_tool("agent_promote", {"source": "r8-draft", "to": "r8"})
     assert not result.is_error, _text(result)
     assert "'r8'" in asked[0]
     assert json.loads(calls[-1].content) == {"to": "r8"}
 
 
-async def test_rollback_to_identical_version_does_not_ask(api):
+@MODES
+async def test_rollback_to_identical_version_does_not_ask(api, mode):
     server, routes, calls = api
     routes[("GET", "/agents/suporte/versions")] = httpx.Response(
         200, json=[{"version": 1, "instructions": ["Seja breve."]}]
     )
     routes[("GET", "/agents/suporte")] = httpx.Response(200, json=AGENT)
     callback, asked = _answer("accept")
-    async with McpClient(server, elicitation_callback=callback) as mcp:
+    async with McpClient(server, mode=mode, elicitation_callback=callback) as mcp:
         result = await mcp.call_tool("agent_rollback", {"agent_type": "suporte", "version": 1})
     assert _data(result)["unchanged"] is True
     assert asked == []
     assert _mutations(calls) == []
 
 
-async def test_rollback_unknown_version_explains(api):
+@MODES
+async def test_rollback_never_writes_without_asking_even_if_prompt_changed(api, mode):
+    """O resolver viu o prompt igual e não perguntou; até o corpo rodar, alguém mudou o
+    prompt. Gravar agora seria restaurar sem confirmação — tem de recusar."""
+    server, routes, calls = api
+    routes[("GET", "/agents/suporte/versions")] = httpx.Response(200, json=[{"version": 1, "instructions": ["Seja breve."]}])
+    reads = {"n": 0}
+
+    def agent(request):
+        # 1ª leitura (resolver): prompt igual à v1. Depois (corpo da tool): já mudou.
+        reads["n"] += 1
+        return httpx.Response(200, json=AGENT if reads["n"] == 1 else {**AGENT, "instructions": ["Outro texto."]})
+
+    routes[("GET", "/agents/suporte")] = agent
+    routes[("PUT", "/agents/suporte")] = httpx.Response(200, json=AGENT)
+    callback, asked = _answer("accept")
+    async with McpClient(server, mode=mode, elicitation_callback=callback) as mcp:
+        result = await mcp.call_tool("agent_rollback", {"agent_type": "suporte", "version": 1})
+    assert reads["n"] >= 2, "o cenário precisa que o corpo leia depois do resolver"
+    assert asked == []
+    assert result.is_error and "mudou" in _text(result)
+    assert _mutations(calls) == []
+
+
+@MODES
+async def test_rollback_asks_then_restores(api, mode):
+    server, routes, calls = api
+    routes[("GET", "/agents/suporte/versions")] = httpx.Response(200, json=[{"version": 1, "instructions": ["Antigo."]}])
+    routes[("GET", "/agents/suporte")] = httpx.Response(200, json=AGENT)
+    routes[("PUT", "/agents/suporte")] = httpx.Response(200, json={**AGENT, "instructions": ["Antigo."], "prompt_version": 3})
+    callback, asked = _answer("accept")
+    async with McpClient(server, mode=mode, elicitation_callback=callback) as mcp:
+        result = await mcp.call_tool("agent_rollback", {"agent_type": "suporte", "version": 1})
+    assert not result.is_error, _text(result)
+    assert len(asked) == 1 and "Antigo." in asked[0]
+    assert _mutations(calls) == ["PUT /agents/suporte"]
+    assert json.loads(calls[-1].content) == {"instructions": ["Antigo."]}
+
+
+@MODES
+async def test_rollback_unknown_version_explains(api, mode):
     server, routes, calls = api
     routes[("GET", "/agents/suporte/versions")] = httpx.Response(200, json=[{"version": 1, "instructions": ["a"]}])
     callback, asked = _answer("accept")
-    async with McpClient(server, elicitation_callback=callback) as mcp:
+    async with McpClient(server, mode=mode, elicitation_callback=callback) as mcp:
         result = await mcp.call_tool("agent_rollback", {"agent_type": "suporte", "version": 7})
     assert result.is_error and "disponíveis: v1" in _text(result)
     assert asked == [] and _mutations(calls) == []
