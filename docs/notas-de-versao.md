@@ -63,6 +63,13 @@ timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` pa
   - Num agente procedural, um 502 ou 504 pode chegar depois de a ação ter rodado: leia o estado da
     sessão antes de cair no fallback.
 
+### Corrigido
+
+- Clone novo no Windows (`core.autocrlf=true`): o script de init do Postgres saía com CRLF e o
+  `docker compose up` falhava com "cannot execute: required file not found". O repositório agora
+  fixa LF nos arquivos que rodam dentro dos containers (`.gitattributes`). Quem já clonou: apague
+  `docker/` e rode `git checkout -- docker/` para regravar os arquivos.
+
 ### Como atualizar
 
 - A migração `0007` roda sozinha no startup: acrescenta `agent_definitions.stages` e cria a

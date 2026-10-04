@@ -1,0 +1,8 @@
+# Arquivos que rodam dentro de containers Linux precisam de LF. Com
+# `core.autocrlf=true` (o padrão do Git no Windows), um clone novo grava CRLF, e o
+# script de init do Postgres falha com "cannot execute: required file not found":
+# o `docker compose up` de quem acabou de clonar sobe sem o banco do Langfuse.
+*.sh            text eol=lf
+docker/**       text eol=lf
+Dockerfile      text eol=lf
+*/Dockerfile    text eol=lf
