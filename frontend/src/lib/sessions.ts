@@ -68,6 +68,15 @@ export function runsToMessages(runs: SessionRun[]): ChatMessage[] {
     });
 }
 
+/**
+ * Sem nome definido, o AgentOS usa a primeira mensagem como título — e o Agno junta
+ * a ela as `dependencies` (`<additional context>{...}`), com CPF, nome e o que mais
+ * vier. O título mostra só a mensagem. O mesmo corte está em `cli/client.py`.
+ */
+const CONTEXT_MARK = "<additional context>";
+
 export function sessionTitle(session: { session_name?: string | null }): string {
-  return session.session_name?.trim() || "Conversa sem título";
+  const name = session.session_name ?? "";
+  const clean = name.includes(CONTEXT_MARK) ? name.slice(0, name.indexOf(CONTEXT_MARK)) : name;
+  return clean.trim() || "Conversa sem título";
 }

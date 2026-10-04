@@ -478,6 +478,19 @@ def test_sessions_list_scopes_by_user_and_agent(api):
     assert (params["user_id"], params["component_id"], params["type"]) == ("cli", "suporte", "agent")
 
 
+def test_sessions_list_title_drops_the_dependencies_block(api):
+    """O AgentOS usa a 1ª mensagem como título, e o Agno junta a ela as dependencies:
+    o CPF do cliente aparecia no título da conversa."""
+    routes, _ = api
+    vazado = {**SESSION, "session_name": 'meu wifi caiu\n\n<additional context>\n{"cpf": "12345678900"}\n</additional context>'}
+    so_contexto = {**SESSION, "session_id": "cli-2", "session_name": '<additional context>{"cpf": "1"}</additional context>'}
+    routes[("GET", "/sessions")] = httpx.Response(200, json={"data": [vazado, so_contexto], "meta": {}})
+    data = json.loads(_run("--json", "sessions", "list").stdout)["data"]
+    assert data[0]["session_name"] == "meu wifi caiu"
+    assert data[1]["session_name"] is None
+    assert "12345678900" not in _run("sessions", "list").stdout
+
+
 def test_sessions_list_uses_kuro_user_id_env(api, monkeypatch):
     routes, calls = api
     monkeypatch.setenv("KURO_USER_ID", "joana")
