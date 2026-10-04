@@ -62,6 +62,9 @@ timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` pa
     `dry_run`; exige `admin`).
   - Num agente procedural, um 502 ou 504 pode chegar depois de a ação ter rodado: leia o estado da
     sessão antes de cair no fallback.
+- Tool `kind="api"`: um parâmetro de header que não vem do modelo (`source` `dependency` ou
+  `const`) aceita nome de header HTTP com hífen, como `Idempotency-Key` ou `X-Request-Id`. Antes só
+  identificadores passavam, e não havia como mandar a `idempotency_key` no header esperado.
 
 ### Corrigido
 

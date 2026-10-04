@@ -35,6 +35,7 @@ pode compor o host (`https://{host}/x`), e aí o destino seria escolha do modelo
 
 import asyncio
 import copy
+import re
 import weakref
 from typing import Any, Literal
 
@@ -125,8 +126,11 @@ def validate_api_config(config: dict[str, Any]) -> dict[str, Any]:
     path_names: set[str] = set()
     for p in parameters:
         name = p.get("name")
-        if not isinstance(name, str) or not name.isidentifier():
-            raise ApiToolConfigError(f"nome de parâmetro inválido: {name!r}")
+        if not _valid_param_name(name, p):
+            raise ApiToolConfigError(
+                f"nome de parâmetro inválido: {name!r} (use letras, números e _; um header que não vem do "
+                "modelo — source dependency ou const — também aceita '-', como Idempotency-Key)"
+            )
         if name in seen_names:
             raise ApiToolConfigError(f"parâmetro duplicado: {name!r}")
         seen_names.add(name)
@@ -202,6 +206,26 @@ def _format_placeholders(url: str) -> set[str]:
     import string
 
     return {name for _, name, _, _ in string.Formatter().parse(url) if name}
+
+
+_HEADER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def _valid_param_name(name: Any, param: dict[str, Any]) -> bool:
+    """Identificador, como sempre. A exceção é um header que o modelo não preenche:
+    headers HTTP de verdade têm hífen (`Idempotency-Key`, `X-Request-Id`), e sem
+    isto não havia como mandar a `idempotency_key` de uma etapa `action` no header
+    que o sistema de destino espera. O que o modelo preenche continua identificador:
+    o nome vira propriedade do schema da tool, e o provedor é exigente com isso."""
+    if not isinstance(name, str):
+        return False
+    if name.isidentifier():
+        return True
+    return (
+        param.get("location") == "header"
+        and param.get("source", "model") in ("dependency", "const")
+        and bool(_HEADER_NAME.match(name))
+    )
 
 
 def _parameters_schema(parameters: list[dict[str, Any]]) -> dict[str, Any]:
