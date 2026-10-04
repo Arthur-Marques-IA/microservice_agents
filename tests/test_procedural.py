@@ -166,6 +166,13 @@ def test_state_view(stages):
     assert view["done"] is False and view["result"] is None
 
 
+def test_prompt_da_confirmacao_lista_o_que_pode_ser_corrigido(stages):
+    """Na confirmação nada falta; sem a lista, o modelo olhava só o sim/não e
+    deixava passar a correção que vinha na mesma frase."""
+    prompt = procedural.extraction_prompt(stages, _ate_a_confirmacao(stages), "não, é na TV", "Confira...")
+    assert "pode corrigir agora" in prompt and "categoria (Categoria: internet | tv)" in prompt
+
+
 def test_schema_da_extracao_tem_tudo_opcional_e_a_confirmacao(stages):
     model = procedural.extraction_model("teste", stages)
     assert model().model_dump() == {"cpf": None, "nome": None, "categoria": None, "confirmacao": None}

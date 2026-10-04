@@ -490,6 +490,10 @@ EXTRACTION_INSTRUCTIONS = [
     "Preencha só os campos que a mensagem do usuário informa explicitamente; deixe os demais vazios.",
     "Nunca invente nem complete um valor. Se o usuário corrigir um valor já coletado, devolva o novo valor.",
     "Use a última mensagem do agente para entender respostas curtas (ex.: 'sim', 'é 123').",
+    "Numa confirmação, a mesma mensagem pode recusar e corrigir ('não, o problema é na TV'): devolva "
+    "confirmacao='nao' E o campo corrigido com o valor novo. Só devolva confirmacao='sim' se a pessoa "
+    "concordou com os dados sem pedir mudança nenhuma.",
+    "Em campos com valores permitidos, devolva exatamente um deles, ajustando a grafia (ex.: 'TV' -> 'tv').",
 ]
 
 
@@ -505,6 +509,16 @@ def extraction_prompt(
     missing = state_view(stages, state)["missing"]
     if missing:
         lines.append("Faltando nesta etapa: " + ", ".join(f"{f['name']} ({f['label']})" for f in missing))
+    if stage is not None and stage["type"] == "confirm":
+        # Na confirmação nada "falta": sem isto o modelo tende a olhar só para o
+        # sim/não e deixa passar a correção que vem na mesma frase.
+        names = set(fields_before(stages, index))
+        corrigiveis = [
+            f"{f['name']} ({f['label']}{': ' + ' | '.join(map(str, f['enum'])) if f.get('enum') else ''})"
+            for f in collect_fields(stages)
+            if f["name"] in names
+        ]
+        lines.append("Campos que a pessoa pode corrigir agora: " + ", ".join(corrigiveis))
     lines.append(f"Última mensagem do agente: {last_reply or '(nenhuma)'}")
     lines.append(f"Mensagem do usuário: {message}")
     return "\n".join(lines)
