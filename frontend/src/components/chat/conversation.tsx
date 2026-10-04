@@ -123,6 +123,7 @@ export function Conversation({
   const activeSessionId = sessionId ?? createdSessionId ?? null;
 
   // Conversa reaberta com um agente procedural: as etapas vêm do backend, não das mensagens.
+  const [restoredFor, setRestoredFor] = useState<string | null>(null);
   useEffect(() => {
     if (!procedural || !sessionId) return;
     const controller = new AbortController();
@@ -135,9 +136,13 @@ export function Conversation({
       })
       .catch(() => {
         // Sem o estado a conversa continua funcionando; a faixa só começa da etapa 1.
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setRestoredFor(sessionId);
       });
     return () => controller.abort();
   }, [procedural, agentType, sessionId, setProcedureState]);
+  const restoring = procedural && Boolean(sessionId) && restoredFor !== sessionId;
   const session = sessionId ? sessions.find((s) => s.session_id === sessionId) : undefined;
   const totalTokens = messages.reduce((sum, m) => sum + (m.usage?.total_tokens ?? 0), 0);
   const inspectorOpen = inspectorPref === "open";
@@ -273,7 +278,12 @@ export function Conversation({
         </header>
 
         {procedural && agent && (
-          <ProcedureStrip state={procedureState} stages={agent.stages ?? []} onOpen={() => openInspector()} />
+          <ProcedureStrip
+            state={procedureState}
+            stages={agent.stages ?? []}
+            onOpen={() => openInspector()}
+            loading={restoring}
+          />
         )}
 
         {blockedReason && messages.length > 0 && (

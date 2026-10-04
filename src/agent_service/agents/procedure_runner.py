@@ -246,6 +246,7 @@ def _append_to_session(agent: Agent, run: RunContext, reply: str) -> None:
     confirmação). Sem isto ela some do histórico: o modelo, na mensagem seguinte,
     não saberia que pediu confirmação, e o console e `kuro sessions show` (que
     leem a sessão) mostrariam a conversa com buracos."""
+    from agno.metrics import RunMetrics
     from agno.models.message import Message
     from agno.run.agent import RunInput, RunOutput
     from agno.run.base import RunStatus
@@ -282,6 +283,12 @@ def _append_to_session(agent: Agent, run: RunContext, reply: str) -> None:
             input=RunInput(input_content=run.message),
             content=reply,
             messages=[Message(role="user", content=run.message), Message(role="assistant", content=reply)],
+            # Os tokens do turno são os da extração: sem métricas, o console mostrava "tokens: ?".
+            metrics=RunMetrics(
+                input_tokens=sum(s.input_tokens for s in run.extra_spans),
+                output_tokens=sum(s.output_tokens for s in run.extra_spans),
+                total_tokens=sum(s.total_tokens for s in run.extra_spans),
+            ),
             status=RunStatus.completed,
         ),
         session_id=run.session_id,
