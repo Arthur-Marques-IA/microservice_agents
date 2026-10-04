@@ -24,7 +24,22 @@ A conexão usa as mesmas variáveis da CLI:
 | `KURO_INSECURE=1` | Não valida o certificado. Só para teste local com certificado autoassinado |
 | `KURO_TIMEOUT` | Timeout das requisições em segundos (padrão 300 — um `eval` longo leva tempo) |
 
-### Claude Code
+### O jeito mais rápido: pergunte ao servidor
+
+No servidor onde o Kuro roda, um comando imprime a configuração pronta para copiar, com o endereço
+e a chave:
+
+```bash
+docker compose exec agent-service kuro mcp-config --url https://kuro.suaempresa.com --show-key
+```
+
+Ele devolve o `claude mcp add ...` e o `.mcp.json`. Os dois rodam o `kuro-mcp` com o
+[uv](https://docs.astral.sh/uv/) direto do GitHub (`uvx --from "agent-service[mcp] @ git+..."`),
+sem clonar o repositório: na sua máquina só precisa do `uv` e de acesso de leitura ao repositório.
+Sem `--show-key` a chave sai mascarada, para não ficar no histórico do terminal por descuido; sem
+`--url` ele avisa que o endereço que enxerga de dentro do container não serve para a sua máquina.
+
+### Claude Code, a partir de um clone
 
 Pelo terminal, a partir do clone deste repositório:
 

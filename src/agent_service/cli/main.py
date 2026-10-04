@@ -5,6 +5,7 @@
 é opcional), então tudo que funciona no shell funciona em um script.
 """
 
+import json
 import os
 import shlex
 import sys
@@ -105,6 +106,84 @@ def root(
 
 
 # -- health ----------------------------------------------------------------------
+
+
+MCP_SOURCE = "git+https://github.com/Arthur-Marques-IA/microservice_agents"
+"""De onde o `uvx` instala o `kuro-mcp` na máquina de quem opera — sem clone.
+Troque com `--source` ou `KURO_MCP_SOURCE` (um fork, uma tag: `...@v0.3.0`)."""
+
+
+def _mask(key: str) -> str:
+    return f"{key[:4]}…{key[-4:]}" if len(key) > 12 else "…"
+
+
+@app.command("mcp-config")
+def mcp_config(
+    ctx: typer.Context,
+    public_url: str | None = typer.Option(
+        None,
+        "--url",
+        envvar="KURO_PUBLIC_URL",
+        help="Endereço do serviço como a máquina de quem opera o enxerga (ex.: https://kuro.empresa.com).",
+    ),
+    show_key: bool = typer.Option(False, "--show-key", help="Mostra a chave inteira (senão ela sai mascarada)."),
+    source: str = typer.Option(MCP_SOURCE, "--source", envvar="KURO_MCP_SOURCE", help="De onde o uvx instala o kuro-mcp."),
+) -> None:
+    """Como conectar o servidor MCP (`kuro-mcp`) a este serviço: o comando do Claude Code
+    e o `.mcp.json`, prontos para copiar. Rode no servidor:
+    `docker compose exec agent-service kuro mcp-config --url https://kuro.empresa.com --show-key`."""
+    st = state(ctx)
+    key = ctx.find_root().params.get("api_key") or ""
+    url = (public_url or st.client.base_url).rstrip("/")
+    warnings = []
+    if any(host in url for host in ("localhost", "127.0.0.1", "0.0.0.0")) and not public_url:
+        warnings.append(
+            f"{url} é o endereço visto daqui de dentro. Passe --url com o endereço que a sua máquina "
+            "alcança (ou defina KURO_PUBLIC_URL)."
+        )
+    if not key:
+        warnings.append(
+            "Sem chave de API: com a autenticação ligada, o MCP vai receber 401. Rode com KURO_API_KEY "
+            "(a ADMIN_API_KEY) definida — dentro do container ela já vem configurada."
+        )
+    shown = key if show_key else (_mask(key) if key else "")
+    package = f"agent-service[mcp] @ {source}"
+    args = ["--from", package, "kuro-mcp"]
+    env_flags = f"--env KURO_API_URL={url}" + (f" --env KURO_API_KEY={shown}" if key else "")
+    claude_cmd = f'claude mcp add kuro {env_flags} -- uvx --from "{package}" kuro-mcp'
+    mcp_json = {
+        "mcpServers": {
+            "kuro": {
+                "command": "uvx",
+                "args": args,
+                "env": {"KURO_API_URL": url, **({"KURO_API_KEY": "${KURO_API_KEY}"} if key else {})},
+            }
+        }
+    }
+    report = {
+        "url": url,
+        "api_key": shown or None,
+        "api_key_masked": bool(key) and not show_key,
+        "claude_command": claude_cmd,
+        "mcp_json": mcp_json,
+        "requires": "uv na máquina de quem opera (https://docs.astral.sh/uv/) e acesso de leitura ao repositório",
+        "warnings": warnings,
+    }
+
+    def render(r: dict[str, Any]) -> None:
+        for w in r["warnings"]:
+            err_console.print(f"[yellow]aviso:[/] {w}", highlight=False)
+        console.print("[bold]Servidor MCP do Kuro[/] — rode na sua máquina (precisa do uv).\n")
+        console.print("[bold]1. Claude Code[/] (um comando, no terminal):")
+        # markup=False: o Rich leria `[mcp]` (de `agent-service[mcp]`) como marcação e o apagaria.
+        console.print(r["claude_command"], markup=False, highlight=False, soft_wrap=True)
+        if r["api_key_masked"]:
+            console.print("[dim]A chave está mascarada: rode de novo com --show-key para copiá-la.[/]")
+        console.print("\n[bold]2. Ou um .mcp.json[/] no projeto (a chave fica fora do arquivo; defina KURO_API_KEY no ambiente):")
+        console.print_json(json.dumps(r["mcp_json"]))
+        console.print("\n[dim]Confira no Claude Code com /mcp, e peça \"use a tool health do kuro\". Guia: docs/mcp.md[/]")
+
+    emit(st, report, render)
 
 
 @app.command("health")
@@ -395,7 +474,7 @@ _SHELL_HELP = """[bold]Comandos[/] (a `/` é opcional; qualquer comando da CLI f
   /dash                painel em tela cheia: execuções ao vivo e panorama
   /sessions            conversas guardadas  ·  /sessions show <session_id>
   /providers           provedores de modelo ·  /credentials  chaves cadastradas
-  /health              diagnóstico
+  /health              diagnóstico          ·  /mcp-config  como conectar o servidor MCP
   /help                esta ajuda           ·  <comando> --help  detalhes
   /sair                sair"""
 
