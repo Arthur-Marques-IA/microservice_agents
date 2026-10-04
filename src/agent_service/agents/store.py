@@ -75,6 +75,8 @@ agent_definitions = Table(
     # ({name, type, label, description, required, default}), validada pela
     # mesma `dependency_fields.validate_field_specs`.
     Column("response_schema", JSON, nullable=False, default=list),
+    # Só usado quando kind="procedural": as etapas do fluxo (`agents/procedural.py`).
+    Column("stages", JSON, nullable=False, default=list),
     # Temperatura, top_p, max_tokens, thinking_budget (`models/params.py`);
     # None = padrão do provedor.
     Column("model_params", JSON, nullable=True),
@@ -178,6 +180,7 @@ def create_definition(
     num_history_runs: int = 10,
     kind: str = "conversational",
     response_schema: list[dict[str, Any]] | None = None,
+    stages: list[dict[str, Any]] | None = None,
     model_params: dict[str, Any] | None = None,
     timeout_seconds: int | None = None,
     is_seed: bool = False,
@@ -200,6 +203,7 @@ def create_definition(
                 num_history_runs=num_history_runs,
                 kind=kind,
                 response_schema=response_schema or [],
+                stages=stages or [],
                 model_params=model_params or None,
                 timeout_seconds=timeout_seconds,
                 is_seed=is_seed,
@@ -244,6 +248,7 @@ def update_definition(
     num_history_runs: int | None = None,
     kind: str | None = None,
     response_schema: list[dict[str, Any]] | None = None,
+    stages: list[dict[str, Any]] | None = None,
     model_params: dict[str, Any] | None = _UNSET,
     timeout_seconds: int | None = _UNSET,
 ) -> dict[str, Any]:
@@ -276,6 +281,8 @@ def update_definition(
         values["kind"] = kind
     if response_schema is not None:
         values["response_schema"] = response_schema
+    if stages is not None:
+        values["stages"] = stages
     if model_params is not _UNSET:
         values["model_params"] = model_params or None
     if timeout_seconds is not _UNSET:

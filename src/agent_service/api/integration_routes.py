@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from agent_service.agents.store import get_definition
+from agent_service.agents.procedural import fields_before
 from agent_service.tools.api_tool import required_dependencies
 from agent_service.tools.store import get_tool
 
@@ -49,6 +50,11 @@ class IntegrationContract(BaseModel):
     """`None` em `kind="analysis"`: analista é one-shot, não tem streaming."""
     response_schema: list[dict[str, Any]] = []
     """Só em `kind="analysis"`: a forma do `result` que volta."""
+    stages: list[dict[str, Any]] = []
+    """Só em `kind="procedural"`: as etapas. A resposta do `/chat` traz `state` com a
+    etapa atual, o que falta e, quando `done`, o `result`."""
+    state_url: str | None = None
+    """Só em `kind="procedural"`: onde ler o estado de uma conversa (troque `{session_id}`)."""
     dependencies: list[DependencyContract]
     request_example: dict[str, Any]
     curl: str
@@ -78,6 +84,19 @@ def get_integration_contract(
         if row is not None and row["kind"] == "api":
             for campo in required_dependencies(row["config"] or {}):
                 por_tool.setdefault(campo, []).append(tool_name)
+    # As tools das etapas `action` também dependem de dependencies — menos do que
+    # o próprio procedimento coleta e da chave de idempotência, que o servidor põe.
+    stages = definition.get("stages") or []
+    for index, stage in enumerate(stages):
+        if stage.get("type") != "action":
+            continue
+        row = get_tool(stage["tool"])
+        if row is None or row["kind"] != "api":
+            continue
+        fornecidos = set(fields_before(stages, index)) | {"idempotency_key"}
+        for campo in required_dependencies(row["config"] or {}):
+            if campo not in fornecidos:
+                por_tool.setdefault(campo, []).append(stage["tool"])
 
     declarados = {f["name"] for f in definition["dependency_fields"] or []}
     warnings = [
@@ -144,6 +163,8 @@ def get_integration_contract(
         chat_url=f"{base}{endpoint}",
         stream_url=None if is_analysis else f"{base}/chat/stream",
         response_schema=definition.get("response_schema") or [],
+        stages=stages,
+        state_url=f"{base}/agents/{agent_type}/procedures/{{session_id}}" if kind == "procedural" else None,
         dependencies=dependencies,
         request_example=request_example,
         curl=curl,

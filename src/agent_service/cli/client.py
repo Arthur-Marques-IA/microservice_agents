@@ -118,6 +118,15 @@ class Client:
     def agent_revision(self, agent_type: str, version: int) -> dict[str, Any]:
         return self._request("GET", f"/agents/{agent_type}/revisions/{version}")
 
+    def procedure_state(self, agent_type: str, session_id: str) -> dict[str, Any]:
+        """Estado de uma conversa com um agente procedural (etapa, coletado, faltando)."""
+        return self._request("GET", f"/agents/{agent_type}/procedures/{session_id}")
+
+    def procedure_funnel(self, agent_type: str, *, include_dry_run: bool = False) -> dict[str, Any]:
+        return self._request(
+            "GET", f"/agents/{agent_type}/procedures", params={"include_dry_run": "true"} if include_dry_run else None
+        )
+
     def promote_agent(self, agent_type: str, to: str) -> dict[str, Any]:
         return self._request("POST", f"/agents/{agent_type}/promote", json={"to": to})
 

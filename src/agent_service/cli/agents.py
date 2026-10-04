@@ -45,6 +45,7 @@ EDITABLE_FIELDS = (
     "num_history_runs",
     "kind",
     "response_schema",
+    "stages",
     "model_params",
     "timeout_seconds",
 )
@@ -61,6 +62,8 @@ def editable(definition: dict[str, Any]) -> dict[str, Any]:
     campos = EDITABLE_FIELDS
     if definition.get("kind") == "analysis":
         campos = tuple(c for c in campos if c not in INERTES_EM_ANALYSIS)
+    if definition.get("kind") != "procedural":
+        campos = tuple(c for c in campos if c != "stages")
     return {"agent_type": definition["agent_type"], **{k: definition.get(k) for k in campos}}
 
 
@@ -668,3 +671,52 @@ def _render_integration(c: dict[str, Any]) -> None:
     console.print(c["curl"], highlight=False)
     for aviso in c["warnings"]:
         console.print(f"[yellow]atenção:[/] {aviso}")
+
+
+@app.command("procedures")
+def procedures(
+    ctx: typer.Context,
+    agent_type: str,
+    session_id: str | None = typer.Argument(None, help="Uma conversa; sem isto, o funil do agente."),
+    include_dry_run: bool = typer.Option(False, "--include-tests", help="Conta também as conversas em dry_run."),
+) -> None:
+    """Agente procedural: o funil (quantas conversas em cada etapa) ou o estado de uma conversa."""
+    st = state(ctx)
+    if session_id:
+        emit(st, call(st, st.client.procedure_state, agent_type, session_id), render_procedure_state)
+        return
+
+    def render(f: dict[str, Any]) -> None:
+        table = Table(show_edge=False, header_style="bold")
+        for column in ("etapa", "tipo", "conversas paradas aqui"):
+            table.add_column(column)
+        for stage in f["stages"]:
+            table.add_row(stage["id"], stage["type"], str(stage["sessions"]))
+        table.add_row("[green]concluídas[/]", "", f"[green]{f['done']}[/]")
+        console.print(table)
+        if f.get("orphaned"):
+            console.print(f"[yellow]{f['orphaned']} conversa(s) numa etapa que não existe mais[/]")
+
+    emit(st, call(st, st.client.procedure_funnel, agent_type, include_dry_run=include_dry_run), render)
+
+
+def render_procedure_state(s: dict[str, Any]) -> None:
+    """`[2/4 problema] faltando: descricao` — também usado no rodapé do `kuro chat`."""
+    console.print(procedure_line(s), highlight=False)
+    if s.get("collected"):
+        for name, value in s["collected"].items():
+            console.print(f"  [dim]{name}:[/] {value}", highlight=False)
+
+
+def procedure_line(s: dict[str, Any]) -> str:
+    if s.get("done"):
+        return f"[green][{s['stages_total']}/{s['stages_total']} concluído][/]"
+    head = f"[{s['stage_index'] + 1}/{s['stages_total']} {s['stage']}]"
+    missing = ", ".join(f["name"] for f in s.get("missing") or [])
+    invalid = ", ".join(f"{k} ({v})" for k, v in (s.get("invalid") or {}).items())
+    parts = [f"[cyan]{head}[/]"]
+    if missing:
+        parts.append(f"faltando: {missing}")
+    if invalid:
+        parts.append(f"[yellow]inválido: {invalid}[/]")
+    return " ".join(parts)

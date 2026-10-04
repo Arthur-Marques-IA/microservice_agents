@@ -30,6 +30,7 @@ antes, para não quebrar quem já roda local. `GET /health` avisa, e `kuro healt
 mostra em vermelho. Em qualquer ambiente compartilhado, configure as duas.
 """
 
+import re
 import secrets
 from typing import Literal
 
@@ -53,7 +54,13 @@ http://.../openapi.json`. Com o serviço aberto (sem chave configurada), abrir
 
 RUNTIME_PATHS = frozenset({"/chat", "/chat/stream", "/analyze", "/observability/scores", "/observability/references"})
 """O que a chave `runtime` alcança — executar um agente e avaliar a execução.
-Tudo que não está aqui (nem em PUBLIC_PATHS) exige `admin`."""
+Tudo que não está aqui (nem em PUBLIC_PATHS nem em RUNTIME_PATTERNS) exige `admin`."""
+
+RUNTIME_PATTERNS = (re.compile(r"^/agents/[^/]+/procedures/[^/]+$"),)
+"""Caminhos com parâmetro que a chave `runtime` também alcança. Só o estado de uma
+conversa com um agente procedural (`GET`, a única rota nesse caminho): quem integra
+precisa ler o `state` de uma sessão que ele mesmo conduz. O funil do agente
+(`/agents/{t}/procedures`) e o resto de `/agents` continuam `admin`."""
 
 
 def configured_keys() -> dict[Scope, str]:
@@ -99,7 +106,9 @@ def required_scope(path: str) -> Scope | None:
     normalizado = path.rstrip("/") or "/"
     if normalizado in PUBLIC_PATHS:
         return None
-    return "runtime" if normalizado in RUNTIME_PATHS else "admin"
+    if normalizado in RUNTIME_PATHS or any(p.match(normalizado) for p in RUNTIME_PATTERNS):
+        return "runtime"
+    return "admin"
 
 
 def _authorized(presented: Scope | None, needed: Scope) -> bool:

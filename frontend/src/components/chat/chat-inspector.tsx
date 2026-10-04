@@ -7,13 +7,14 @@ import { Activity, CodeXml, ExternalLink, Pencil, Users, X } from "lucide-react"
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
 import { MEMORY_BACKENDS, modelLabel } from "@/lib/agent-meta";
-import type { AgentDefinition } from "@/lib/types";
+import type { AgentDefinition, ProcedureState } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Textarea } from "@/components/ui/textarea";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
+import { ProcedureSteps } from "@/components/chat/procedure-progress";
 
 const DEPENDENCIES_EXAMPLE = JSON.stringify({ nome: "Maria", cpf: "000.000.000-00", plano: "premium" }, null, 2);
 
@@ -32,6 +33,7 @@ export function ChatInspector({
   dependenciesCount,
   dryRun,
   onDryRunChange,
+  procedureState,
   onEditAgent,
   onShowCode,
   onClose,
@@ -51,6 +53,8 @@ export function ChatInspector({
   dependenciesCount: number;
   dryRun: boolean;
   onDryRunChange: (value: boolean) => void;
+  /** Só em agente procedural: o estado da conversa (`null` antes da 1ª resposta). */
+  procedureState?: ProcedureState | null;
   onEditAgent: () => void;
   onShowCode: () => void;
   onClose: () => void;
@@ -118,6 +122,20 @@ export function ChatInspector({
             </p>
           )}
         </InspectorSection>
+
+        {agent?.kind === "procedural" && (
+          <InspectorSection
+            title="Procedimento"
+            description="As etapas são conduzidas pelo servidor: o modelo só extrai os dados e redige a resposta."
+          >
+            <ProcedureSteps state={procedureState ?? null} stages={agent.stages ?? []} />
+            {procedureState?.done && (
+              <p className="mt-3 rounded-md bg-success/10 px-3 py-2 text-xs text-success">
+                Concluído. Quem integra recebe o resultado em <code className="font-mono">state.result</code>.
+              </p>
+            )}
+          </InspectorSection>
+        )}
 
         <InspectorSection title="Sessão">
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-1.5 text-[13px]">

@@ -19,7 +19,7 @@ MemoryBackendName = Literal["none", "auto", "agentic", "common", "mem0"]
 """`none` = sem memória de longo prazo; `auto` = extraída em paralelo, com o
 modelo auxiliar; `agentic` = o modelo decide quando gravar (`common` é o nome
 antigo dele); `mem0` = Mem0. Ver `memory/managers.py`."""
-AgentKind = Literal["conversational", "analysis"]
+AgentKind = Literal["conversational", "analysis", "procedural"]
 
 
 def build_agent(

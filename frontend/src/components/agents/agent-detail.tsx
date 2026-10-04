@@ -22,6 +22,7 @@ import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { AgentForm, type AgentFormPayload } from "@/components/agents/agent-form";
 import { VersionHistory } from "@/components/agents/version-history";
 import { PromoteDialog, RevisionsPanel } from "@/components/agents/revisions-panel";
+import { ProcedureFunnelPanel } from "@/components/agents/procedure-funnel";
 import { AgreementPanel } from "@/components/observability/agreement-panel";
 import { FeedbackPanel } from "@/components/agents/feedback-panel";
 import { IntegrationPanel } from "@/components/integration/integration-panel";
@@ -128,6 +129,9 @@ export function AgentDetail({
             <Badge variant="outline">{modelLabel(agent.model_id)}</Badge>
             {/* Um analista é one-shot: anunciar a memória dele seria anunciar
                 algo que `agents/base.py` nem monta. */}
+            {agent.kind === "procedural" && (
+              <Badge variant="outline">Procedural · {agent.stages?.length ?? 0} etapas</Badge>
+            )}
             {agent.kind === "analysis" ? (
               <Badge variant="outline">Analista</Badge>
             ) : (
@@ -244,6 +248,7 @@ export function AgentDetail({
 
         <TabsContent value="runs" className="flex flex-col gap-8">
           {agent.kind === "analysis" && <AgreementPanel agentType={agent.agent_type} />}
+          {agent.kind === "procedural" && <ProcedureFunnelPanel agentType={agent.agent_type} />}
           <AgentRuns agentType={agent.agent_type} versions={versions} />
         </TabsContent>
 

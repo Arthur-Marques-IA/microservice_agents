@@ -15,6 +15,7 @@ from typing import Any
 from agno.agent import Agent
 
 from agent_service.agents.base import build_agent
+from agent_service.agents.procedural import PROCEDURAL_INSTRUCTIONS
 from agent_service.agents.response_model import build_response_model
 from agent_service.agents.store import get_definition, get_feedback_note, list_definitions
 from agent_service.agents.versions import effective_config, ensure_version
@@ -45,6 +46,10 @@ def _build_from_definition(definition: dict[str, Any]) -> tuple[Agent, tuple[dat
     if kind == "analysis":
         output_schema = build_response_model(definition["agent_type"], definition.get("response_schema") or [])
     else:
+        if kind == "procedural":
+            # Fixo, então pode ir no agente em cache: a etapa de cada conversa entra
+            # por execução, em `dependencies.procedimento` (`agents/procedure_runner.py`).
+            instructions = [*instructions, PROCEDURAL_INSTRUCTIONS]
         note = get_feedback_note(definition["agent_type"])
         if note and note["content"]:
             instructions = [*instructions, _FEEDBACK_HEADER + note["content"]]
@@ -67,7 +72,7 @@ def _build_from_definition(definition: dict[str, Any]) -> tuple[Agent, tuple[dat
 
 
 def _feedback_stamp(definition: dict[str, Any]) -> datetime | None:
-    if (definition.get("kind") or "conversational") != "conversational":
+    if (definition.get("kind") or "conversational") == "analysis":
         return None
     note = get_feedback_note(definition["agent_type"])
     return note["updated_at"] if note else None

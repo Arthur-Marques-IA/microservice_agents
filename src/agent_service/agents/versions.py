@@ -77,6 +77,9 @@ def effective_config(definition: dict[str, Any]) -> dict[str, Any]:
         config["timeout_seconds"] = definition["timeout_seconds"]
     if definition.get("session_summary"):
         config["session_summary"] = True
+    if config["kind"] == "procedural":
+        # Só aqui: com `stages` em todo agente, os que já existiam ganhariam versão nova.
+        config["stages"] = definition.get("stages") or []
     if config.get("memory_backend") == "common":
         # `common` é o nome antigo de `agentic`: o mesmo comportamento, a mesma versão.
         config["memory_backend"] = "agentic"
@@ -97,7 +100,8 @@ def effective_config(definition: dict[str, Any]) -> dict[str, Any]:
         )
     config["tools"] = tools
 
-    note = get_feedback_note(definition["agent_type"]) if config["kind"] == "conversational" else None
+    # A nota de feedback orienta quem redige a resposta: conversacional e procedural.
+    note = get_feedback_note(definition["agent_type"]) if config["kind"] != "analysis" else None
     config["feedback_rules"] = [r["texto"] for r in note["rules"]] if note and note.get("rules") else []
     return config
 

@@ -271,6 +271,18 @@ def build_server(client: Client) -> MCPServer:
         """Como outro sistema chama este agente: endpoint, cURL e dependências obrigatórias."""
         return _call(client.integration, agent_type)
 
+    @server.tool(annotations=READ)
+    def procedure_state(agent_type: str, session_id: str) -> dict[str, Any]:
+        """Agente procedural: em que etapa a conversa está, o que foi coletado, o que
+        falta e, se concluída, o resultado. O `chat` já devolve isso em `state`."""
+        return _call(client.procedure_state, agent_type, session_id)
+
+    @server.tool(annotations=READ)
+    def procedure_funnel(agent_type: str, include_tests: bool = False) -> dict[str, Any]:
+        """Agente procedural: quantas conversas estão paradas em cada etapa e quantas
+        concluíram — onde as pessoas desistem."""
+        return _call(client.procedure_funnel, agent_type, include_dry_run=include_tests)
+
     def _confirm_delete_agent(agent_type: str, ctx: Context) -> Elicit[Confirmacao]:
         return _ask(ctx, f"kuro agents delete {agent_type} --yes", f"Remover o agente {agent_type!r}? Não tem volta.")
 

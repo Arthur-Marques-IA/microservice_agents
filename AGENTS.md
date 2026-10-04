@@ -98,6 +98,15 @@ cat conversa.json | kuro --json analyze classificador        # texto/JSON por st
 # (504 ao estourar) e `enum` em qualquer campo de response_schema/dependency_fields.
 # Integração de outro sistema (erros, fallback, shadow): docs/integracao.md.
 
+# Agente procedural — fluxo em etapas que o SERVIDOR conduz (coletar → confirmar → executar)
+# stages: collect (fields, com enum/pattern), confirm (texto montado dos dados, sem LLM) e
+# action (tool, só depois de um confirm). /chat devolve `state` {stage, collected, missing, invalid,
+# done, result}; 409 = outra mensagem da mesma sessão em andamento. Formato: docs/conceitos.md.
+kuro --json chat abertura-chamado -m "sou a Ana, cpf 12345678901"   # out["state"]["missing"]
+kuro --json agents procedures abertura-chamado                        # funil por etapa
+kuro --json agents procedures abertura-chamado <session_id>           # estado de uma conversa
+# Tool com side_effect=true não entra em `tools` de um procedural (vira etapa action).
+
 # Mudar um agente em produção sem risco: draft → eval → promote
 kuro --json agents promote r8 --to r8-draft --yes            # cria/atualiza o draft (cópia do prod)
 kuro --json agents set r8-draft instructions='["..."]'       # mexa só no draft

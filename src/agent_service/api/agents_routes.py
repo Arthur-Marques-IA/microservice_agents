@@ -21,6 +21,9 @@ from agent_service.agents.dependency_fields import (
     validate_field_specs,
 )
 from agent_service.agents.feedback import FeedbackMergeError, merge_feedback
+from agent_service.agents.procedural import StageSpecError, fields_before, state_view, validate_stages
+from agent_service.agents.procedure_store import funnel as procedure_funnel
+from agent_service.agents.procedure_store import delete_procedures_of, get_procedure
 from agent_service.agents.response_model import ResponseSchemaError, validate_response_schema
 from agent_service.agents.registry import get_agent_with_definition
 from agent_service.agents.versions import effective_config, ensure_version, get_version, list_versions
@@ -44,7 +47,7 @@ from agent_service.tools.api_tool import required_dependencies
 from agent_service.tools.registry import ToolBuildError, UnknownToolError, tool_exists
 from agent_service.tools.store import get_tool
 
-AgentKind = Literal["conversational", "analysis"]
+AgentKind = Literal["conversational", "analysis", "procedural"]
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -147,6 +150,11 @@ class AgentDefinitionIn(BaseModel):
         description="Só para kind='analysis': campos da saída estruturada. Folhas iguais a "
         "dependency_fields, mais 'object' (com fields) e 'array' (com items).",
     )
+    stages: list[dict[str, Any]] = Field(
+        default=[],
+        description="Só para kind='procedural': as etapas do fluxo — collect (fields), confirm e "
+        "action (tool). Ver agents/procedural.py.",
+    )
     model_params: dict[str, Any] | None = Field(
         default=None,
         description="temperature, top_p, max_tokens, reasoning (off|low|medium|high), thinking_budget (Gemini), "
@@ -184,6 +192,7 @@ class AgentDefinitionUpdate(BaseModel):
     num_history_runs: int | None = None
     kind: AgentKind | None = None
     response_schema: list[ResponseFieldIn] | None = None
+    stages: list[dict[str, Any]] | None = None
     model_params: dict[str, Any] | None = None
     """`{}` ou `null` volta ao padrão do provedor."""
     timeout_seconds: int | None = Field(default=None, ge=1, le=600)
@@ -212,6 +221,7 @@ class AgentDefinitionOut(BaseModel):
     num_history_runs: int
     kind: AgentKind
     response_schema: list[ResponseFieldOut]
+    stages: list[dict[str, Any]] = []
     model_params: dict[str, Any] | None = None
     timeout_seconds: int | None = None
     is_seed: bool
@@ -305,13 +315,80 @@ _PADROES_ANTIGOS = {("memory_backend", "common")}
 → `apply`) não configurou nada."""
 
 
-def _validate_kind(kind: str, response_schema: list[dict[str, Any]]) -> None:
+def _validate_kind(kind: str, response_schema: list[dict[str, Any]], stages: list[dict[str, Any]] | None = None) -> None:
     if kind == "analysis" and not response_schema:
         raise HTTPException(status_code=422, detail="kind='analysis' precisa de response_schema (ao menos 1 campo)")
-    if kind == "conversational" and response_schema:
+    if kind != "analysis" and response_schema:
         raise HTTPException(
-            status_code=422, detail="response_schema só se aplica a kind='analysis' (deixe [] para conversational)"
+            status_code=422, detail=f"response_schema só se aplica a kind='analysis' (deixe [] para {kind})"
         )
+    if kind == "procedural" and not stages:
+        raise HTTPException(status_code=422, detail="kind='procedural' precisa de stages (ao menos uma etapa)")
+    if kind != "procedural" and stages:
+        raise HTTPException(status_code=422, detail=f"stages só se aplica a kind='procedural' (deixe [] para {kind})")
+
+
+def _normalize_stages(stages: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    if not stages:
+        return []
+    try:
+        return validate_stages(stages)
+    except StageSpecError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _validate_procedure_tools(
+    stages: list[dict[str, Any]], tools: list[str], declared_dependencies: set[str]
+) -> None:
+    """O que só dá para conferir com as tools em mãos.
+
+    - Cada etapa `action` aponta para uma tool que existe, está ativa e recebe o
+      que precisa: os parâmetros obrigatórios que o modelo preencheria saem dos
+      campos coletados antes da etapa; os de `dependency`, de `dependency_fields`
+      ou dos campos coletados.
+    - Em `tools` (as que o modelo chama ao redigir a resposta) não entra tool com
+      efeito colateral: efeito só por etapa `action`, depois da confirmação — senão
+      o modelo poderia agir fora de ordem."""
+    for name in tools:
+        row = get_tool(name)
+        if row is not None and row.get("side_effect") is True:
+            raise HTTPException(
+                status_code=422,
+                detail=f"A tool {name!r} tem efeito colateral: num agente procedural ela entra como etapa "
+                "action (depois de uma confirmação), não em tools.",
+            )
+    for index, stage in enumerate(stages):
+        if stage["type"] != "action":
+            continue
+        row = get_tool(stage["tool"])
+        if row is None:
+            raise HTTPException(status_code=422, detail=f"Etapa {stage['id']!r}: tool desconhecida {stage['tool']!r}")
+        if not row["enabled"]:
+            raise HTTPException(status_code=422, detail=f"Etapa {stage['id']!r}: a tool {stage['tool']!r} está desativada")
+        if row["kind"] == "builtin" and not stage.get("function"):
+            raise HTTPException(
+                status_code=422, detail=f"Etapa {stage['id']!r}: tool builtin precisa de `function` (a função da toolkit)"
+            )
+        if row["kind"] != "api":
+            continue
+        coletados = set(fields_before(stages, index))
+        faltando = []
+        for param in (row["config"] or {}).get("parameters") or []:
+            if not param.get("required"):
+                continue
+            source = param.get("source", "model")
+            if source == "model" and param["name"] not in coletados:
+                faltando.append(param["name"])
+            elif source == "dependency" and param.get("dependency") not in (
+                coletados | declared_dependencies | {"idempotency_key", "dry_run"}
+            ):
+                faltando.append(f"dependencies.{param.get('dependency')}")
+        if faltando:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Etapa {stage['id']!r}: a tool {stage['tool']!r} precisa de {', '.join(faltando)}, "
+                "que nenhuma etapa anterior coleta (o nome do campo tem de ser o do parâmetro).",
+            )
 
 
 def _default_de(campo: str) -> Any:
@@ -391,9 +468,14 @@ def create_agent(body: AgentDefinitionIn, dry_run: bool = False) -> dict[str, An
     payload = body.model_dump()
     payload["dependency_fields"] = _normalize_dependency_fields(body.dependency_fields)
     payload["response_schema"] = _normalize_response_schema(body.response_schema)
+    payload["stages"] = _normalize_stages(body.stages)
+    _validate_kind(body.kind, payload["response_schema"], payload["stages"])
+    if body.kind == "procedural":
+        # Antes de `_validate_tools`: uma tool com efeito colateral em `tools` é o
+        # erro de fundo, e a falta de uma dependência dela seria só o sintoma.
+        _validate_procedure_tools(payload["stages"], body.tools, {f["name"] for f in payload["dependency_fields"]})
     _validate_tools(body.tools, {f["name"] for f in payload["dependency_fields"]})
     _validate_collection(body.knowledge_collection)
-    _validate_kind(body.kind, payload["response_schema"])
     _validate_inert_fields(body.kind, body)
     payload["model_params"] = _normalize_model_params(body.model_params, body.model_provider)
     if dry_run:
@@ -424,6 +506,16 @@ def update_agent(agent_type: str, body: AgentDefinitionUpdate, dry_run: bool = F
         payload["dependency_fields"] = _normalize_dependency_fields(body.dependency_fields)
     if body.response_schema is not None:
         payload["response_schema"] = _normalize_response_schema(body.response_schema)
+    if body.stages is not None:
+        payload["stages"] = _normalize_stages(body.stages)
+    current_kind = current["kind"] or "conversational"
+    if body.kind is not None and body.kind != current_kind and "procedural" in (body.kind, current_kind):
+        # As conversas em andamento têm estado em procedure_runs: trocar o tipo
+        # deixaria esse estado órfão (ou um agente procedural sem estado nenhum).
+        raise HTTPException(
+            status_code=422,
+            detail="O tipo de um agente procedural não muda (nem vira procedural depois de criado): crie outro agente.",
+        )
     # Valida contra o estado final: tools e dependency_fields podem vir juntos ou só um deles.
     if body.tools is not None or body.dependency_fields is not None:
         campos = payload.get("dependency_fields", current["dependency_fields"] or [])
@@ -431,10 +523,19 @@ def update_agent(agent_type: str, body: AgentDefinitionUpdate, dry_run: bool = F
             body.tools if body.tools is not None else (current["tools"] or []),
             {f["name"] for f in campos},
         )
-    if body.kind is not None or body.response_schema is not None:
+    if body.kind is not None or body.response_schema is not None or body.stages is not None:
         _validate_kind(
             payload.get("kind", current["kind"]),
             payload.get("response_schema", current["response_schema"] or []),
+            payload.get("stages", current.get("stages") or []),
+        )
+    if payload.get("kind", current_kind) == "procedural" and (
+        body.stages is not None or body.tools is not None or body.dependency_fields is not None
+    ):
+        _validate_procedure_tools(
+            payload.get("stages", current.get("stages") or []),
+            payload.get("tools", current["tools"] or []),
+            {f["name"] for f in payload.get("dependency_fields", current["dependency_fields"] or [])},
         )
     _validate_inert_fields(payload.get("kind", current["kind"]), body)
     if "model_params" in payload or "model_provider" in payload:
@@ -463,6 +564,7 @@ def delete_agent(agent_type: str) -> None:
     if definition["is_seed"]:
         raise HTTPException(status_code=403, detail="Agente semeado pelo sistema não pode ser removido")
     delete_definition(agent_type)
+    delete_procedures_of(agent_type)
 
 
 class RevisionOut(BaseModel):
@@ -504,6 +606,7 @@ _PROMOTED_FIELDS = (
     "num_history_runs",
     "kind",
     "response_schema",
+    "stages",
     "model_params",
     "timeout_seconds",
 )
@@ -558,6 +661,15 @@ def promote_agent(agent_type: str, body: PromoteIn) -> dict[str, Any]:
     values = {field: source.get(field) for field in _PROMOTED_FIELDS}
 
     target = get_definition(body.to)
+    if target is not None:
+        source_kind = source.get("kind") or "conversational"
+        target_kind = target.get("kind") or "conversational"
+        if source_kind != target_kind and "procedural" in (source_kind, target_kind):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{agent_type!r} é kind={source_kind!r} e {body.to!r} é kind={target_kind!r}: o tipo de um "
+                "agente procedural não muda (as conversas em andamento têm estado). Promova para um agente novo.",
+            )
     previous_version: int | None = None
     if target is None:
         create_definition(agent_type=body.to, name=source["name"], **values)
@@ -574,7 +686,7 @@ def promote_agent(agent_type: str, body: PromoteIn) -> dict[str, Any]:
             }
         update_definition(body.to, **values)
 
-    if (source.get("kind") or "conversational") == "conversational":
+    if (source.get("kind") or "conversational") != "analysis":
         source_note = get_feedback_note(agent_type)
         target_note = get_feedback_note(body.to)
         rules = source_note["rules"] if source_note else []
@@ -749,3 +861,49 @@ def get_feedback(agent_type: str) -> dict[str, Any]:
     if note is None:
         raise HTTPException(status_code=404, detail=f"Nenhum feedback registrado ainda para {agent_type!r}.")
     return note
+
+
+# -- agente procedural: estado das conversas e funil ---------------------------------
+
+
+def _procedural_target(agent_type: str) -> dict[str, Any]:
+    definition = get_definition(agent_type)
+    if definition is None:
+        raise HTTPException(status_code=404, detail=f"Agente {agent_type!r} não encontrado")
+    if (definition.get("kind") or "conversational") != "procedural":
+        raise HTTPException(status_code=422, detail=f"Agente {agent_type!r} não é kind='procedural'")
+    return definition
+
+
+@router.get("/{agent_type}/procedures")
+def get_procedure_funnel(agent_type: str, include_dry_run: bool = False) -> dict[str, Any]:
+    """Funil: quantas conversas estão em cada etapa e quantas concluíram — é onde
+    se vê em que ponto as pessoas desistem. Os testes (`dry_run`) ficam de fora."""
+    definition = _procedural_target(agent_type)
+    rows = procedure_funnel(agent_type, include_dry_run=include_dry_run)
+    by_stage = {(r["stage"], r["status"]): r["sessions"] for r in rows}
+    stages = [
+        {"id": stage["id"], "type": stage["type"], "goal": stage["goal"], "sessions": by_stage.get((stage["id"], "active"), 0)}
+        for stage in definition.get("stages") or []
+    ]
+    known = {s["id"] for s in stages}
+    return {
+        "agent_type": agent_type,
+        "stages": stages,
+        "done": by_stage.get((None, "done"), 0),
+        # Conversas paradas numa etapa que não existe mais (o agente foi editado).
+        "orphaned": sum(n for (stage, status), n in by_stage.items() if status == "active" and stage not in known),
+        "total": sum(by_stage.values()),
+    }
+
+
+@router.get("/{agent_type}/procedures/{session_id}")
+def get_procedure_state(agent_type: str, session_id: str) -> dict[str, Any]:
+    """O estado de uma conversa — o mesmo `state` que o `/chat` devolve. É o que o
+    console usa para mostrar as etapas ao reabrir uma conversa."""
+    definition = _procedural_target(agent_type)
+    row = get_procedure(agent_type, session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"A sessão {session_id!r} ainda não começou o procedimento")
+    view = state_view(definition.get("stages") or [], row["state"], finished=row["status"] == "done")
+    return {**view, "session_id": session_id, "dry_run": row["dry_run"]}

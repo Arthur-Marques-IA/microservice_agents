@@ -97,6 +97,14 @@ class RunContext:
     attachments: tuple[dict[str, Any], ...] = ()
     """Nome, tipo e tamanho de cada anexo (`describe_attachments`) — sem o conteúdo."""
 
+    definition: dict[str, Any] | None = field(default=None, compare=False, repr=False)
+    """A definição do agente que vai rodar — a rota decide por ela o caminho
+    (um agente procedural não é um run só do modelo)."""
+
+    extra_spans: tuple[Any, ...] = ()
+    """Spans que aconteceram fora do run do Agno e fazem parte da mesma execução
+    (a extração e a ação de um agente procedural), gravados junto no run."""
+
     @property
     def attachment_counts(self) -> dict[str, int]:
         """Quantos anexos de cada tipo — vai pro Langfuse no lugar do conteúdo."""
@@ -397,8 +405,57 @@ async def _recorded_events(agent: Agent, run: RunContext) -> AsyncIterator[RunOu
         record.output = output or None
         if record.model is None:
             record.model = next((span.model for span in record.spans if span.model), None)
+        _add_extra_spans(record, run.extra_spans)
         record.ended_at = datetime.now(timezone.utc)
         run_store.record_run(record)
+
+
+def _add_extra_spans(record: Any, spans: tuple[Any, ...]) -> None:
+    """Põe na frente os spans de fora do Agno e soma os tokens e o custo deles."""
+    if not spans:
+        return
+    record.spans[:0] = list(spans)
+    record.input_tokens += sum(s.input_tokens for s in spans)
+    record.output_tokens += sum(s.output_tokens for s in spans)
+    record.total_tokens += sum(s.total_tokens for s in spans)
+    costs = [s.cost_usd for s in spans if s.cost_usd is not None]
+    if costs:
+        record.cost_usd = (record.cost_usd or 0.0) + sum(costs)
+
+
+def record_run_without_model(
+    run: RunContext, output: str | None, *, status: str = "success", status_message: str | None = None
+) -> None:
+    """Grava uma execução cuja resposta o servidor montou sem chamar o modelo para
+    redigi-la (a confirmação de um agente procedural), ou que falhou antes de chegar
+    ao modelo da resposta (a extração deu erro). Ela precisa existir como as outras:
+    é dela que vêm a transcrição do feedback e a conversa nos Logs."""
+    from agent_service.observability import run_store
+
+    started = datetime.now(timezone.utc)
+    record = run_store.RunRecord(
+        run_id=run.run_id,
+        trace_id=run.trace_id,
+        agent_type=run.agent_type,
+        agent_name=run.agent_name,
+        prompt_version=run.prompt_version,
+        agent_version=run.agent_version,
+        config_hash=run.config_hash,
+        endpoint=run.endpoint,
+        user_id=run.user_id,
+        session_id=run.session_id,
+        message=run.message,
+        started_at=min((s.started_at for s in run.extra_spans), default=started),
+        metadata=dict(run.metadata),
+        input={"message": run.message, "dependencies": run.dependencies},
+        output=output,
+        status=status,
+        status_message=status_message,
+    )
+    _add_extra_spans(record, run.extra_spans)
+    record.model = next((s.model for s in record.spans if s.model), None)
+    record.ended_at = datetime.now(timezone.utc)
+    run_store.record_run(record)
 
 
 async def traced_run_events(agent: Agent, run: RunContext) -> AsyncIterator[RunOutputEvent]:

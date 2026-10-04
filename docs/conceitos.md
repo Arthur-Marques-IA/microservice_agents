@@ -11,6 +11,7 @@ pelo console, e ele responde **na próxima requisição**.
 |---|---|---|---|
 | `conversational` (padrão) | `POST /chat`, `POST /chat/stream` | atendimento, assistentes | texto, com histórico e memória |
 | `analysis` | `POST /analyze` | análise de documento, extração, classificação | **JSON validado** contra o `response_schema` |
+| `procedural` | `POST /chat`, `POST /chat/stream` | fluxo guiado: coletar, confirmar, executar | texto, mais o `state` da etapa ([abaixo](#agente-procedural-fluxo-em-etapas)) |
 
 ```bash
 # agente analista: devolve um objeto, não texto
@@ -46,14 +47,71 @@ estruturada — seria aceito no cadastro e falharia em toda chamada.
 
 Campos de um agente: `agent_type` (slug), `name`, `instructions`, `tools`,
 `model_provider`, `model_id`, `model_credential_id`, `knowledge_collection`,
-`dependency_fields`, `memory_backend`, `num_history_runs`, `kind` e
-`response_schema`. O agente `conversational` é criado automaticamente no
+`dependency_fields`, `memory_backend`, `num_history_runs`, `kind`,
+`response_schema` e `stages`. O agente `conversational` é criado automaticamente no
 primeiro boot.
 
 > Num agente `analysis`, `num_history_runs` e `memory_backend` não fazem nada —
 > ele é one-shot, sem sessão, histórico nem memória — e a nota de feedback não
 > se aplica (ela só orienta agentes conversacionais). Mandar qualquer um deles
 > dá 422, em vez de aceitar calado algo que não teria efeito.
+
+### Agente procedural (fluxo em etapas)
+
+Para um atendimento guiado — abrir um chamado, uma matrícula, um reset de senha —, o agente
+`procedural` declara as etapas e **quem conduz é o servidor**, não o prompt. O modelo faz só duas
+coisas: extrai os valores da mensagem (saída estruturada) e redige a resposta. Avançar, voltar e
+concluir são decididos pelo código (`agents/procedural.py`), e o estado de cada conversa fica numa
+tabela própria (`procedure_runs`), consultável.
+
+```bash
+uv run kuro agents apply -f - <<'EOF'
+{"agent_type": "abertura-chamado", "name": "Abertura de chamado", "kind": "procedural",
+ "instructions": ["Você abre chamados de suporte técnico. Seja cordial e objetivo."],
+ "stages": [
+   {"id": "identificacao", "goal": "Identificar o cliente",
+    "fields": [{"name": "cpf", "label": "CPF", "required": true, "pattern": "^\\d{11}$"},
+               {"name": "nome", "label": "Nome", "required": true}]},
+   {"id": "problema", "goal": "Entender o problema",
+    "fields": [{"name": "categoria", "required": true, "enum": ["internet", "tv", "fatura"]},
+               {"name": "descricao", "label": "Descrição", "required": true}]},
+   {"id": "confirmacao", "type": "confirm", "goal": "Confira os dados do chamado:"},
+   {"id": "abrir", "type": "action", "tool": "abrir_chamado"}]}
+EOF
+
+uv run kuro chat abertura-chamado -m "sou a Ana, cpf 12345678901"   # rodapé: [2/4 problema] faltando: categoria, descricao
+uv run kuro agents procedures abertura-chamado                        # funil: conversas paradas em cada etapa
+```
+
+| Etapa (`type`) | O que faz |
+|---|---|
+| `collect` (padrão) | coleta `fields` — o formato de `dependency_fields`, com `enum` e `pattern` (regex, em texto). Fica pronta quando os obrigatórios têm valor |
+| `confirm` | mostra os dados coletados e espera um sim. O texto é montado dos dados, **sem o modelo** — ele não tem como "confirmar" um dado que não coletou |
+| `action` | o servidor chama a `tool` com os dados coletados (argumentos e `dependencies`, mais `idempotency_key`). Só depois de uma `confirm` |
+
+As regras que o servidor garante:
+
+- **A etapa atual é a primeira que ainda não está pronta.** A pessoa pode adiantar dados de
+  etapas seguintes, e corrigir um dado antigo volta o fluxo para a etapa dele.
+- **Todo valor extraído é revalidado** (tipo, `enum`, `pattern`). O inválido é descartado e
+  aparece em `state.invalid`; o modelo explica e pede de novo.
+- **Mudar um dado depois da confirmação desfaz a confirmação**, e um dado já usado por uma ação
+  executada não muda mais.
+- **Uma ação nunca roda duas vezes.** Ela é reservada e gravada antes da resposta. Se falhar, a
+  pessoa precisa confirmar de novo para tentar outra vez. Uma segunda mensagem da mesma sessão,
+  enquanto a primeira está em andamento, recebe **409**.
+- **Dados que já vieram em `dependencies`** (o CPF de quem integra, por exemplo) preenchem a
+  etapa de saída.
+- Tool com efeito colateral não entra em `tools` de um procedural: efeito só como etapa `action`.
+
+O `/chat` devolve `state` com a etapa, o que foi coletado, o que falta e, ao concluir (`done`), o
+`result` — quem integra não precisa interpretar o texto. O contrato está em
+[integracao.md](integracao.md#agente-procedural-o-estado-da-conversa). No console, a conversa
+mostra a etapa atual numa faixa e as etapas no painel de detalhes; a aba Execuções do agente
+mostra o funil.
+
+> O tipo de um agente procedural não muda depois de criado, e um agente existente não vira
+> procedural: as conversas em andamento têm estado guardado. Para mudar, crie outro agente.
 
 ### Versões e melhoria contínua
 
@@ -276,8 +334,8 @@ uv run kuro agents integrate suporte       # ou GET /agents/suporte/integration
 
 | Endpoint | Uso |
 |---|---|
-| `POST /chat` | resposta completa: `{content, run_id, trace_id, session_id}` |
-| `POST /chat/stream` | SSE via POST. Eventos: `run` (ids), `message` (trechos), `usage` (tokens), `error`, `done` |
+| `POST /chat` | resposta completa: `{content, run_id, trace_id, session_id}`, e `state` num agente procedural |
+| `POST /chat/stream` | SSE via POST. Eventos: `run` (ids), `message` (trechos), `usage` (tokens), `error`, `state` (só procedural), `done` |
 | `POST /analyze` | agente `analysis`, sem sessão: `{result: {...}}` |
 | `POST /observability/scores` | feedback de um run: `{run_id, name: "feedback", value: 1, user_id}` |
 

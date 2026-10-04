@@ -81,6 +81,8 @@ id da decisão na trilha de auditoria (decisão → validação → efeito), e
 | 200 | Decisão válida contra o schema, com `enum` respeitado | Revalidar os números e executar |
 | 401 / 403 | Chave ausente ou de escopo errado | Erro de configuração: alertar, não repetir |
 | 404 | `agent_type` não existe | Erro de configuração: alertar, não repetir |
+| 409 | Agente procedural: outra mensagem da mesma sessão ainda está sendo processada | Esperar a resposta dela e reenviar |
+| 502 / 504 num agente procedural | Pode ter vindo depois da ação já executada | Ler `GET /agents/{t}/procedures/{session_id}` antes do fallback |
 | 422 | Requisição inválida: dependency faltando ou de tipo errado, texto grande demais, agente não é `analysis` | Bug de quem chama: não repetir, alertar |
 | 502 | Falha do provedor de modelo ou saída que não fecha com o schema | **Fallback.** Pode tentar no próximo ciclo |
 | 503 com `Retry-After` | Sem vaga de execução, ou banco fora | **Fallback agora**, repetir depois do `Retry-After` |
@@ -99,6 +101,36 @@ id da decisão na trilha de auditoria (decisão → validação → efeito), e
 - **Fallback** é o que o seu sistema já faz sem IA: transferir para humano, não responder, ou
   deixar para o próximo ciclo. Para o R6 a regra é firme: sem decisão válida, nada de efeito
   financeiro.
+
+### Agente procedural: o estado da conversa
+
+Um agente `kind="procedural"` é chamado pelo `/chat`, como um conversacional, e a resposta traz
+também `state` — a etapa em que a conversa está, o que já foi coletado e o que falta. No
+`/chat/stream`, o mesmo objeto chega no evento `state`, antes do `done`.
+
+```json
+{"content": "Para entender o problema, me diga a categoria.",
+ "state": {"stage": "problema", "stage_index": 1, "stages_total": 4,
+           "collected": {"cpf": "12345678901", "nome": "Ana"},
+           "missing": [{"name": "categoria", "label": "Categoria", "type": "string", "enum": ["internet", "tv"]}],
+           "invalid": {}, "done": false, "result": null}}
+```
+
+- **Acabou quando `state.done` é verdadeiro.** O resultado vem em `state.result`: os dados
+  coletados (`collected`) e o que cada etapa `action` devolveu (`actions`).
+- **409: outra mensagem da mesma sessão está em andamento.** Espere a resposta dela e reenvie. É
+  essa trava que impede uma ação de rodar duas vezes. O debounce por conversa do seu sistema evita
+  quase todos os casos.
+- **A tool de uma etapa `action`** recebe os dados coletados como argumentos e em `dependencies`,
+  mais `dependencies.idempotency_key`. A chave é a mesma enquanto os dados não mudam: se a ação
+  passou do tempo e a pessoa confirmou de novo, a nova tentativa chega com a mesma chave, e o seu
+  sistema reconhece que é o mesmo pedido. Corrigir um dado gera outra chave.
+  `dry_run` chega a ela como em qualquer tool.
+- `GET /agents/{t}/procedures/{session_id}` devolve o `state` de uma conversa e aceita a chave
+  `runtime`. O funil, `GET /agents/{t}/procedures` (conversas paradas em cada etapa, sem os testes
+  em `dry_run`), exige `admin`.
+- **Um 502 ou 504 pode chegar depois de a ação ter rodado**: ela é gravada antes da resposta. Antes
+  de cair no fallback, leia o estado da sessão; se a etapa `action` está `done`, o efeito aconteceu.
 
 ## 5. O agente como código
 
