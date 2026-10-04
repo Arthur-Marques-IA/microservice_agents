@@ -514,23 +514,41 @@ def test_confirmacao_entra_na_sessao_do_agno():
 
     from agent_service.observability.tracing import RunContext
 
+    class BancoFalso:
+        """Como o Postgres do Agno: a linha da sessão e os runs gravados separados."""
+
+        def __init__(self):
+            self.sessoes, self.runs = [], []
+
+        def upsert_session(self, session):
+            self.sessoes.append(session)
+
+        def upsert_run(self, run, session_id, user_id=None):
+            self.runs.append((run, session_id, user_id))
+
     class AgenteFalso:
         id, name = "proc", "Proc"
 
-        def __init__(self):
-            self.salva = None
+        def __init__(self, existe):
+            self.db = BancoFalso()
+            self.existe = existe
 
         def get_session(self, session_id, user_id):
-            raise Exception("Session not found")
+            if not self.existe:
+                raise Exception("Session not found")
+            return AgentSession(session_id=session_id, agent_id=self.id, user_id=user_id)
 
-        def save_session(self, session):
-            self.salva = session
-
-    agente_falso = AgenteFalso()
     run = RunContext(endpoint="chat", agent_type="proc", agent_name="Proc", prompt_version=1,
                      user_id="u", session_id="s1", message="dados")
-    procedure_runner._append_to_session(agente_falso, run, "Confira:\n\n- CPF: 1")
-    assert isinstance(agente_falso.salva, AgentSession) and agente_falso.salva.session_id == "s1"
-    (saida,) = agente_falso.salva.runs
+
+    nova = AgenteFalso(existe=False)
+    procedure_runner._append_to_session(nova, run, "Confira:\n\n- CPF: 1")
+    assert [s.session_id for s in nova.db.sessoes] == ["s1"]  # a linha da sessão, senão o run fica órfão
+    ((saida, sessao, usuario),) = nova.db.runs
+    assert (sessao, usuario) == ("s1", "u")
     assert [m.role for m in saida.messages] == ["user", "assistant"]
     assert saida.content == "Confira:\n\n- CPF: 1" and saida.run_id == run.run_id
+
+    existente = AgenteFalso(existe=True)
+    procedure_runner._append_to_session(existente, run, "Confira")
+    assert existente.db.sessoes == [] and len(existente.db.runs) == 1
