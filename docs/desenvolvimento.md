@@ -1,14 +1,19 @@
 # Desenvolvimento
 
+Os comandos abaixo funcionam igual no bash e no PowerShell: um por linha, sem `&&` (que o
+Windows PowerShell 5.1 não aceita) e sem `VAR=valor comando`.
+
 ```bash
 # backend fora do Docker (precisa do postgres do compose rodando)
 docker compose up -d postgres
 uv sync                     # o grupo dev já traz os extras `observability`, `mcp` e `tui`, usados nos testes
 uv run uvicorn agent_service.main:app --app-dir src --reload
 
-# frontend
-cd frontend && npm install
-AGENT_SERVICE_URL=http://127.0.0.1:58000 npm run dev
+# frontend (o endereço do backend vai em frontend/.env.local, que vale em qualquer shell:
+#   AGENT_SERVICE_URL=http://127.0.0.1:58000
+#   AGENT_SERVICE_API_KEY=<a ADMIN_API_KEY, se a autenticação estiver ligada>)
+npm --prefix frontend install
+npm --prefix frontend run dev
 
 # schema: as migrações (Alembic) rodam sozinhas no startup; para aplicar à mão
 uv run kuro-migrate

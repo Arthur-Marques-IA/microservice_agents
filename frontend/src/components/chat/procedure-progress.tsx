@@ -25,11 +25,21 @@ export function ProcedureStrip({
   state,
   stages,
   onOpen,
+  loading = false,
 }: {
   state: ProcedureState | null;
   stages: ProcedureStage[];
   onOpen: () => void;
+  /** A conversa já tem mensagens e o estado ainda não chegou: "Etapa 1" seria mentira. */
+  loading?: boolean;
 }) {
+  if (loading && !state) {
+    return (
+      <div className="flex w-full items-center gap-3 border-b border-border bg-surface px-4 py-2 text-[13px] text-muted-foreground">
+        <Loader className="size-3.5 animate-spin" /> Carregando a etapa da conversa…
+      </div>
+    );
+  }
   const total = state?.stages_total ?? stages.length;
   const index = state ? state.stage_index : 0;
   const current = state?.stages.find((s) => s.status === "current") ?? (state ? undefined : stages[0]);
