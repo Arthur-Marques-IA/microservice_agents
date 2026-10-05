@@ -91,6 +91,8 @@ quebrar.
 O painel se usa inteiro pelo teclado; o mouse é opcional. O rodapé mostra só as teclas que
 valem onde você está (`s` no Ao vivo, `d` no Panorama), e `?` abre a lista completa.
 
+![A ajuda aberta com ?, listando todas as teclas ao lado da tabela](telas/tui-ajuda.png)
+
 `tab` circula entre os **blocos de dados** da tela, não por todo campo: no Panorama, alterna
 entre a tabela de agentes e a de tools; no trace, vai para a árvore de spans. O bloco com foco
 fica com uma barra ciano à esquerda e o cabeçalho aceso. Os filtros têm tecla própria, e
