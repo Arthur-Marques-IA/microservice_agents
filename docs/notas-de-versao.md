@@ -70,6 +70,24 @@ timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` pa
     `dry_run`; exige `admin`).
   - Num agente procedural, um 502 ou 504 pode chegar depois de a ação ter rodado: leia o estado da
     sessão antes de cair no fallback.
+- `kuro mcp-config`: rodado no servidor (`docker compose exec agent-service kuro mcp-config --url
+  https://... --show-key`), imprime o `claude mcp add ...` e o `.mcp.json` prontos para conectar o
+  servidor MCP. Eles instalam o `kuro-mcp` com `uvx` direto do GitHub, sem clone na máquina de quem opera.
+- Tool `kind="api"`: um parâmetro de header que não vem do modelo (`source` `dependency` ou
+  `const`) aceita nome de header HTTP com hífen, como `Idempotency-Key` ou `X-Request-Id`. Antes só
+  identificadores passavam, e não havia como mandar a `idempotency_key` no header esperado.
+
+### Corrigido
+
+- O título de uma conversa com `dependencies` mostrava os dados do cliente: sem nome definido, o
+  AgentOS usa a primeira mensagem como título, e o Agno junta a ela o bloco
+  `<additional context>{...}` (CPF, nome...). O console, a CLI (`kuro sessions list`) e o MCP
+  agora mostram só a mensagem — vale também para as conversas antigas. A API `/sessions` continua
+  devolvendo o nome como o AgentOS o guarda.
+- Clone novo no Windows (`core.autocrlf=true`): o script de init do Postgres saía com CRLF e o
+  `docker compose up` falhava com "cannot execute: required file not found". O repositório agora
+  fixa LF nos arquivos que rodam dentro dos containers (`.gitattributes`). Quem já clonou: apague
+  `docker/` e rode `git checkout -- docker/` para regravar os arquivos.
 
 ### Como atualizar
 

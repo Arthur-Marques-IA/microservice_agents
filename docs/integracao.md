@@ -124,7 +124,9 @@ também `state` — a etapa em que a conversa está, o que já foi coletado e o 
 - **A tool de uma etapa `action`** recebe os dados coletados como argumentos e em `dependencies`,
   mais `dependencies.idempotency_key`. A chave é a mesma enquanto os dados não mudam: se a ação
   passou do tempo e a pessoa confirmou de novo, a nova tentativa chega com a mesma chave, e o seu
-  sistema reconhece que é o mesmo pedido. Corrigir um dado gera outra chave.
+  sistema reconhece que é o mesmo pedido. Corrigir um dado gera outra chave. Para mandá-la no
+  header que o seu sistema espera, declare na tool um parâmetro de header com o nome do header:
+  `{"name": "Idempotency-Key", "location": "header", "source": "dependency", "dependency": "idempotency_key"}`.
   `dry_run` chega a ela como em qualquer tool.
 - `GET /agents/{t}/procedures/{session_id}` devolve o `state` de uma conversa e aceita a chave
   `runtime`. O funil, `GET /agents/{t}/procedures` (conversas paradas em cada etapa, sem os testes

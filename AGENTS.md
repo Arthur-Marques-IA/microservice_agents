@@ -19,7 +19,8 @@ autoassinado, `--insecure`. Erro de certificado sai com 3 e diz "o certificado d
 foi aceito" — é diferente de serviço fora do ar, não adianta reiniciar container.
 
 **Tem as tools `kuro` (servidor MCP `kuro-mcp`)?** Prefira-as à CLI: são as mesmas operações,
-tipadas, e o guia está em `docs/mcp.md`. Diferenças que importam:
+tipadas, e o guia está em `docs/mcp.md` (`kuro mcp-config`, no servidor, imprime a configuração
+para conectá-lo). Diferenças que importam:
 - `chat`, `analyze`, `tool_invoke` e `eval` rodam em `dry_run` por padrão;
 - `chat` não reaproveita a sessão da CLI, então repasse o `session_id` que ele devolve;
 - remover, restaurar e promover pedem confirmação à pessoa. Não tente contornar: se o

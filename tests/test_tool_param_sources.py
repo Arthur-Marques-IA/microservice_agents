@@ -112,6 +112,42 @@ def test_invalid_parameter_sources_are_rejected(param, erro):
         validate_api_config({"method": "GET", "url": "https://x.test", "parameters": [param]})
 
 
+def test_header_from_dependency_can_have_a_real_header_name():
+    """`Idempotency-Key`, `X-Request-Id`: headers HTTP de verdade têm hífen. Vale
+    para o que o modelo não preenche; o que ele preenche vira propriedade do schema."""
+    config = validate_api_config({
+        "method": "POST",
+        "url": "https://x.test/chamados",
+        "parameters": [
+            {"name": "Idempotency-Key", "type": "string", "location": "header", "required": True,
+             "source": "dependency", "dependency": "idempotency_key"},
+            {"name": "X-Origem", "type": "string", "location": "header", "source": "const", "value": "kuro"},
+            {"name": "assunto", "type": "string", "location": "body", "required": True},
+        ],
+    })
+    assert required_dependencies(config) == ["idempotency_key"]
+    fn = build_api_function(tool_name="chamado", description=None, config=config)
+    assert fn.parameters["properties"].keys() == {"assunto"}
+    with RedeFalsa({"ok": True}) as rede, dependencies_scope({"idempotency_key": "abc:abrir:123"}):
+        asyncio.run(fn.entrypoint(assunto="tv"))
+    enviada = rede.requests[-1]
+    assert enviada.headers["Idempotency-Key"] == "abc:abrir:123"
+    assert enviada.headers["X-Origem"] == "kuro"
+
+
+@pytest.mark.parametrize(
+    "param",
+    [
+        {"name": "Idempotency-Key", "type": "string", "location": "header"},  # o modelo preencheria
+        {"name": "page-size", "type": "integer", "location": "query", "source": "const", "value": 10},
+        {"name": "-X", "type": "string", "location": "header", "source": "const", "value": "a"},
+    ],
+)
+def test_hyphen_only_in_headers_the_model_does_not_fill(param):
+    with pytest.raises(ApiToolConfigError, match="nome de parâmetro inválido"):
+        validate_api_config({"method": "GET", "url": "https://x.test", "parameters": [param]})
+
+
 def test_parameter_cannot_hijack_the_api_key_header():
     with pytest.raises(ApiToolConfigError, match="header de autenticação"):
         validate_api_config({

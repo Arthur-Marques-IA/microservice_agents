@@ -328,9 +328,14 @@ class Client:
     # execuções registradas; isto é a conversa em si — é o que `kuro sessions` precisa.
 
     def list_sessions(self, **params: Any) -> dict[str, Any]:
-        """`{data: [...], meta: {...}}` — sempre `type=agent`, o único que o serviço cria."""
+        """`{data: [...], meta: {...}}` — sempre `type=agent`, o único que o serviço cria.
+        O `session_name` vem limpo (ver `clean_session_name`)."""
         query = {"type": "agent", **{k: v for k, v in params.items() if v is not None}}
-        return self._request("GET", "/sessions", params=query)
+        page = self._request("GET", "/sessions", params=query)
+        for item in page.get("data") or []:
+            if isinstance(item, dict) and "session_name" in item:
+                item["session_name"] = clean_session_name(item["session_name"])
+        return page
 
     def session_runs(self, session_id: str, user_id: str | None = None) -> list[dict[str, Any]]:
         params = {"type": "agent", **({"user_id": user_id} if user_id else {})}
@@ -343,6 +348,21 @@ class Client:
 
     def delete_session(self, session_id: str, user_id: str | None = None) -> None:
         self._request("DELETE", f"/sessions/{session_id}", params={"user_id": user_id} if user_id else {})
+
+
+_CONTEXT_MARK = "<additional context>"
+
+
+def clean_session_name(name: Any) -> Any:
+    """O título de uma conversa sem o contexto interno.
+
+    Sem nome definido, o AgentOS usa a primeira mensagem do usuário como título —
+    e o Agno junta a ela as `dependencies` (`<additional context>{...}`). O título
+    de qualquer conversa com dados do cliente (CPF, nome) saía com eles inteiros.
+    O mesmo corte está em `frontend/src/lib/sessions.ts::sessionTitle`."""
+    if not isinstance(name, str) or _CONTEXT_MARK not in name:
+        return name
+    return name.split(_CONTEXT_MARK, 1)[0].strip() or None
 
 
 def _detail(response: httpx.Response) -> Any:

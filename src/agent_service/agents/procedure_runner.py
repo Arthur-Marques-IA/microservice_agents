@@ -246,21 +246,34 @@ def _append_to_session(agent: Agent, run: RunContext, reply: str) -> None:
     confirmação). Sem isto ela some do histórico: o modelo, na mensagem seguinte,
     não saberia que pediu confirmação, e o console e `kuro sessions show` (que
     leem a sessão) mostrariam a conversa com buracos."""
+    from agno.metrics import RunMetrics
     from agno.models.message import Message
     from agno.run.agent import RunInput, RunOutput
     from agno.run.base import RunStatus
     from agno.session.agent import AgentSession
 
+    db = getattr(agent, "db", None)
+    if db is None:
+        return
     try:
         session = agent.get_session(session_id=run.session_id, user_id=run.user_id)
     except Exception:  # noqa: BLE001 - o Agno levanta Exception para sessão que não existe
         session = None
     if not isinstance(session, AgentSession):
+        # A linha da sessão e os runs são gravados separados nesta versão do Agno
+        # (`upsert_session` não toca nos runs): sem a linha, o run fica órfão.
         now = int(time.time())
-        session = AgentSession(
-            session_id=run.session_id, agent_id=agent.id, user_id=run.user_id, created_at=now, updated_at=now
+        db.upsert_session(
+            AgentSession(
+                session_id=run.session_id,
+                agent_id=agent.id,
+                user_id=run.user_id,
+                session_data={},
+                created_at=now,
+                updated_at=now,
+            )
         )
-    session.upsert_run(
+    db.upsert_run(
         RunOutput(
             run_id=run.run_id,
             agent_id=agent.id,
@@ -270,10 +283,17 @@ def _append_to_session(agent: Agent, run: RunContext, reply: str) -> None:
             input=RunInput(input_content=run.message),
             content=reply,
             messages=[Message(role="user", content=run.message), Message(role="assistant", content=reply)],
+            # Os tokens do turno são os da extração: sem métricas, o console mostrava "tokens: ?".
+            metrics=RunMetrics(
+                input_tokens=sum(s.input_tokens for s in run.extra_spans),
+                output_tokens=sum(s.output_tokens for s in run.extra_spans),
+                total_tokens=sum(s.total_tokens for s in run.extra_spans),
+            ),
             status=RunStatus.completed,
-        )
+        ),
+        session_id=run.session_id,
+        user_id=run.user_id,
     )
-    agent.save_session(session)
 
 
 async def run_procedural_turn(agent: Agent, run: RunContext) -> AsyncIterator[tuple[str, Any]]:

@@ -478,6 +478,46 @@ def test_sessions_list_scopes_by_user_and_agent(api):
     assert (params["user_id"], params["component_id"], params["type"]) == ("cli", "suporte", "agent")
 
 
+def test_mcp_config_prints_a_ready_command_with_the_key_masked(api, monkeypatch):
+    monkeypatch.setenv("KURO_API_KEY", "chave-admin-1234567890abcdef")
+    result = _run("mcp-config", "--url", "https://kuro.empresa.com/")
+    assert result.exit_code == 0
+    # `[mcp]` não pode sumir (o Rich o leria como marcação)
+    assert 'uvx --from "agent-service[mcp] @ git+https://github.com/' in result.stdout
+    assert "KURO_API_URL=https://kuro.empresa.com " in result.stdout
+    assert "chave-admin-1234567890abcdef" not in result.stdout
+    assert "--show-key" in result.stdout
+
+    data = json.loads(_run("--json", "mcp-config", "--url", "https://kuro.empresa.com", "--show-key").stdout)
+    assert "KURO_API_KEY=chave-admin-1234567890abcdef" in data["claude_command"]
+    server = data["mcp_json"]["mcpServers"]["kuro"]
+    assert server["command"] == "uvx" and server["args"][-1] == "kuro-mcp"
+    # No .mcp.json a chave vem do ambiente: o arquivo pode ir para o git.
+    assert server["env"] == {"KURO_API_URL": "https://kuro.empresa.com", "KURO_API_KEY": "${KURO_API_KEY}"}
+    assert data["warnings"] == []
+
+
+def test_mcp_config_warns_about_internal_url_and_missing_key(api, monkeypatch):
+    monkeypatch.delenv("KURO_API_KEY", raising=False)
+    data = json.loads(_run("--json", "mcp-config").stdout)
+    assert len(data["warnings"]) == 2
+    assert "--url" in data["warnings"][0] and "401" in data["warnings"][1]
+    assert "KURO_API_KEY" not in data["mcp_json"]["mcpServers"]["kuro"]["env"]
+
+
+def test_sessions_list_title_drops_the_dependencies_block(api):
+    """O AgentOS usa a 1ª mensagem como título, e o Agno junta a ela as dependencies:
+    o CPF do cliente aparecia no título da conversa."""
+    routes, _ = api
+    vazado = {**SESSION, "session_name": 'meu wifi caiu\n\n<additional context>\n{"cpf": "12345678900"}\n</additional context>'}
+    so_contexto = {**SESSION, "session_id": "cli-2", "session_name": '<additional context>{"cpf": "1"}</additional context>'}
+    routes[("GET", "/sessions")] = httpx.Response(200, json={"data": [vazado, so_contexto], "meta": {}})
+    data = json.loads(_run("--json", "sessions", "list").stdout)["data"]
+    assert data[0]["session_name"] == "meu wifi caiu"
+    assert data[1]["session_name"] is None
+    assert "12345678900" not in _run("sessions", "list").stdout
+
+
 def test_sessions_list_uses_kuro_user_id_env(api, monkeypatch):
     routes, calls = api
     monkeypatch.setenv("KURO_USER_ID", "joana")
