@@ -9,7 +9,8 @@ from typer.testing import CliRunner  # noqa: E402
 
 from agent_service.cli import main as cli_main  # noqa: E402
 from agent_service.cli.client import ApiError, ServiceUnavailable  # noqa: E402
-from agent_service.tui.app import KuroDash, RunScreen  # noqa: E402
+from agent_service.tui import crow  # noqa: E402
+from agent_service.tui.app import KuroDash, RunScreen, spark  # noqa: E402
 
 pytestmark = pytest.mark.anyio
 
@@ -47,7 +48,7 @@ TRACE = {
 OVERVIEW = {
     "totals": {"runs": 10, "errors": 1, "tool_failure_runs": 2, "sessions": 4, "total_tokens": 5000,
                "cost_usd": 0.5, "feedback_up": 3, "feedback_down": 1},
-    "previous": {"runs": 5, "total_tokens": 2500, "cost_usd": 0.25},
+    "previous": {"runs": 5, "errors": 0, "tool_failure_runs": 2, "total_tokens": 2500, "cost_usd": 0.25},
     "agents": [{"agent_type": "suporte", "last_run_at": "2026-10-03T12:30:00Z",
                 "totals": {"runs": 10, "errors": 1, "tool_failure_runs": 2, "total_tokens": 5000, "cost_usd": 0.5,
                            "feedback_up": 3, "feedback_down": 1}}],
@@ -59,12 +60,15 @@ OVERVIEW = {
 class FakeClient:
     base_url = "http://kuro.test"
 
-    def __init__(self, *, runs=None, overview=None):
+    def __init__(self, *, runs=None, overview=None, health=None):
         self.runs = runs
+        self.health_result = health
         self.overview_result = overview
         self.run_queries: list[dict] = []
 
     def health(self):
+        if isinstance(self.health_result, Exception):
+            raise self.health_result
         return {"version": "0.2.0"}
 
     def list_runs(self, **params):
@@ -140,10 +144,12 @@ async def test_overview_renders_totals_agents_and_failures():
         await pilot.press("2")
         await app.workers.wait_for_complete()
         await pilot.pause()
-        totals = _text(app.query_one("#totals", Static))
-        assert "10" in totals and "+100%" in totals
+        runs = _text(app.query_one("#card-runs", Static))
+        assert "10" in runs and "+100%" in runs
+        assert "10.0%" in _text(app.query_one("#card-errors", Static))
         assert app.query_one("#agents", DataTable).row_count == 1
         assert app.query_one("#tool-failures", DataTable).row_count == 1
+        assert not app.query_one("#failures-empty").display
 
 
 async def test_overview_without_admin_scope_explains():
@@ -152,10 +158,267 @@ async def test_overview_without_admin_scope_explains():
         await pilot.press("2")
         await app.workers.wait_for_complete()
         await pilot.pause()
-        assert "escopo admin" in _text(app.query_one("#totals", Static))
+        assert "escopo admin" in _text(app.query_one("#overview-msg", Static))
+        assert not app.query_one("#cards").display
+        assert app.crow_mood() == "idle"  # configuração faltando não é acontecimento: o corvo não alarma
 
 
 def test_dash_without_tty_fails_with_usage_error():
     result = CliRunner().invoke(cli_main.app, ["dash"])
     assert result.exit_code == 2
     assert "TTY" in result.output
+
+
+# -- o corvo ------------------------------------------------------------------------
+
+
+def test_every_mood_renders_six_rows_of_sixteen_cells():
+    for mood in crow.MOODS:
+        for animate in (True, False):
+            lines = crow.render(crow.frame_for(mood, 1, animate)).plain.splitlines()
+            assert len(lines) == 6 and all(len(line) == 16 for line in lines), mood
+
+
+def test_offline_crow_is_upside_down_with_a_cross_eye():
+    frame = crow.frame_for("offline", 0, True)
+    assert frame.grid == tuple(reversed(crow.BASE))
+    assert "×" in crow.render(frame).plain
+    assert "×" not in crow.render(crow.frame_for("idle", 0, True)).plain
+
+
+def test_error_crow_opens_the_beak_and_paused_crow_snores():
+    error = crow.frame_for("error", 0, False)
+    assert error.eye == crow.EYE_ALERT and "R" in "".join(error.grid)
+    paused = crow.frame_for("paused", 0, False)
+    assert paused.eye is None and "zZ" in crow.render(paused).plain
+
+
+def test_idle_crow_only_acts_after_a_rest():
+    widget = crow.Crow(lambda: "idle", lambda: True)
+    frames = [widget.next_frame() for _ in range(60)]
+    assert frames[0] == crow.Frame(crow.BASE)
+    assert any(f != crow.Frame(crow.BASE) for f in frames)  # pisca, olha, bica ou pula
+
+
+def test_spark_fits_width():
+    assert spark([0, 0, 0]) == "▁▁▁"
+    assert len(spark(list(range(30)), width=10)) == 10
+    assert spark([1, 8])[-1] == "█"
+
+
+async def test_new_error_run_alarms_but_baseline_and_filter_change_do_not():
+    ok = dict(RUN, run_id="r0")
+    client = FakeClient(runs=[ok])
+    app = KuroDash(client, interval=60)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.crow_mood() == "idle"  # a primeira consulta só forma a base
+        client.runs = [dict(RUN, run_id="r9", status="error"), ok]
+        app.query_one("#status").value = "error"  # trocar o filtro também não é "chegou execução"
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.crow_mood() == "idle"
+        client.runs = [dict(RUN, run_id="r10", status="error"), dict(RUN, run_id="r9", status="error"), ok]
+        await pilot.press("r")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.alert_until > 0
+        assert "▸" in str(app.query_one("#runs", DataTable).get_row_at(0)[1])
+
+
+async def test_new_run_makes_crow_work():
+    client = FakeClient(runs=[RUN])
+    app = KuroDash(client, interval=60)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        client.runs = [dict(RUN, run_id="r2"), RUN]
+        await pilot.press("r")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        # O estado, não o relógio: a janela de 2 s pode passar numa máquina carregada.
+        assert app.busy_until > 0 and app.alert_until == 0
+
+
+async def test_service_down_makes_crow_offline():
+    app = KuroDash(FakeClient(health=ServiceUnavailable("fora"), runs=ServiceUnavailable("fora")), interval=60)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.crow_mood() == "offline"
+        assert "offline" in _text(app.query_one(".conn", Static))
+
+
+async def test_pause_and_animation_toggle():
+    app = KuroDash(FakeClient(), interval=60)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("p")
+        await pilot.pause()
+        assert app.crow_mood() == "paused"
+        assert "pausado" in _text(app.query_one(".conn", Static))
+        assert app.animate
+        await pilot.press("a")
+        assert not app.animate
+        assert "desligadas" in _text(app.query_one(".anim-toggle", Static))
+        await pilot.click(".anim-toggle")
+        assert app.animate
+
+
+async def test_small_terminal_still_shows_runs():
+    app = KuroDash(FakeClient(), interval=60)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        table = app.query_one("#runs", DataTable)
+        assert table.row_count == 1 and table.size.height >= 3
+
+
+async def test_empty_feed_explains():
+    app = KuroDash(FakeClient(runs=[]), interval=60)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.query_one("#runs-empty").display
+        assert "Nenhuma execução ainda" in _text(app.query_one("#runs-empty", Static))
+
+
+async def test_late_result_from_before_a_filter_change_is_dropped():
+    app = KuroDash(FakeClient(runs=[RUN]), interval=60)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        pane = app.query_one("#runs-pane")
+        stale = pane.generation
+        app.query_one("#status").value = "error"
+        await pilot.pause()
+        pane.show([dict(RUN, run_id="velha", status="error")], stale)  # a consulta lenta de antes do filtro
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.crow_mood() == "idle"
+        assert "velha" not in (pane.seen or set())
+
+
+async def test_persistent_api_error_alarms_once():
+    app = KuroDash(FakeClient(runs=ApiError(401, "chave inválida")), interval=60)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        first = app.alert_until
+        assert first and "erro na API" in _text(app.query_one(".conn", Static))
+        await pilot.press("r")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.alert_until == first  # o mesmo erro de novo não rearma o alerta
+
+
+async def test_textual_animations_none_starts_still(monkeypatch):
+    import textual.constants
+
+    monkeypatch.setattr(textual.constants, "TEXTUAL_ANIMATIONS", "none")
+    assert not KuroDash(FakeClient()).animate
+
+
+# -- teclado ------------------------------------------------------------------------
+
+
+async def test_tab_cycles_data_panels_and_brackets_switch_tabs():
+    app = KuroDash(FakeClient(), interval=60)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.focused.id == "runs"
+        await pilot.press("tab")  # só um painel no Ao vivo: o foco fica na tabela
+        assert app.focused.id == "runs"
+        await pilot.press("right_square_bracket")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.active_tab() == "overview-pane"
+        assert app.focused.id == "agents"
+        await pilot.press("tab")
+        assert app.focused.id == "tool-failures"
+        await pilot.press("shift+tab")
+        assert app.focused.id == "agents"
+        await pilot.press("left_square_bracket")
+        await pilot.pause()
+        assert app.active_tab() == "runs-pane" and app.focused.id == "runs"
+
+
+async def test_filters_from_the_keyboard():
+    client = FakeClient()
+    app = KuroDash(client, interval=60)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await pilot.press("slash")
+        assert app.focused.id == "agent"
+        await pilot.press("s", "u", "p")  # dentro do filtro, letras são texto, não atalhos
+        assert app.query_one("#agent").value == "sup"
+        await pilot.press("escape")
+        assert app.focused.id == "runs"
+        await pilot.press("s")
+        await app.workers.wait_for_complete()
+        assert client.run_queries[-1]["status"] == "success"
+        await pilot.press("t")
+        await app.workers.wait_for_complete()
+        assert client.run_queries[-1]["include_dry_run"] is False
+        await pilot.press("s", "s")  # sucesso → erro → todos
+        await app.workers.wait_for_complete()
+        assert client.run_queries[-1]["status"] is None
+
+
+async def test_contextual_keys_and_help():
+    app = KuroDash(FakeClient(), interval=60)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        assert app.check_action("cycle_status", ()) and not app.check_action("cycle_period", ())
+        await pilot.press("2")
+        await pilot.pause()
+        assert app.check_action("cycle_period", ()) and not app.check_action("cycle_status", ())
+        await pilot.press("d")
+        assert app.query_one("#period").value == 30
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert app.screen.query("HelpPanel")
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert not app.screen.query("HelpPanel")
+
+
+async def test_repo_link_in_header_and_g_opens_it(monkeypatch):
+    opened = []
+    app = KuroDash(FakeClient(), interval=60)
+    monkeypatch.setattr(app, "open_url", lambda url, **_: opened.append(url))
+    async with app.run_test(size=(140, 40)) as pilot:
+        assert "Arthur-Marques-IA/microservice_agents" in _text(app.query_one(".repo", Static))
+        await pilot.press("g")
+        assert opened == ["https://github.com/Arthur-Marques-IA/microservice_agents"]
+
+
+async def test_j_k_move_and_trace_keys_hidden():
+    client = FakeClient(runs=[RUN, dict(RUN, run_id="r2")])
+    app = KuroDash(client, interval=60)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        table = app.query_one("#runs", DataTable)
+        await pilot.press("j")
+        assert table.cursor_row == 1
+        await pilot.press("k")
+        assert table.cursor_row == 0
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, RunScreen)
+        assert not app.check_action("switch_tab", ())  # no trace, as teclas das abas somem do rodapé
+
+
+async def test_slash_from_overview_goes_to_the_filter():
+    app = KuroDash(FakeClient(), interval=60)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.press("slash")
+        await pilot.pause()
+        await pilot.pause()
+        assert app.active_tab() == "runs-pane" and app.focused.id == "agent"

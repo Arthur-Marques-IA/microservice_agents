@@ -30,6 +30,14 @@ timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` pa
 
 ### Novo
 
+- **`kuro dash` de cara nova**: tema com as cores do console, um cabeçalho com o corvo do Kuro (o
+  humor dele mostra o estado do painel: execuções chegando, erro, pausado ou serviço fora do ar),
+  a aba Execuções virou **Ao vivo**, com um resumo do que está na tela, e o **Panorama** virou
+  cartões com a variação e um minigráfico do período. Nova tecla `a` (e um botão no cabeçalho)
+  liga e desliga as animações; `TEXTUAL_ANIMATIONS=none` já abre com elas desligadas. Tudo pelo
+  teclado: `]`/`[` trocam de aba, `tab` circula entre as tabelas, `/` filtra por agente, `s`, `t`
+  e `d` mudam status, testes e período, `j`/`k` movem a seleção, `?` mostra todas as teclas e `g`
+  abre o repositório no GitHub. Veja [docs/tui.md](tui.md).
 - Fila de espera por vaga de execução em `/chat`, `/analyze` e `/chat/stream`: em ordem de chegada,
   limitada por `QUEUE_MAX_SIZE` (64) e `QUEUE_MAX_WAIT_SECONDS` (30). Fila cheia ou espera esgotada:
   503 com `Retry-After`, como antes. O `timeout_seconds` do run só conta depois que ele ganha a vaga.
