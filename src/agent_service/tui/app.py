@@ -724,7 +724,8 @@ class KuroDash(App):
     .box { height: auto; margin: 0 1; padding: 0 1; border: round $primary 40%; border-title-color: $text-muted; }
     #run-io { height: auto; }
     #run-io .box { width: 1fr; }
-    #spans { height: auto; margin: 0 1; padding: 0 1; border-title-color: $text-muted; }
+    #spans { height: auto; margin: 0 1; padding: 0 1; border: round $primary 40%; border-title-color: $text-muted; }
+    #spans:focus { border: round $primary; }
     Masthead .repo { color: $text-muted; text-wrap: nowrap; text-overflow: ellipsis; }
     """
     # Tudo tem caminho pelo teclado; o mouse é opcional. Nenhum atalho é `priority`: com o

@@ -8,6 +8,8 @@ pelo terminal.
 Como a CLI, é só mais um cliente da API: valem as mesmas flags e variáveis (`--url`/`KURO_API_URL`,
 `KURO_API_KEY`, `KURO_CA_BUNDLE`), contra o serviço local ou numa VPS.
 
+![A aba Ao vivo do kuro dash, com o corvo no cabeçalho](telas/tui-ao-vivo.png)
+
 ## Instalar e abrir
 
 O painel usa o [Textual](https://textual.textualize.io) e vem no extra `tui`:
