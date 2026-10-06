@@ -85,17 +85,23 @@ id da decisão na trilha de auditoria (decisão → validação → efeito), e
 | 502 / 504 num agente procedural | Pode ter vindo depois da ação já executada | Ler `GET /agents/{t}/procedures/{session_id}` antes do fallback |
 | 422 | Requisição inválida: dependency faltando ou de tipo errado, texto grande demais, agente não é `analysis` | Bug de quem chama: não repetir, alertar |
 | 502 | Falha do provedor de modelo ou saída que não fecha com o schema | **Fallback.** Pode tentar no próximo ciclo |
-| 503 com `Retry-After` | Sem vaga de execução, ou banco fora | **Fallback agora**, repetir depois do `Retry-After` |
+| 503 com `Retry-After` | Sem vaga de execução (a fila de espera cheia, ou a espera nela esgotada), ou banco fora | **Fallback agora**, repetir depois do `Retry-After` |
 | 503 com `error` | Configuração do Kuro: `model_provider_not_configured` (sem chave do provedor do modelo) ou `encryption_not_configured` (sem `CREDENTIALS_ENCRYPTION_KEY`). O `detail` diz o que falta | **Fallback** e alertar quem opera o Kuro: repetir não resolve |
 | 504 | A execução passou do `timeout_seconds` do agente | **Fallback.** Veja o run no `kuro runs` |
 | Rede ou timeout do cliente | O Kuro não respondeu | **Fallback** |
 
 - **Repetir é seguro.** O `/analyze` não tem efeito colateral: repetir só gera outro run. Quem
   garante que a mesma mensagem não vire duas ações é o claim do seu sistema, como já acontece hoje.
-- **O timeout do cliente deve ser maior que o do agente**, algo como `timeout_seconds + 5`. Assim
-  o 504 do Kuro chega antes, e o run fica registrado como erro com o motivo. Um run com status
-  `interrupted` quer dizer exatamente isto: quem chamou desistiu antes do fim. Credencial faltando
-  não aparece assim — ela responde 503 antes de o run começar.
+- **O timeout do cliente deve cobrir a fila e o agente**: `QUEUE_MAX_WAIT_SECONDS + timeout_seconds
+  + 5`. Com os padrões e um agente de 30 s, isso dá 65 s. Acima de `MAX_CONCURRENT_RUNS` (16
+  execuções simultâneas), a chamada espera uma vaga por até `QUEUE_MAX_WAIT_SECONDS` (30 s) antes de
+  o run começar, e o `timeout_seconds` só conta depois disso. Com o timeout certo, o 503 ou o 504
+  do Kuro chega antes, e o run fica registrado com o motivo. Um run com status `interrupted` quer
+  dizer que quem chamou desistiu antes do fim. Credencial faltando não aparece assim: ela responde
+  503 antes de o run começar.
+- **Prefere falhar rápido a esperar?** Um daemon que já repete no próximo ciclo, como o do Regente,
+  pode pedir ao operador do Kuro `QUEUE_MAX_WAIT_SECONDS=0`. Sem fila, quem passa do limite recebe
+  503 na hora, e `timeout_seconds + 5` volta a bastar.
 - `GET /health` mostra `model_credentials`: `enabled`, ou o motivo de não dar para cadastrar chaves
   de modelo. `kuro health` mostra o mesmo.
 - **Fallback** é o que o seu sistema já faz sem IA: transferir para humano, não responder, ou
@@ -312,7 +318,7 @@ e cada uma aponta para um `run_id`.
 ```php
 final class KuroClient
 {
-    public function __construct(private string $url, private string $key, private int $timeout = 35) {}
+    public function __construct(private string $url, private string $key, private int $timeout = 65) {}
 
     /** @return array{result: array, run_id: string, agent_version: int, config_hash: string}|null  null = fallback */
     public function analyze(string $agent, string $document, array $deps = [], array $meta = [], ?string $session = null): ?array
@@ -355,7 +361,8 @@ final class KuroClient
 - [ ] Profile `tls` ativo e `ADMIN_API_KEY`/`RUNTIME_API_KEY` definidas; o sistema integrado usa só
       a runtime.
 - [ ] O circuit breaker olha o `/ready`, e o fallback está testado para 502, 503, 504 e rede.
-- [ ] O timeout do cliente é maior que o `timeout_seconds` do agente.
+- [ ] O timeout do cliente cobre a fila e o agente (`QUEUE_MAX_WAIT_SECONDS + timeout_seconds + 5`), ou o
+  Kuro roda com `QUEUE_MAX_WAIT_SECONDS=0`.
 - [ ] `run_id`, `agent_version` e `config_hash` ficam gravados junto com cada decisão.
 - [ ] Todo número da decisão é revalidado na fonte antes de qualquer efeito.
 - [ ] O agente tem `enum` nos campos de decisão e `model_params` com a temperatura do legado.

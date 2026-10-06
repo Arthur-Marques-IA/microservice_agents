@@ -25,8 +25,11 @@ Aqui não entram as mudanças internas; essas ficam no histórico do git.
 ### Ação necessária
 
 Nenhuma, mas muda o comportamento no limite: acima de `MAX_CONCURRENT_RUNS`, a chamada **espera**
-na fila (até `QUEUE_MAX_WAIT_SECONDS`, 30 s) em vez de receber 503 na hora. Se o seu cliente tem
-timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` para o comportamento antigo.
+na fila (até `QUEUE_MAX_WAIT_SECONDS`, 30 s) em vez de receber 503 na hora, e só então o run começa
+a contar o `timeout_seconds`. O timeout do seu cliente precisa cobrir as duas esperas
+(`QUEUE_MAX_WAIT_SECONDS + timeout_seconds + 5`); um cliente com `timeout_seconds + 5`, como o
+[guia de integração](integracao.md#4-erros-e-fallback) recomendava, pode desistir com o run ainda na fila.
+Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
 
 ### Novo
 
