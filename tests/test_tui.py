@@ -427,3 +427,35 @@ async def test_slash_from_overview_goes_to_the_filter():
         await _focus_on(pilot, app, "agents", tab="overview-pane")
         await pilot.press("slash")
         await _focus_on(pilot, app, "agent", tab="runs-pane")
+
+
+# -- cores ----------------------------------------------------------------------------
+
+
+def test_truecolor_is_turned_on_over_ssh(monkeypatch):
+    """Pelo SSH chega só o TERM: sem o COLORTERM, o Rich reduziria o tema a 256 cores."""
+    import rich.console
+
+    from agent_service.tui.app import prefer_truecolor
+
+    env = {"TERM": "xterm-256color"}
+    assert prefer_truecolor(env) and env["COLORTERM"] == "truecolor"
+    monkeypatch.setattr(rich.console, "WINDOWS", False)  # no Windows o Rich nem olha o ambiente
+    console = rich.console.Console(force_terminal=True, _environ=env)
+    assert console.color_system == "truecolor"
+
+
+def test_truecolor_respects_who_said_otherwise():
+    from agent_service.tui.app import prefer_truecolor
+
+    for env in (
+        {"TERM": "xterm-256color", "COLORTERM": "256"},  # já definido: não mexe
+        {"TERM": "xterm-256color", "NO_COLOR": "1"},
+        {"TERM": "xterm-256color", "KURO_TRUECOLOR": "0"},
+        {"TERM": "linux"},  # console do Linux, sem X
+        {"TERM": "dumb"},
+        {"TERM": "xterm-256color", "TERM_PROGRAM": "Apple_Terminal"},
+    ):
+        before = dict(env)
+        assert not prefer_truecolor(env)
+        assert env == before

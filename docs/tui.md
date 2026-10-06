@@ -27,6 +27,12 @@ Opções:
 
 O painel precisa de um terminal interativo. Num script ou sem TTY, use `kuro runs tail --json`.
 
+**Cores.** O painel liga sozinho as 16 milhões de cores (`COLORTERM=truecolor`). Pelo SSH só
+chega o `TERM`, e sem isso as cores do tema seriam reduzidas a uma paleta de 256: o corvo ficaria
+verde-azulado e o cabeçalho, preto. Quem já definiu `COLORTERM` ou `NO_COLOR` fica como está, assim
+como o console do Linux e o Terminal.app do macOS. Se o seu terminal mostrar cores estranhas,
+desligue com `KURO_TRUECOLOR=0`.
+
 ## O cabeçalho e o corvo
 
 No topo fica o corvo do Kuro, o endereço do serviço, a versão, o estado da conexão

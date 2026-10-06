@@ -17,7 +17,9 @@ uma chamada lenta não pode congelar a tela.
 """
 
 import json
+import os
 import time
+from collections.abc import MutableMapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -74,6 +76,28 @@ OK, WARN, BAD, MUTED, BRAND = "#22c55e", "#f59e0b", "#ef4444", "#64748b", "#22d3
 SPARK = "▁▂▃▄▅▆▇█"
 
 REPO_URL = "https://github.com/Arthur-Marques-IA/microservice_agents"
+
+_OFF = ("0", "false", "no", "nao", "não", "off")
+
+
+def prefer_truecolor(environ: MutableMapping[str, str] = os.environ) -> bool:
+    """Liga as 16 milhões de cores quando ninguém disse o contrário.
+
+    Pelo SSH chega o `TERM` (`xterm-256color`), mas não o `COLORTERM=truecolor`: o Rich
+    então reduz cada cor do tema à paleta de 256, e o painel muda de cara (o corvo fica
+    verde-azulado, o cabeçalho, preto). Quase todo terminal de hoje faz truecolor, então
+    o padrão é ligar. Fica como está quem já definiu `COLORTERM`, quem pediu `NO_COLOR`, quem
+    desligou com `KURO_TRUECOLOR=0` e os terminais que sabidamente não fazem (o console do
+    Linux, `dumb` e o Terminal.app antigo do macOS). Devolve se ligou.
+    """
+    if environ.get("COLORTERM") or "NO_COLOR" in environ:
+        return False
+    if environ.get("KURO_TRUECOLOR", "").strip().lower() in _OFF:
+        return False
+    if environ.get("TERM", "").strip().lower() in ("dumb", "linux") or environ.get("TERM_PROGRAM") == "Apple_Terminal":
+        return False
+    environ["COLORTERM"] = "truecolor"
+    return True
 
 
 def describe_error(exc: Exception) -> str:

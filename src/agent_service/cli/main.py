@@ -355,9 +355,10 @@ def dash(
     if not (sys.stdin.isatty() and sys.stdout.isatty()) or st.json_mode:
         fail(st, "dash é uma tela interativa e precisa de TTY; sem TTY use `kuro runs tail --json`", EXIT_USAGE)
     try:
-        from agent_service.tui.app import KuroDash
+        from agent_service.tui.app import KuroDash, prefer_truecolor
     except ImportError:
         fail(st, "kuro dash precisa do extra tui: `uv sync --extra tui` (ou `uv run --extra tui kuro dash`)", EXIT_USAGE)
+    prefer_truecolor()  # antes de criar o app: é na criação que o Rich escolhe a paleta
     KuroDash(st.client, interval=interval, agent=agent).run()
 
 

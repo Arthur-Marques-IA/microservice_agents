@@ -37,7 +37,8 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
   humor dele mostra o estado do painel: execuções chegando, erro, pausado ou serviço fora do ar),
   a aba Execuções virou **Ao vivo**, com um resumo do que está na tela, e o **Panorama** virou
   cartões com a variação e um minigráfico do período. Nova tecla `a` (e um botão no cabeçalho)
-  liga e desliga as animações; `TEXTUAL_ANIMATIONS=none` já abre com elas desligadas. Tudo pelo
+  liga e desliga as animações; `TEXTUAL_ANIMATIONS=none` já abre com elas desligadas. As cores
+  certas também pelo SSH: o painel liga o truecolor sozinho (`KURO_TRUECOLOR=0` desliga). Tudo pelo
   teclado: `]`/`[` trocam de aba, `tab` circula entre as tabelas, `/` filtra por agente, `s`, `t`
   e `d` mudam status, testes e período, `j`/`k` movem a seleção, `?` mostra todas as teclas e `g`
   abre o repositório no GitHub. Veja [docs/tui.md](tui.md).
