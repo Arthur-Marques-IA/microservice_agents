@@ -18,7 +18,7 @@ from typing import Any, NoReturn
 import typer
 from rich.console import Console
 
-from agent_service.cli.client import ApiError, Client, ServiceUnavailable, TlsError
+from agent_service.cli.client import ApiError, Client, PortBlocked, ServiceUnavailable, TlsError
 
 EXIT_FAILED = 1
 EXIT_USAGE = 2
@@ -72,9 +72,9 @@ def call(st: State, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
 
 
 def fail_from(st: State, exc: ServiceUnavailable | ApiError) -> NoReturn:
-    if isinstance(exc, TlsError):
-        # O serviço está de pé: sugerir `docker compose up -d` aqui seria
-        # apontar para o lugar errado.
+    if isinstance(exc, (TlsError, PortBlocked)):
+        # O serviço está de pé (ou pode estar): sugerir `docker compose up -d` aqui
+        # seria apontar para o lugar errado.
         fail(st, str(exc), EXIT_UNAVAILABLE)
     if isinstance(exc, ServiceUnavailable):
         fail(st, f"{exc}. O serviço está no ar? (docker compose up -d)", EXIT_UNAVAILABLE)

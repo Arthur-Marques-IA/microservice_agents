@@ -33,6 +33,13 @@ class TlsError(ServiceUnavailable):
     é confiar na CA. Tratar os dois igual manda quem opera olhar o lugar errado."""
 
 
+class PortBlocked(ServiceUnavailable):
+    """A conexão ficou sem resposta até o timeout: um firewall descartando os pacotes.
+
+    Também separado: "o serviço está no ar? (docker compose up -d)" manda olhar a máquina,
+    e o serviço pode estar de pé atrás de um firewall que nem roda nela."""
+
+
 def _transport_failure(base_url: str, exc: Exception) -> ServiceUnavailable:
     texto = str(exc)
     if "SSL" in texto.upper() or "CERTIFICATE" in texto.upper():
@@ -40,6 +47,15 @@ def _transport_failure(base_url: str, exc: Exception) -> ServiceUnavailable:
             f"o certificado de {base_url} não foi aceito: {texto.strip()}. "
             "Se ele vem de uma CA própria, aponte-a com KURO_CA_BUNDLE=/caminho/ca.pem "
             "(ou --ca-bundle). Para um teste local com certificado autoassinado, --insecure."
+        )
+    if isinstance(exc, httpx.ConnectTimeout):
+        # Recusa (nada escutando) volta na hora; ficar sem resposta até o timeout é um
+        # firewall descartando os pacotes — quase sempre o do painel do provedor, que
+        # fica fora da máquina e não aparece no `ufw`.
+        return PortBlocked(
+            f"{base_url} não respondeu: a porta parece bloqueada por um firewall no caminho "
+            "(o do painel do provedor da VPS, por exemplo). Libere a porta lá, ou conecte o MCP "
+            "pelo SSH com `kuro connect usuario@servidor`, que não precisa de porta aberta."
         )
     return ServiceUnavailable(f"não consegui falar com {base_url} ({type(exc).__name__})")
 
@@ -87,7 +103,7 @@ class Client:
                 retryable = method in ("GET", "PUT", "DELETE") or isinstance(exc, httpx.ConnectError)
                 # Certificado recusado não melhora na segunda tentativa.
                 falha = _transport_failure(self.base_url, exc)
-                if attempt == 2 or not retryable or isinstance(falha, TlsError):
+                if attempt == 2 or not retryable or isinstance(falha, (TlsError, PortBlocked)):
                     raise falha from exc
         if response.status_code >= 400:
             raise ApiError(response.status_code, _detail(response))

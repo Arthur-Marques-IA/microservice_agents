@@ -84,6 +84,19 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
   80/443 nem de mexer no `.env`, e convive com um Traefik ou nginx na mesma máquina. Volumes novos:
   `caddy_ip_data` (a CA), `caddy_ip_config` e `kuro_public` (a URL e o certificado da CA, montado só
   para leitura no agent-service). Ver [operação](operacao.md#https-pelo-ip-sem-domínio-profile-ip).
+- **`kuro connect`: o MCP pelo SSH.** Na máquina de quem usa,
+  `uvx --from "agent-service[mcp] @ git+https://..." kuro connect root@servidor` entra pelo SSH, acha
+  o container, testa o MCP (a tool `health`) e só então o registra no Claude Code. O MCP roda no
+  container (`ssh ... docker exec -i <container> kuro-mcp`): sem porta aberta, sem certificado e sem a
+  chave de API na máquina de quem usa. Se o SSH pedir senha, oferece instalar uma chave SSH. Ver
+  [MCP](mcp.md#pelo-ssh-kuro-connect).
+- **MCP pela URL em `/mcp`** (Streamable HTTP), com a chave admin: com domínio e o profile `tls`,
+  `claude mcp add --transport http kuro https://<domínio>/mcp --header "Authorization: Bearer ..."`,
+  sem instalar nada. O `kuro mcp-config` imprime o comando pronto quando há domínio e, em qualquer
+  caso, começa pelo `kuro connect`.
+- Pelo SSH e pela URL o MCP roda no servidor, então os parâmetros que recebem caminho de arquivo
+  (`document_file`, `cases_file`, `rules_file`, o `file` de `collection_add`) são recusados: o caminho
+  seria do container. Mande o conteúdo inline. Com o `kuro-mcp` na sua máquina, nada muda.
 - **Console com a marca Kuro**: o corvo do `kuro dash` no lugar do ícone de robô, "kuro" no topo da
   barra lateral e no título da aba, e o favicon com o corvo. No tema escuro, os cinzas viraram os do
   `kuro dash` (ardósia em vez de verde-azulado), e verde e âmbar de status são os mesmos nos dois.
@@ -105,11 +118,16 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
 - `KURO_CA_BUNDLE` apontando para um arquivo que não existe: a CLI, o `kuro-mcp` e o `kuro dash`
   quebravam com um traceback do Python. Agora é um erro de certificado (sai com 3 na CLI) que diz
   qual caminho faltou.
+- Porta bloqueada por firewall (a conexão fica sem resposta até o timeout) dizia "o serviço está no
+  ar? (docker compose up -d)", que manda olhar o lugar errado. Agora a CLI, o MCP e o painel dizem
+  que a porta parece bloqueada por um firewall no caminho (o do painel do provedor, por exemplo) e
+  sugerem o `kuro connect`; e não tentam de novo, o que dobrava a espera.
 
 ### Como atualizar
 
-- Rode o `up` com `--build` e com todos os profiles que você já usa: o `kuro mcp-config` novo mora
-  na imagem. Para ligar o HTTPS pelo IP, acrescente `--profile ip`, por exemplo
+- Rode o `up` com `--build` e com todos os profiles que você já usa: o `kuro mcp-config` novo, o
+  `kuro-mcp` que o `kuro connect` chama e o `/mcp` moram na imagem (o pacote `mcp` passou a ser
+  dependência do serviço; o extra `[mcp]` continua aceito). Para ligar o HTTPS pelo IP, acrescente `--profile ip`, por exemplo
   `docker compose --profile ip up -d --build`. Ele só sobe com `ADMIN_API_KEY` e `RUNTIME_API_KEY`
   preenchidas, e a porta 58443 precisa estar liberada no firewall do provedor.
 - A migração `0007` roda sozinha no startup: acrescenta `agent_definitions.stages` e cria a

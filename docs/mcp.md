@@ -1,19 +1,100 @@
 # Servidor MCP do Kuro
 
-O `kuro-mcp` expõe as operações da CLI `kuro` como tools [MCP](https://modelcontextprotocol.io).
+O servidor MCP do Kuro expõe as operações da CLI `kuro` como tools [MCP](https://modelcontextprotocol.io).
 Um agente de IA (Claude Code, ou qualquer cliente MCP) cria, testa, avalia e promove agentes do
-Kuro chamando tools tipadas, sem montar comandos de shell nem interpretar o stdout.
+Kuro chamando tools tipadas, sem montar comandos de shell nem interpretar o stdout. O MCP fala com
+o serviço pela API, o mesmo caminho da CLI e do console, e não acessa o banco.
 
-Ele roda **na sua máquina**, por stdio, e fala com o serviço pela API HTTP — o mesmo caminho da
-CLI e do console. O serviço pode estar no Docker local ou numa VPS; o MCP não acessa o banco.
+## Conectar
 
-```text
-cliente MCP (Claude Code)  ──stdio──▶  kuro-mcp (sua máquina)  ──HTTPS──▶  agent-service (VPS)
+Três jeitos, do mais simples ao que exige mais do servidor:
+
+| Jeito | Quando | Precisa de |
+|---|---|---|
+| [Pelo SSH](#pelo-ssh-kuro-connect) (`kuro connect`) | Você entra no servidor por SSH. **O padrão** | SSH e o uv na sua máquina |
+| [Pela URL](#pela-url-mcp) (`/mcp`) | O serviço tem domínio com HTTPS (profile `tls`) | Nada além do Claude Code |
+| [Com o `kuro-mcp` na sua máquina](#com-o-kuro-mcp-na-sua-máquina) | Sem SSH nem domínio; ou o serviço local | O uv, e a porta aberta no firewall do provedor |
+
+### Pelo SSH: `kuro connect`
+
+Na sua máquina, um comando (troque `root@meu-servidor` pelo seu acesso SSH):
+
+```bash
+uvx --from "agent-service[mcp] @ git+https://github.com/Arthur-Marques-IA/microservice_agents" kuro connect root@meu-servidor
 ```
 
-## Instalar e configurar
+O MCP passa a rodar **dentro do container** do serviço, chamado pelo SSH, e fala com o serviço por
+dentro:
 
-O servidor vem no extra `mcp`, então só quem opera precisa dele (a imagem do serviço não o inclui).
+```text
+Claude Code  ──ssh──▶  docker exec -i <container> kuro-mcp  ──▶  agent-service (mesmo servidor)
+```
+
+Por isso não precisa de porta aberta, de certificado nem da chave de API na sua máquina: o
+container já tem a chave admin, e o firewall do provedor deixa o SSH passar. O comando confere cada
+passo antes do próximo:
+
+1. entra pelo SSH sem senha. Se o servidor pedir senha, oferece criar uma chave SSH e instalá-la
+   (pede a senha uma última vez), porque o Claude Code não tem como digitar senha;
+2. acha o container do `agent-service` (`docker ps` pelo rótulo do compose). Com mais de um Kuro na
+   máquina, escolha com `--container`;
+3. confere se a imagem já tem o MCP. Imagem de antes desta versão: `docker compose up -d --build`;
+4. sobe o MCP com o mesmo comando que o Claude Code vai usar e chama a tool `health`;
+5. só então registra no Claude Code (`claude mcp add`, escopo `user`). Se já existir um servidor
+   `kuro`, pergunta antes de trocar (ou `--yes`).
+
+| Opção | Para quê |
+|---|---|
+| `-p 2222`, `-i ~/.ssh/chave`, `-o Opção=valor` | Porta, chave e opções do ssh. Um alias do `~/.ssh/config` também serve como destino |
+| `--container nome` | O container, quando há mais de um Kuro rodando |
+| `--name`, `--scope` | Nome e escopo do registro no Claude Code (padrão `kuro`, `user`) |
+| `--print` | Testa, mas não registra: mostra o comando e o `.mcp.json` para outro cliente (Claude Desktop, Cursor) |
+
+O usuário do SSH precisa poder usar o Docker: `root`, ou alguém no grupo `docker`.
+
+### Pela URL: `/mcp`
+
+O próprio serviço atende o MCP em `/mcp` (Streamable HTTP), exigindo a chave **admin**. Com um
+domínio e o HTTPS do profile `tls` (certificado do Let's Encrypt), não precisa instalar nada:
+
+```bash
+claude mcp add --transport http kuro https://kuro.suaempresa.com/mcp -s user --header "Authorization: Bearer sua-chave-admin"
+```
+
+`kuro mcp-config --show-key`, no servidor, imprime esse comando pronto quando há domínio no `.env`.
+
+Só com certificado público: o Claude Code não confia na CA própria do profile `ip`, e por HTTP puro
+a chave iria em texto claro. O serviço precisa rodar com **um worker** só (o padrão do compose),
+porque a confirmação de remover e promover volta para a mesma sessão.
+
+### Com o `kuro-mcp` na sua máquina
+
+O `kuro-mcp` roda na sua máquina, por stdio, e fala com a URL do serviço:
+
+```text
+Claude Code  ──stdio──▶  kuro-mcp (sua máquina)  ──HTTPS──▶  agent-service
+```
+
+No servidor, `kuro mcp-config` imprime o comando pronto, em bash e PowerShell:
+
+```bash
+docker compose exec agent-service kuro mcp-config --show-key
+```
+
+O endereço sai sozinho, nesta ordem:
+
+| No servidor | Endereço que o MCP usa |
+|---|---|
+| `KURO_PUBLIC_URL=https://...` no `.env` | Esse, como está |
+| `KURO_API_DOMAIN=kuro.suaempresa.com` no `.env` (profile `tls`, Let's Encrypt) | `https://kuro.suaempresa.com` |
+| O profile `ip` de pé (`docker compose --profile ip up -d`) | `https://<ip-público>:58443`, com o certificado da CA para salvar |
+| Nenhum dos três | `http://127.0.0.1:58000`, que só serve para um MCP rodando no próprio servidor |
+
+`--url` sobrepõe tudo isso. Com o profile `ip`, a saída traz também o comando que salva o
+certificado da CA em `~/.kuro/`; ele chega pela sua sessão SSH, então é o autêntico. A porta 58443
+precisa estar aberta no **firewall do painel do provedor**, que fica fora da VPS: se o MCP diz que
+a porta "não respondeu", é ele. Sem acesso ao painel, use o SSH.
+
 A conexão usa as mesmas variáveis da CLI:
 
 | Variável | Para quê |
@@ -24,50 +105,10 @@ A conexão usa as mesmas variáveis da CLI:
 | `KURO_INSECURE=1` | Não valida o certificado. Só para teste local com certificado autoassinado |
 | `KURO_TIMEOUT` | Timeout das requisições em segundos (padrão 300 — um `eval` longo leva tempo) |
 
-### O jeito mais rápido: pergunte ao servidor
-
-Se o servidor não tem domínio, ligue antes o HTTPS pelo IP. Uma vez, no servidor:
+A partir de um clone deste repositório, com o serviço local:
 
 ```bash
-docker compose --profile ip up -d
-```
-
-Ele descobre o IP público sozinho e atende HTTPS na porta 58443, com uma CA própria. Não precisa
-de domínio, das portas 80 e 443 nem de configurar o `.env`, então convive com um Traefik ou nginx
-que já esteja na máquina. Se o provedor da VPS tiver firewall no painel, libere a porta 58443 lá.
-
-Depois, ainda no servidor:
-
-```bash
-docker compose exec agent-service kuro mcp-config --show-key
-```
-
-Ele imprime, em versão bash e PowerShell, o que colar na sua máquina, uma vez:
-
-1. um comando que salva o certificado da CA do servidor em `~/.kuro/`. Ele chega pela sua sessão
-   SSH, então é o autêntico;
-2. o `claude mcp add ...`, já com o endereço, a chave e o certificado.
-
-Os comandos instalam o `kuro-mcp` direto do GitHub com `uvx`, sem clonar: na sua máquina só precisa
-do uv. Sem `--show-key` a chave sai mascarada, para não ficar no histórico do terminal por descuido.
-
-O endereço sai sozinho, nesta ordem:
-
-| No servidor | Endereço que o MCP usa |
-|---|---|
-| `KURO_PUBLIC_URL=https://...` no `.env` | Esse, como está |
-| `KURO_API_DOMAIN=kuro.suaempresa.com` no `.env` (profile `tls`, Let's Encrypt) | `https://kuro.suaempresa.com` |
-| O profile `ip` de pé | `https://<ip-público>:58443`, com o certificado da CA para salvar |
-| Nenhum dos três | `http://127.0.0.1:58000`, que só serve para um MCP rodando no próprio servidor |
-
-`--url` sobrepõe tudo isso, para quando o serviço está atrás de outro proxy ou endereço.
-
-### Claude Code, a partir de um clone
-
-Pelo terminal, a partir do clone deste repositório:
-
-```bash
-claude mcp add kuro --env KURO_API_URL=https://kuro.suaempresa.com --env KURO_API_KEY=sua-chave-admin -- uv --directory /caminho/para/Microservice_Agent run --extra mcp kuro-mcp
+claude mcp add kuro --env KURO_API_URL=http://127.0.0.1:58000 --env KURO_API_KEY="$KURO_API_KEY" -- uv --directory "$PWD" run kuro-mcp
 ```
 
 Ou num `.mcp.json` do projeto onde seus agentes trabalham. A chave fica fora do arquivo: o Claude
@@ -78,7 +119,7 @@ Code expande `${KURO_API_KEY}` a partir do seu ambiente, então o `.mcp.json` po
   "mcpServers": {
     "kuro": {
       "command": "uv",
-      "args": ["--directory", "/caminho/para/Microservice_Agent", "run", "--extra", "mcp", "kuro-mcp"],
+      "args": ["--directory", "/caminho/para/Microservice_Agent", "run", "kuro-mcp"],
       "env": {
         "KURO_API_URL": "https://kuro.suaempresa.com",
         "KURO_API_KEY": "${KURO_API_KEY}"
@@ -88,8 +129,12 @@ Code expande `${KURO_API_KEY}` a partir do seu ambiente, então o `.mcp.json` po
 }
 ```
 
-Confira com a tool `health`: ela devolve a versão do serviço, se a autenticação está ligada e os
-provedores com credencial. Uma falha de conexão diz para onde tentou ir.
+### Conferir
+
+Abra uma sessão nova do Claude Code e peça "use a tool health do kuro": ela devolve a versão do
+serviço, se a autenticação está ligada e os provedores com credencial. Uma falha de conexão diz
+para onde tentou ir. O `claude mcp list` mostrar "Connected" só quer dizer que o processo do MCP
+subiu; quem confirma que ele alcança o serviço é a tool `health`.
 
 ## O que dá para fazer
 
@@ -146,21 +191,27 @@ pede permissão antes de chamar.
 - **Respostas enxutas.** Listas vêm resumidas e textos longos (traces, transcrições) são cortados
   em 4000 caracteres com um aviso, para não estourar o contexto do modelo. O `eval` devolve só os
   casos que falharam, junto com o resumo.
-- **Arquivos são caminhos locais.** `analyze(document_file=...)`, `eval(cases_file=..., rules_file=...)`
-  e `collection_add(file=...)` leem da máquina onde o `kuro-mcp` roda, não da VPS.
+- **Arquivos por caminho, só com o `kuro-mcp` na sua máquina.** `analyze(document_file=...)`,
+  `eval(cases_file=..., rules_file=...)` e `collection_add(file=...)` leem da máquina onde o MCP
+  roda. Pelo SSH e pela URL ele roda no servidor, então esses parâmetros são recusados: o caminho
+  seria do container, e ler o `.env` dele entregaria os segredos do serviço a quem só tem a chave
+  admin. Mande o conteúdo em `document`, `cases`, `rules` ou `text`.
 
 ## Desenvolvimento
 
 O servidor fica em `src/agent_service/mcp_server.py` e usa o mesmo cliente HTTP da CLI
-(`agent_service/cli/client.py`). Os testes (`tests/test_mcp_server.py`) ligam um cliente MCP em
-memória a uma API falsa (`httpx.MockTransport`), sem rede e sem serviço no ar:
+(`agent_service/cli/client.py`). O `/mcp` o monta em `src/agent_service/api/mcp_routes.py`, e o
+`kuro connect` fica em `src/agent_service/cli/connect.py`. Os testes ligam um cliente MCP a uma API
+falsa (`httpx.MockTransport`), sem serviço no ar: em memória (`tests/test_mcp_server.py`), por HTTP
+num uvicorn de verdade (`tests/test_mcp_http.py`), e o `kuro connect` com `ssh` e `claude` falsos
+(`tests/test_connect.py`):
 
 ```bash
-uv run pytest tests/test_mcp_server.py
+uv run pytest tests/test_mcp_server.py tests/test_mcp_http.py tests/test_connect.py
 ```
 
 Para ver as tools num cliente de verdade, o MCP Inspector:
 
 ```bash
-npx @modelcontextprotocol/inspector uv run --extra mcp kuro-mcp
+npx @modelcontextprotocol/inspector uv run kuro-mcp
 ```
