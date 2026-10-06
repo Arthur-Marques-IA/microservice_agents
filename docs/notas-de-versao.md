@@ -70,9 +70,11 @@ timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` pa
     `dry_run`; exige `admin`).
   - Num agente procedural, um 502 ou 504 pode chegar depois de a ação ter rodado: leia o estado da
     sessão antes de cair no fallback.
-- `kuro mcp-config`: rodado no servidor (`docker compose exec agent-service kuro mcp-config --url
-  https://... --show-key`), imprime o `claude mcp add ...` e o `.mcp.json` prontos para conectar o
+- `kuro mcp-config`: rodado no servidor (`docker compose exec agent-service kuro mcp-config
+  --show-key`), imprime o `claude mcp add ...` e o `.mcp.json` prontos para conectar o
   servidor MCP. Eles instalam o `kuro-mcp` com `uvx` direto do GitHub, sem clone na máquina de quem opera.
+  O endereço sai do `.env`: `KURO_PUBLIC_URL`, ou `https://` + `KURO_API_DOMAIN`, ou, sem domínio,
+  `http://127.0.0.1` na porta de `AGENT_SERVICE_BIND` com o comando do túnel SSH. `--url` sobrepõe.
 - Tool `kind="api"`: um parâmetro de header que não vem do modelo (`source` `dependency` ou
   `const`) aceita nome de header HTTP com hífen, como `Idempotency-Key` ou `X-Request-Id`. Antes só
   identificadores passavam, e não havia como mandar a `idempotency_key` no header esperado.

@@ -497,12 +497,27 @@ def test_mcp_config_prints_a_ready_command_with_the_key_masked(api, monkeypatch)
     assert data["warnings"] == []
 
 
-def test_mcp_config_warns_about_internal_url_and_missing_key(api, monkeypatch):
+def test_mcp_config_without_domain_points_to_an_ssh_tunnel(api, monkeypatch):
     monkeypatch.delenv("KURO_API_KEY", raising=False)
-    data = json.loads(_run("--json", "mcp-config").stdout)
+    monkeypatch.setenv("KURO_API_DOMAIN", "localhost")
+    monkeypatch.setenv("AGENT_SERVICE_BIND", "127.0.0.1:58123")
+    data = json.loads(_run("--json", "--url", "http://localhost:8000", "mcp-config").stdout)
+    # O endereço interno do container não serve lá fora: sai o lado local do túnel.
+    assert data["url"] == "http://127.0.0.1:58123" and data["url_source"] == "tunnel"
     assert len(data["warnings"]) == 2
-    assert "--url" in data["warnings"][0] and "401" in data["warnings"][1]
+    assert "ssh -N -L 58123:127.0.0.1:58123" in data["warnings"][0] and "401" in data["warnings"][1]
     assert "KURO_API_KEY" not in data["mcp_json"]["mcpServers"]["kuro"]["env"]
+
+
+def test_mcp_config_uses_the_tls_domain_from_env(api, monkeypatch):
+    monkeypatch.setenv("KURO_API_KEY", "chave-admin-1234567890abcdef")
+    monkeypatch.setenv("KURO_API_DOMAIN", "kuro.empresa.com")
+    data = json.loads(_run("--json", "--url", "http://localhost:8000", "mcp-config").stdout)
+    assert data["url"] == "https://kuro.empresa.com" and data["url_source"] == "domain"
+    assert data["warnings"] == []
+    # --url continua mandando
+    data = json.loads(_run("--json", "mcp-config", "--url", "https://outro.example.com").stdout)
+    assert data["url"] == "https://outro.example.com" and data["url_source"] == "explicit"
 
 
 def test_sessions_list_title_drops_the_dependencies_block(api):

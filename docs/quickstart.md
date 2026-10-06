@@ -144,13 +144,29 @@ serviço pela API, local ou remoto.
 No servidor onde o Kuro roda:
 
 ```bash
-docker compose exec agent-service kuro mcp-config --url https://kuro.suaempresa.com --show-key
+docker compose exec agent-service kuro mcp-config --show-key
 ```
 
 Ele imprime o comando `claude mcp add ...` e o `.mcp.json`, já com o endereço e a chave. Os dois
 instalam o `kuro-mcp` direto do GitHub com `uvx`, sem clonar: na sua máquina só precisa do uv.
-Sem `--show-key` a chave sai mascarada; sem `--url` ele avisa que o endereço visto de dentro do
-container não serve para a sua máquina.
+Sem `--show-key` a chave sai mascarada, para não ficar no histórico do terminal por descuido.
+
+Não precisa passar o endereço: ele sai do `.env` do servidor.
+
+| No `.env` | Endereço que o MCP usa |
+|---|---|
+| `KURO_PUBLIC_URL=https://...` | Esse, como está |
+| `KURO_API_DOMAIN=kuro.suaempresa.com` (HTTPS pelo profile `tls`) | `https://kuro.suaempresa.com` |
+| Nenhum dos dois | `http://127.0.0.1:58000` (a porta de `AGENT_SERVICE_BIND`), por um túnel SSH |
+
+No último caso, o serviço só escuta na própria VPS, e o comando avisa como chegar nele da sua
+máquina: deixe um túnel aberto enquanto usa o MCP.
+
+```bash
+ssh -N -L 58000:127.0.0.1:58000 usuario@servidor
+```
+
+`--url` sobrepõe tudo isso, para quando o serviço está atrás de outro proxy ou endereço.
 
 ### A partir do clone
 
