@@ -74,12 +74,41 @@ entra pelo 443.
 > **Windows:** use `127.0.0.1` para a API, não `localhost`. Com o Docker
 > Desktop, `localhost:58000` pode tentar IPv6 primeiro e travar por 30 s.
 
+## HTTPS pelo IP, sem domínio (profile `ip`)
+
+Sem domínio, o profile `ip` dá HTTPS no IP público da máquina:
+
+```bash
+docker compose --profile ip up -d
+```
+
+- **O IP é descoberto sozinho** (via `api.ipify.org`, com alternativas). Para fixar, ou se a
+  máquina não alcança a internet, defina `KURO_PUBLIC_IP` no `.env`.
+- **O certificado vem da CA interna do Caddy**, não do Let's Encrypt. Por isso dispensa domínio,
+  as portas 80 e 443 e a cota de emissão, e convive com um Traefik ou nginx que já ocupe essas
+  portas. Só a porta 58443 (`KURO_IP_PORT`) é publicada.
+- **Quem conecta precisa confiar nessa CA.** O `kuro mcp-config` entrega o certificado pronto para
+  salvar. A CLI e o painel usam o mesmo arquivo: `KURO_CA_BUNDLE=~/.kuro/kuro-ca-<ip>.pem`. No
+  navegador, o console mostra o aviso de certificado desconhecido; a API e o MCP não são afetados.
+- **A CA dura até 10 anos** e mora no volume `caddy_ip_data`. Os certificados do servidor duram
+  horas, mas o Caddy os renova sozinho, sem mudar a CA. Uma atualização ou um `down` comum não
+  mexem nela; um `docker compose down -v` apaga o volume e cria uma CA nova, e quem já conectou
+  precisa salvar o certificado de novo.
+- **O Docker publica a porta por cima do `ufw`.** Se o provedor tiver firewall no painel, é lá que
+  a 58443 precisa estar liberada.
+- **Se o IP da máquina mudar**, recrie o `caddy-ip` e rode o `kuro mcp-config` de novo.
+
+O `kuro mcp-config` só publica o certificado da CA (no volume `kuro_public`, só leitura para o
+agent-service). A chave privada dela fica no volume do Caddy.
+
 ## Configuração
 
 | Variável | Padrão | Para quê |
 |---|---|---|
 | `ADMIN_API_KEY` / `RUNTIME_API_KEY` | — | chaves de API; **sem elas o serviço fica aberto** |
 | `KURO_API_DOMAIN` / `KURO_TLS_EMAIL` | `localhost` / — | domínio e e-mail do certificado (profile `tls`) |
+| `KURO_PUBLIC_IP` / `KURO_IP_PORT` | descoberto / `58443` | IP e porta do HTTPS pelo IP (profile `ip`) |
+| `KURO_PUBLIC_URL` | — | endereço do serviço visto de fora, se nenhum dos profiles acerta (o `kuro mcp-config` usa) |
 | `AGENT_SERVICE_BIND` | `127.0.0.1:58000` | onde a API é publicada no host |
 | `TRACE_STORE_BACKEND` | `db` | de onde `kuro runs` e `/observability/*` leem: `db` ou `langfuse` |
 | `RUN_TIMEOUT_SECONDS` | `90` | tempo limite padrão de uma execução (o agente pode ter `timeout_seconds`); estourou, 504 |

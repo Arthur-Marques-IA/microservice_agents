@@ -322,26 +322,33 @@ async def test_textual_animations_none_starts_still(monkeypatch):
 # -- teclado ------------------------------------------------------------------------
 
 
+async def _focus_on(pilot, app, widget_id: str, tab: str | None = None) -> None:
+    """Espera o foco chegar ao widget. Trocar de aba move o foco depois da próxima
+    renderização (`call_after_refresh`); com a máquina carregada, um `pause` só não basta."""
+    for _ in range(40):
+        if getattr(app.focused, "id", None) == widget_id and (tab is None or app.active_tab() == tab):
+            return
+        await pilot.pause(0.05)
+    assert getattr(app.focused, "id", None) == widget_id, f"foco em {app.focused!r}, esperado #{widget_id}"
+    assert tab is None or app.active_tab() == tab
+
+
 async def test_tab_cycles_data_panels_and_brackets_switch_tabs():
     app = KuroDash(FakeClient(), interval=60)
     async with app.run_test(size=(140, 40)) as pilot:
         await app.workers.wait_for_complete()
-        await pilot.pause()
-        assert app.focused.id == "runs"
+        await _focus_on(pilot, app, "runs")
         await pilot.press("tab")  # só um painel no Ao vivo: o foco fica na tabela
-        assert app.focused.id == "runs"
+        await _focus_on(pilot, app, "runs")
         await pilot.press("right_square_bracket")
         await app.workers.wait_for_complete()
-        await pilot.pause()
-        assert app.active_tab() == "overview-pane"
-        assert app.focused.id == "agents"
+        await _focus_on(pilot, app, "agents", tab="overview-pane")
         await pilot.press("tab")
-        assert app.focused.id == "tool-failures"
+        await _focus_on(pilot, app, "tool-failures")
         await pilot.press("shift+tab")
-        assert app.focused.id == "agents"
+        await _focus_on(pilot, app, "agents")
         await pilot.press("left_square_bracket")
-        await pilot.pause()
-        assert app.active_tab() == "runs-pane" and app.focused.id == "runs"
+        await _focus_on(pilot, app, "runs", tab="runs-pane")
 
 
 async def test_filters_from_the_keyboard():
@@ -349,13 +356,13 @@ async def test_filters_from_the_keyboard():
     app = KuroDash(client, interval=60)
     async with app.run_test(size=(140, 40)) as pilot:
         await app.workers.wait_for_complete()
-        await pilot.pause()
+        await _focus_on(pilot, app, "runs")
         await pilot.press("slash")
-        assert app.focused.id == "agent"
+        await _focus_on(pilot, app, "agent")
         await pilot.press("s", "u", "p")  # dentro do filtro, letras são texto, não atalhos
         assert app.query_one("#agent").value == "sup"
         await pilot.press("escape")
-        assert app.focused.id == "runs"
+        await _focus_on(pilot, app, "runs")
         await pilot.press("s")
         await app.workers.wait_for_complete()
         assert client.run_queries[-1]["status"] == "success"
@@ -417,8 +424,6 @@ async def test_slash_from_overview_goes_to_the_filter():
     async with app.run_test(size=(140, 40)) as pilot:
         await app.workers.wait_for_complete()
         await pilot.press("2")
-        await pilot.pause()
+        await _focus_on(pilot, app, "agents", tab="overview-pane")
         await pilot.press("slash")
-        await pilot.pause()
-        await pilot.pause()
-        assert app.active_tab() == "runs-pane" and app.focused.id == "agent"
+        await _focus_on(pilot, app, "agent", tab="runs-pane")

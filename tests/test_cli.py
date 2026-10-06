@@ -497,16 +497,54 @@ def test_mcp_config_prints_a_ready_command_with_the_key_masked(api, monkeypatch)
     assert data["warnings"] == []
 
 
-def test_mcp_config_without_domain_points_to_an_ssh_tunnel(api, monkeypatch):
+def test_mcp_config_without_domain_or_ip_profile_says_how_to_expose(api, monkeypatch, tmp_path):
     monkeypatch.delenv("KURO_API_KEY", raising=False)
     monkeypatch.setenv("KURO_API_DOMAIN", "localhost")
+    monkeypatch.setenv("KURO_PUBLIC_DIR", str(tmp_path / "vazio"))
     monkeypatch.setenv("AGENT_SERVICE_BIND", "127.0.0.1:58123")
     data = json.loads(_run("--json", "--url", "http://localhost:8000", "mcp-config").stdout)
-    # O endereço interno do container não serve lá fora: sai o lado local do túnel.
-    assert data["url"] == "http://127.0.0.1:58123" and data["url_source"] == "tunnel"
+    # O endereço interno do container não serve lá fora: sai o do host, com o caminho para expor.
+    assert data["url"] == "http://127.0.0.1:58123" and data["url_source"] == "local"
     assert len(data["warnings"]) == 2
-    assert "ssh -N -L 58123:127.0.0.1:58123" in data["warnings"][0] and "401" in data["warnings"][1]
+    assert "--profile ip" in data["warnings"][0] and "401" in data["warnings"][1]
     assert "KURO_API_KEY" not in data["mcp_json"]["mcpServers"]["kuro"]["env"]
+    assert data["setup"] is None
+
+
+CA_PEM = "-----BEGIN CERTIFICATE-----\nMIIBozCCAUmgAwIBAgIQ\n-----END CERTIFICATE-----"
+
+
+def _ip_profile(tmp_path, url="https://69.62.89.141:58443"):
+    public = tmp_path / "kuro-public"
+    public.mkdir()
+    (public / "url").write_text(url + "\n", encoding="utf-8")
+    (public / "ca.crt").write_text(CA_PEM + "\n", encoding="utf-8")
+    return public
+
+
+def test_mcp_config_with_ip_profile_hands_over_the_ca(api, monkeypatch, tmp_path):
+    monkeypatch.setenv("KURO_API_KEY", "chave-admin-1234567890abcdef")
+    monkeypatch.setenv("KURO_API_DOMAIN", "localhost")
+    monkeypatch.setenv("KURO_PUBLIC_DIR", str(_ip_profile(tmp_path)))
+    data = json.loads(_run("--json", "--url", "http://localhost:8000", "mcp-config").stdout)
+    assert data["url"] == "https://69.62.89.141:58443" and data["url_source"] == "ip"
+    assert data["warnings"] == []
+    assert data["ca_pem"] == CA_PEM and data["ca_file"] == "~/.kuro/kuro-ca-69-62-89-141.pem"
+    # O certificado vai inteiro nos dois jeitos de salvar, e o comando aponta para ele.
+    assert CA_PEM in data["setup"]["bash"] and CA_PEM in data["setup"]["powershell"]
+    assert "\n'@ | Set-Content" in data["setup"]["powershell"]  # o `'@` precisa começar a linha
+    assert '--env KURO_CA_BUNDLE="$HOME/.kuro/kuro-ca-69-62-89-141.pem"' in data["claude_command"]
+    assert '--env KURO_CA_BUNDLE="$HOME\\.kuro\\kuro-ca-69-62-89-141.pem"' in data["claude_command_powershell"]
+    assert data["mcp_json"]["mcpServers"]["kuro"]["env"]["KURO_CA_BUNDLE"] == "${KURO_CA_BUNDLE}"
+    texto = _run("--url", "http://localhost:8000", "mcp-config").stdout
+    assert "PowerShell" in texto and 'agent-service[mcp] @ git+' in texto
+
+
+def test_mcp_config_domain_wins_over_ip_profile(api, monkeypatch, tmp_path):
+    monkeypatch.setenv("KURO_API_DOMAIN", "kuro.empresa.com")
+    monkeypatch.setenv("KURO_PUBLIC_DIR", str(_ip_profile(tmp_path)))
+    data = json.loads(_run("--json", "--url", "http://localhost:8000", "mcp-config").stdout)
+    assert data["url"] == "https://kuro.empresa.com" and data["setup"] is None
 
 
 def test_mcp_config_uses_the_tls_domain_from_env(api, monkeypatch):

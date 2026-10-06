@@ -9,6 +9,7 @@ import json
 import os
 import shlex
 import sys
+from pathlib import Path
 from typing import Any
 
 import click
@@ -119,26 +120,49 @@ def _mask(key: str) -> str:
 
 _LOOPBACK = ("localhost", "127.0.0.1", "0.0.0.0")
 
+PUBLIC_DIR = "/kuro-public"
+"""Onde o profile `ip` publica a URL e a CA raiz (volume `kuro_public`, ver docker/caddy-ip.sh).
+`KURO_PUBLIC_DIR` troca o caminho (testes, ou o comando rodado fora do container)."""
+
+
+def _ip_https() -> tuple[str, str] | None:
+    """(url, ca_pem) do HTTPS por IP, se o profile `ip` estiver de pé."""
+    base = Path(os.environ.get("KURO_PUBLIC_DIR") or PUBLIC_DIR)
+    try:
+        url = (base / "url").read_text(encoding="utf-8").strip()
+        ca = (base / "ca.crt").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return (url, ca) if url and "BEGIN CERTIFICATE" in ca else None
+
 
 def _public_url(explicit: str | None, internal: str) -> tuple[str, str]:
     """O endereço do serviço visto da máquina de quem opera, e de onde ele saiu.
 
     De dentro do container o serviço só conhece o endereço interno, que não serve lá fora.
-    O `.env` (que o compose passa inteiro ao container) diz o resto:
+    O `.env` (que o compose passa inteiro ao container) e o profile `ip` dizem o resto:
     1. `--url` ou `KURO_PUBLIC_URL`: quem sabe disse;
-    2. `KURO_API_DOMAIN` com um domínio de verdade: o profile `tls` (Caddy) serve HTTPS nele;
-    3. senão o serviço só escuta no host, em `AGENT_SERVICE_BIND` (127.0.0.1:58000): da máquina
-       de quem opera, o caminho é um túnel SSH para essa porta, e o endereço é o local do túnel.
+    2. `KURO_API_DOMAIN` com um domínio de verdade: o profile `tls` serve HTTPS nele;
+    3. o profile `ip` de pé: HTTPS no IP público, com a CA própria do Caddy;
+    4. senão o serviço só escuta no host, em `AGENT_SERVICE_BIND` (127.0.0.1:58000).
     """
     if explicit:
         return explicit.rstrip("/"), "explicit"
     domain = os.environ.get("KURO_API_DOMAIN", "").strip().strip("/")
     if domain and domain != "localhost" and not domain.endswith(".localhost"):
         return f"https://{domain.removeprefix('https://')}", "domain"
+    ip = _ip_https()
+    if ip:
+        return ip[0], "ip"
     if not any(host in internal for host in _LOOPBACK):
         return internal.rstrip("/"), "client"
     port = os.environ.get("AGENT_SERVICE_BIND", "127.0.0.1:58000").rsplit(":", 1)[-1] or "58000"
-    return f"http://127.0.0.1:{port}", "tunnel"
+    return f"http://127.0.0.1:{port}", "local"
+
+
+def _ca_file_name(url: str) -> str:
+    host = url.split("://", 1)[-1].split("/", 1)[0].rsplit(":", 1)[0].strip("[]")
+    return "kuro-ca-" + "".join(c if c.isalnum() else "-" for c in host) + ".pem"
 
 
 @app.command("mcp-config")
@@ -155,19 +179,24 @@ def mcp_config(
 ) -> None:
     """Como conectar o servidor MCP (`kuro-mcp`) a este serviço: o comando do Claude Code
     e o `.mcp.json`, prontos para copiar. Rode no servidor:
-    `docker compose exec agent-service kuro mcp-config --show-key`. O endereço sai do `.env`
-    (`KURO_API_DOMAIN`, ou um túnel SSH para `AGENT_SERVICE_BIND`); `--url` sobrepõe."""
+    `docker compose exec agent-service kuro mcp-config --show-key`. O endereço sai sozinho:
+    o domínio do `.env` (`KURO_API_DOMAIN`) ou, sem domínio, o HTTPS por IP do profile `ip`,
+    com o certificado da CA para salvar; `--url` sobrepõe."""
     st = state(ctx)
     key = ctx.find_root().params.get("api_key") or ""
     url, url_source = _public_url(public_url, st.client.base_url)
+    ip = _ip_https() if url_source == "ip" else None
     warnings = []
-    if url_source == "tunnel":
-        port = url.rsplit(":", 1)[-1]
+    if url_source == "local":
         warnings.append(
-            f"Sem domínio no .env (KURO_API_DOMAIN), o serviço só escuta em 127.0.0.1:{port} do servidor. "
-            "Rodando o MCP no próprio servidor, isso basta; de outra máquina, deixe um túnel SSH aberto nela: "
-            f"ssh -N -L {port}:127.0.0.1:{port} usuario@servidor. Com HTTPS ou outro endereço, passe --url "
-            "(ou defina KURO_PUBLIC_URL no .env)."
+            "Sem domínio (KURO_API_DOMAIN) e sem o profile `ip`, o serviço só escuta na própria máquina: "
+            "o endereço abaixo só serve para um MCP rodando aqui. Para conectar de qualquer lugar, suba o "
+            "HTTPS pelo IP com `docker compose --profile ip up -d` e rode este comando de novo."
+        )
+    elif url.startswith("http://") and not any(host in url for host in _LOOPBACK):
+        warnings.append(
+            f"{url} é HTTP: a chave de API e as mensagens trafegam em texto claro. Prefira o profile `ip` "
+            "(HTTPS pelo IP) ou um domínio com o profile `tls`."
         )
     if not key:
         warnings.append(
@@ -177,24 +206,38 @@ def mcp_config(
     shown = key if show_key else (_mask(key) if key else "")
     package = f"agent-service[mcp] @ {source}"
     args = ["--from", package, "kuro-mcp"]
-    env_flags = f"--env KURO_API_URL={url}" + (f" --env KURO_API_KEY={shown}" if key else "")
-    claude_cmd = f'claude mcp add kuro {env_flags} -- uvx --from "{package}" kuro-mcp'
-    mcp_json = {
-        "mcpServers": {
-            "kuro": {
-                "command": "uvx",
-                "args": args,
-                "env": {"KURO_API_URL": url, **({"KURO_API_KEY": "${KURO_API_KEY}"} if key else {})},
-            }
+    key_flag = f" --env KURO_API_KEY={shown}" if key else ""
+    tail = f'{key_flag} -- uvx --from "{package}" kuro-mcp'
+    env = {"KURO_API_URL": url, **({"KURO_API_KEY": "${KURO_API_KEY}"} if key else {})}
+
+    ca_file = setup = None
+    if ip:
+        ca_file = _ca_file_name(url)
+        pem = ip[1]
+        setup = {
+            "bash": f"mkdir -p ~/.kuro && cat > ~/.kuro/{ca_file} <<'EOF'\n{pem}\nEOF",
+            "powershell": (
+                'New-Item -ItemType Directory -Force "$HOME\\.kuro" | Out-Null\n'
+                f"@'\n{pem}\n'@ | Set-Content -Encoding ascii \"$HOME\\.kuro\\{ca_file}\""
+            ),
         }
-    }
+        claude_cmd = f'claude mcp add kuro -s user --env KURO_API_URL={url} --env KURO_CA_BUNDLE="$HOME/.kuro/{ca_file}"{tail}'
+        claude_ps = f'claude mcp add kuro -s user --env KURO_API_URL={url} --env KURO_CA_BUNDLE="$HOME\\.kuro\\{ca_file}"{tail}'
+        env["KURO_CA_BUNDLE"] = "${KURO_CA_BUNDLE}"
+    else:
+        claude_cmd = claude_ps = f"claude mcp add kuro -s user --env KURO_API_URL={url}{tail}"
+
     report = {
         "url": url,
         "url_source": url_source,
         "api_key": shown or None,
         "api_key_masked": bool(key) and not show_key,
+        "ca_file": f"~/.kuro/{ca_file}" if ca_file else None,
+        "ca_pem": ip[1] if ip else None,
+        "setup": setup,
         "claude_command": claude_cmd,
-        "mcp_json": mcp_json,
+        "claude_command_powershell": claude_ps,
+        "mcp_json": {"mcpServers": {"kuro": {"command": "uvx", "args": args, "env": env}}},
         "requires": "uv na máquina de quem opera (https://docs.astral.sh/uv/) e acesso de leitura ao repositório",
         "warnings": warnings,
     }
@@ -203,12 +246,33 @@ def mcp_config(
         for w in r["warnings"]:
             err_console.print(f"[yellow]aviso:[/] {w}", highlight=False)
         console.print("[bold]Servidor MCP do Kuro[/] — rode na sua máquina (precisa do uv).\n")
-        console.print("[bold]1. Claude Code[/] (um comando, no terminal):")
-        # markup=False: o Rich leria `[mcp]` (de `agent-service[mcp]`) como marcação e o apagaria.
-        console.print(r["claude_command"], markup=False, highlight=False, soft_wrap=True)
+        # markup=False em tudo que é comando: o Rich leria `[mcp]` (de `agent-service[mcp]`)
+        # como marcação e o apagaria.
+        step = 1
+        if r["setup"]:
+            console.print(
+                f"[bold]{step}. Salve o certificado da CA deste servidor[/] (uma vez; é o que faz o HTTPS pelo IP "
+                "ser confiável). Ele veio pela sua sessão no servidor, então é o autêntico."
+            )
+            console.print("\n[dim]bash / zsh (Linux, macOS, Git Bash):[/]")
+            console.print(r["setup"]["bash"], markup=False, highlight=False, soft_wrap=True)
+            console.print("\n[dim]PowerShell (Windows):[/]")
+            console.print(r["setup"]["powershell"], markup=False, highlight=False, soft_wrap=True)
+            step += 1
+            console.print(f"\n[bold]{step}. Registre no Claude Code[/]:")
+            console.print("\n[dim]bash / zsh:[/]")
+            console.print(r["claude_command"], markup=False, highlight=False, soft_wrap=True)
+            console.print("\n[dim]PowerShell:[/]")
+            console.print(r["claude_command_powershell"], markup=False, highlight=False, soft_wrap=True)
+        else:
+            console.print(f"[bold]{step}. Claude Code[/] (um comando, no terminal):")
+            console.print(r["claude_command"], markup=False, highlight=False, soft_wrap=True)
         if r["api_key_masked"]:
             console.print("[dim]A chave está mascarada: rode de novo com --show-key para copiá-la.[/]")
-        console.print("\n[bold]2. Ou um .mcp.json[/] no projeto (a chave fica fora do arquivo; defina KURO_API_KEY no ambiente):")
+        extra = " e KURO_CA_BUNDLE (o caminho do certificado salvo)" if r["setup"] else ""
+        console.print(
+            f"\n[bold]Ou um .mcp.json[/] no projeto (a chave fica fora do arquivo; defina KURO_API_KEY{extra} no ambiente):"
+        )
         console.print_json(json.dumps(r["mcp_json"]))
         console.print("\n[dim]Confira no Claude Code com /mcp, e peça \"use a tool health do kuro\". Guia: docs/mcp.md[/]")
 
