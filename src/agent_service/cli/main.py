@@ -254,15 +254,15 @@ def mcp_config(
                 f"[bold]{step}. Salve o certificado da CA deste servidor[/] (uma vez; é o que faz o HTTPS pelo IP "
                 "ser confiável). Ele veio pela sua sessão no servidor, então é o autêntico."
             )
-            console.print("\n[dim]bash / zsh (Linux, macOS, Git Bash):[/]")
+            console.print("\n[dim]bash / zsh (Linux, macOS):[/]")
             console.print(r["setup"]["bash"], markup=False, highlight=False, soft_wrap=True)
             console.print("\n[dim]PowerShell (Windows):[/]")
             console.print(r["setup"]["powershell"], markup=False, highlight=False, soft_wrap=True)
             step += 1
             console.print(f"\n[bold]{step}. Registre no Claude Code[/]:")
-            console.print("\n[dim]bash / zsh:[/]")
+            console.print("\n[dim]bash / zsh (Linux, macOS):[/]")
             console.print(r["claude_command"], markup=False, highlight=False, soft_wrap=True)
-            console.print("\n[dim]PowerShell:[/]")
+            console.print("\n[dim]PowerShell (Windows):[/]")
             console.print(r["claude_command_powershell"], markup=False, highlight=False, soft_wrap=True)
         else:
             console.print(f"[bold]{step}. Claude Code[/] (um comando, no terminal):")

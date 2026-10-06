@@ -82,6 +82,9 @@ Sem domínio, o profile `ip` dá HTTPS no IP público da máquina:
 docker compose --profile ip up -d
 ```
 
+- **Só sobe com a autenticação ligada.** O profile põe o serviço na internet; sem
+  `ADMIN_API_KEY`/`RUNTIME_API_KEY`, o `caddy-ip` recusa começar e diz o que falta no log
+  (`docker compose logs caddy-ip`). `KURO_IP_ALLOW_OPEN=1` pula a verificação, só para teste local.
 - **O IP é descoberto sozinho** (via `api.ipify.org`, com alternativas). Para fixar, ou se a
   máquina não alcança a internet, defina `KURO_PUBLIC_IP` no `.env`.
 - **O certificado vem da CA interna do Caddy**, não do Let's Encrypt. Por isso dispensa domínio,

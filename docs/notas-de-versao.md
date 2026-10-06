@@ -101,6 +101,10 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
 
 ### Como atualizar
 
+- Rode o `up` com `--build` e com todos os profiles que você já usa: o `kuro mcp-config` novo mora
+  na imagem. Para ligar o HTTPS pelo IP, acrescente `--profile ip`, por exemplo
+  `docker compose --profile ip up -d --build`. Ele só sobe com `ADMIN_API_KEY` e `RUNTIME_API_KEY`
+  preenchidas, e a porta 58443 precisa estar liberada no firewall do provedor.
 - A migração `0007` roda sozinha no startup: acrescenta `agent_definitions.stages` e cria a
   tabela `procedure_runs`. Nada muda nos agentes que já existem, nem a versão da configuração deles.
 

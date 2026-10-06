@@ -12,6 +12,22 @@ set -eu
 PORT="${KURO_IP_PORT:-58443}"
 PUBLIC_DIR=/kuro-public
 
+# Este profile põe o serviço na internet. Sem chave de API, conversas, prompts e
+# credenciais ficariam abertos a quem achasse o IP: só sobe com a autenticação ligada.
+if [ "${KURO_IP_ALLOW_OPEN:-}" != "1" ]; then
+	health="$(wget -qO- -T 10 http://agent-service:8000/health 2>/dev/null || true)"
+	case "$health" in
+		*'"auth":"enabled"'* | *'"auth": "enabled"'*) ;;
+		*)
+			echo "kuro: recusei publicar o serviço pelo IP: a autenticação está desligada (ou o agent-service não respondeu)." >&2
+			echo "kuro: defina ADMIN_API_KEY e RUNTIME_API_KEY no .env (openssl rand -hex 32) e rode docker compose up -d de novo." >&2
+			echo "kuro: só para teste local, KURO_IP_ALLOW_OPEN=1 pula esta verificação." >&2
+			sleep 30 # sem isso o restart do Docker repete a mensagem sem parar
+			exit 1
+			;;
+	esac
+fi
+
 if [ -z "${KURO_PUBLIC_IP:-}" ]; then
 	for url in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
 		KURO_PUBLIC_IP="$(wget -qO- -T 5 "$url" 2>/dev/null | tr -d ' \r\n' || true)"

@@ -90,6 +90,8 @@ services:
     environment:
       KURO_PUBLIC_IP: ${KURO_PUBLIC_IP:-}
       KURO_IP_PORT: ${KURO_IP_PORT:-58443}
+      # Só sobe com a autenticação ligada; 1 pula a verificação (teste local).
+      KURO_IP_ALLOW_OPEN: ${KURO_IP_ALLOW_OPEN:-}
     volumes:
       - ./docker/Caddyfile.ip:/etc/caddy/Caddyfile:ro
       - ./docker/caddy-ip.sh:/etc/caddy/caddy-ip.sh:ro

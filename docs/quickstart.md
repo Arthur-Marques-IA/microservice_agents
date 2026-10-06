@@ -147,7 +147,8 @@ Se o servidor não tem domínio, ligue antes o HTTPS pelo IP. Uma vez, no servid
 docker compose --profile ip up -d
 ```
 
-Ele descobre o IP público sozinho e atende HTTPS na porta 58443, com uma CA própria. Não precisa
+Ele só sobe com as chaves do passo 2 preenchidas, porque põe o serviço na internet. Descobre o
+IP público sozinho e atende HTTPS na porta 58443, com uma CA própria. Não precisa
 de domínio, das portas 80 e 443 nem de configurar o `.env`, então convive com um Traefik ou nginx
 que já esteja na máquina. Se o provedor da VPS tiver firewall no painel, libere a porta 58443 lá.
 
@@ -243,7 +244,7 @@ claude mcp add kuro --env KURO_API_URL=http://127.0.0.1:58000 --env KURO_API_KEY
 | `kuro: command not found` | Use `uv run kuro ...`, ou instale como comando (passo 7) |
 | `sem permissão (HTTP 401)` | Exporte `KURO_API_KEY` com a `ADMIN_API_KEY` (passo 3) |
 | MCP: `o certificado de https://... não foi aceito` | O `KURO_CA_BUNDLE` não aponta para o certificado salvo, ou a CA do servidor mudou (o volume do Caddy foi apagado): rode o `mcp-config` de novo e salve outra vez |
-| MCP: conexão recusada ou expirada na porta 58443 | O profile `ip` não está de pé (`docker compose ps`), ou o firewall do provedor bloqueia a porta |
+| MCP: conexão recusada ou expirada na porta 58443 | O profile `ip` não está de pé (`docker compose ps`; o motivo aparece em `docker compose logs caddy-ip`, como chave de API faltando), ou o firewall do provedor bloqueia a porta |
 | `kuro dash` reclama de TTY | O painel precisa de um terminal interativo; num script, use `kuro runs tail --json` |
 | Windows: a API demora 30 s para responder | Use `127.0.0.1`, não `localhost` (o Docker Desktop pode tentar IPv6 primeiro) |
 
