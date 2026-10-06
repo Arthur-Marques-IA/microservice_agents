@@ -51,7 +51,8 @@ lista cada operação e as poucas exceções, com o motivo.
 
 ## Comece em 5 minutos
 
-**Pré-requisitos:** Docker e uma chave do Google Gemini.
+**Pré-requisitos:** Docker e uma chave do Google Gemini. O passo a passo completo, com o painel
+no terminal e o MCP, está no [quickstart](docs/quickstart.md).
 
 ```bash
 cp .env.example .env
@@ -97,6 +98,7 @@ curl -X POST http://127.0.0.1:58000/chat -H "Content-Type: application/json" \
 
 | Documento | O que tem |
 |---|---|
+| [docs/quickstart.md](docs/quickstart.md) | do zero ao primeiro agente, ao `kuro dash` e ao MCP, com as telas |
 | [docs/conceitos.md](docs/conceitos.md) | agentes, tools, base de conhecimento (RAG), memória, modelos, anexos |
 | [docs/integracao.md](docs/integracao.md) | como outro sistema chama o Kuro: contrato, erros, shadow, exemplo em PHP |
 | [docs/cli.md](docs/cli.md) | o shell, os comandos e o uso por agentes de IA |

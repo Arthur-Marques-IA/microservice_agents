@@ -117,6 +117,30 @@ def _mask(key: str) -> str:
     return f"{key[:4]}…{key[-4:]}" if len(key) > 12 else "…"
 
 
+_LOOPBACK = ("localhost", "127.0.0.1", "0.0.0.0")
+
+
+def _public_url(explicit: str | None, internal: str) -> tuple[str, str]:
+    """O endereço do serviço visto da máquina de quem opera, e de onde ele saiu.
+
+    De dentro do container o serviço só conhece o endereço interno, que não serve lá fora.
+    O `.env` (que o compose passa inteiro ao container) diz o resto:
+    1. `--url` ou `KURO_PUBLIC_URL`: quem sabe disse;
+    2. `KURO_API_DOMAIN` com um domínio de verdade: o profile `tls` (Caddy) serve HTTPS nele;
+    3. senão o serviço só escuta no host, em `AGENT_SERVICE_BIND` (127.0.0.1:58000): da máquina
+       de quem opera, o caminho é um túnel SSH para essa porta, e o endereço é o local do túnel.
+    """
+    if explicit:
+        return explicit.rstrip("/"), "explicit"
+    domain = os.environ.get("KURO_API_DOMAIN", "").strip().strip("/")
+    if domain and domain != "localhost" and not domain.endswith(".localhost"):
+        return f"https://{domain.removeprefix('https://')}", "domain"
+    if not any(host in internal for host in _LOOPBACK):
+        return internal.rstrip("/"), "client"
+    port = os.environ.get("AGENT_SERVICE_BIND", "127.0.0.1:58000").rsplit(":", 1)[-1] or "58000"
+    return f"http://127.0.0.1:{port}", "tunnel"
+
+
 @app.command("mcp-config")
 def mcp_config(
     ctx: typer.Context,
@@ -131,15 +155,19 @@ def mcp_config(
 ) -> None:
     """Como conectar o servidor MCP (`kuro-mcp`) a este serviço: o comando do Claude Code
     e o `.mcp.json`, prontos para copiar. Rode no servidor:
-    `docker compose exec agent-service kuro mcp-config --url https://kuro.empresa.com --show-key`."""
+    `docker compose exec agent-service kuro mcp-config --show-key`. O endereço sai do `.env`
+    (`KURO_API_DOMAIN`, ou um túnel SSH para `AGENT_SERVICE_BIND`); `--url` sobrepõe."""
     st = state(ctx)
     key = ctx.find_root().params.get("api_key") or ""
-    url = (public_url or st.client.base_url).rstrip("/")
+    url, url_source = _public_url(public_url, st.client.base_url)
     warnings = []
-    if any(host in url for host in ("localhost", "127.0.0.1", "0.0.0.0")) and not public_url:
+    if url_source == "tunnel":
+        port = url.rsplit(":", 1)[-1]
         warnings.append(
-            f"{url} é o endereço visto daqui de dentro. Passe --url com o endereço que a sua máquina "
-            "alcança (ou defina KURO_PUBLIC_URL)."
+            f"Sem domínio no .env (KURO_API_DOMAIN), o serviço só escuta em 127.0.0.1:{port} do servidor. "
+            "Rodando o MCP no próprio servidor, isso basta; de outra máquina, deixe um túnel SSH aberto nela: "
+            f"ssh -N -L {port}:127.0.0.1:{port} usuario@servidor. Com HTTPS ou outro endereço, passe --url "
+            "(ou defina KURO_PUBLIC_URL no .env)."
         )
     if not key:
         warnings.append(
@@ -162,6 +190,7 @@ def mcp_config(
     }
     report = {
         "url": url,
+        "url_source": url_source,
         "api_key": shown or None,
         "api_key_masked": bool(key) and not show_key,
         "claude_command": claude_cmd,

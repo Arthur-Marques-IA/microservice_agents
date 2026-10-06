@@ -30,14 +30,30 @@ No servidor onde o Kuro roda, um comando imprime a configuração pronta para co
 e a chave:
 
 ```bash
-docker compose exec agent-service kuro mcp-config --url https://kuro.suaempresa.com --show-key
+docker compose exec agent-service kuro mcp-config --show-key
 ```
 
-Ele devolve o `claude mcp add ...` e o `.mcp.json`. Os dois rodam o `kuro-mcp` com o
-[uv](https://docs.astral.sh/uv/) direto do GitHub (`uvx --from "agent-service[mcp] @ git+..."`),
+Ele imprime o comando `claude mcp add ...` e o `.mcp.json`, já com o endereço e a chave. Os dois
+rodam o `kuro-mcp` com o [uv](https://docs.astral.sh/uv/) direto do GitHub (`uvx --from "agent-service[mcp] @ git+..."`),
 sem clonar o repositório: na sua máquina só precisa do `uv` e de acesso de leitura ao repositório.
-Sem `--show-key` a chave sai mascarada, para não ficar no histórico do terminal por descuido; sem
-`--url` ele avisa que o endereço que enxerga de dentro do container não serve para a sua máquina.
+Sem `--show-key` a chave sai mascarada, para não ficar no histórico do terminal por descuido.
+
+Não precisa passar o endereço: ele sai do `.env` do servidor.
+
+| No `.env` | Endereço que o MCP usa |
+|---|---|
+| `KURO_PUBLIC_URL=https://...` | Esse, como está |
+| `KURO_API_DOMAIN=kuro.suaempresa.com` (HTTPS pelo profile `tls`) | `https://kuro.suaempresa.com` |
+| Nenhum dos dois | `http://127.0.0.1:58000` (a porta de `AGENT_SERVICE_BIND`), por um túnel SSH |
+
+No último caso, o serviço só escuta na própria VPS, e o comando avisa como chegar nele da sua
+máquina: deixe um túnel aberto enquanto usa o MCP.
+
+```bash
+ssh -N -L 58000:127.0.0.1:58000 usuario@servidor
+```
+
+`--url` sobrepõe tudo isso, para quando o serviço está atrás de outro proxy ou endereço.
 
 ### Claude Code, a partir de um clone
 

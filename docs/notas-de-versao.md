@@ -25,11 +25,22 @@ Aqui não entram as mudanças internas; essas ficam no histórico do git.
 ### Ação necessária
 
 Nenhuma, mas muda o comportamento no limite: acima de `MAX_CONCURRENT_RUNS`, a chamada **espera**
-na fila (até `QUEUE_MAX_WAIT_SECONDS`, 30 s) em vez de receber 503 na hora. Se o seu cliente tem
-timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` para o comportamento antigo.
+na fila (até `QUEUE_MAX_WAIT_SECONDS`, 30 s) em vez de receber 503 na hora, e só então o run começa
+a contar o `timeout_seconds`. O timeout do seu cliente precisa cobrir as duas esperas
+(`QUEUE_MAX_WAIT_SECONDS + timeout_seconds + 5`); um cliente com `timeout_seconds + 5`, como o
+[guia de integração](integracao.md#4-erros-e-fallback) recomendava, pode desistir com o run ainda na fila.
+Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
 
 ### Novo
 
+- **`kuro dash` de cara nova**: tema com as cores do console, um cabeçalho com o corvo do Kuro (o
+  humor dele mostra o estado do painel: execuções chegando, erro, pausado ou serviço fora do ar),
+  a aba Execuções virou **Ao vivo**, com um resumo do que está na tela, e o **Panorama** virou
+  cartões com a variação e um minigráfico do período. Nova tecla `a` (e um botão no cabeçalho)
+  liga e desliga as animações; `TEXTUAL_ANIMATIONS=none` já abre com elas desligadas. Tudo pelo
+  teclado: `]`/`[` trocam de aba, `tab` circula entre as tabelas, `/` filtra por agente, `s`, `t`
+  e `d` mudam status, testes e período, `j`/`k` movem a seleção, `?` mostra todas as teclas e `g`
+  abre o repositório no GitHub. Veja [docs/tui.md](tui.md).
 - Fila de espera por vaga de execução em `/chat`, `/analyze` e `/chat/stream`: em ordem de chegada,
   limitada por `QUEUE_MAX_SIZE` (64) e `QUEUE_MAX_WAIT_SECONDS` (30). Fila cheia ou espera esgotada:
   503 com `Retry-After`, como antes. O `timeout_seconds` do run só conta depois que ele ganha a vaga.
@@ -62,9 +73,11 @@ timeout menor que isso, ajuste um dos dois, ou use `QUEUE_MAX_WAIT_SECONDS=0` pa
     `dry_run`; exige `admin`).
   - Num agente procedural, um 502 ou 504 pode chegar depois de a ação ter rodado: leia o estado da
     sessão antes de cair no fallback.
-- `kuro mcp-config`: rodado no servidor (`docker compose exec agent-service kuro mcp-config --url
-  https://... --show-key`), imprime o `claude mcp add ...` e o `.mcp.json` prontos para conectar o
+- `kuro mcp-config`: rodado no servidor (`docker compose exec agent-service kuro mcp-config
+  --show-key`), imprime o `claude mcp add ...` e o `.mcp.json` prontos para conectar o
   servidor MCP. Eles instalam o `kuro-mcp` com `uvx` direto do GitHub, sem clone na máquina de quem opera.
+  O endereço sai do `.env`: `KURO_PUBLIC_URL`, ou `https://` + `KURO_API_DOMAIN`, ou, sem domínio,
+  `http://127.0.0.1` na porta de `AGENT_SERVICE_BIND` com o comando do túnel SSH. `--url` sobrepõe.
 - Tool `kind="api"`: um parâmetro de header que não vem do modelo (`source` `dependency` ou
   `const`) aceita nome de header HTTP com hífen, como `Idempotency-Key` ou `X-Request-Id`. Antes só
   identificadores passavam, e não havia como mandar a `idempotency_key` no header esperado.
