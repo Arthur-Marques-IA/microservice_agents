@@ -7,6 +7,7 @@ da resposta; erros viram `ApiError` (HTTP 4xx/5xx) ou `ServiceUnavailable`
 
 import json
 import mimetypes
+import os
 from collections.abc import Iterator
 from typing import Any
 
@@ -56,11 +57,26 @@ class Client:
         # A chave vai no cliente, não em cada chamada: esquecer de passá-la em
         # um comando novo viraria um 401 sem explicação.
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+        # CA que não existe: o httpx estoura um FileNotFoundError aqui mesmo, antes de
+        # qualquer comando tratar o erro. Vira um TlsError na primeira chamada, com a saída
+        # de "certificado não aceito" (sai com 3 na CLI, erro da tool no MCP).
+        self._missing_ca = verify if isinstance(verify, str) and not os.path.exists(verify) else None
+        if self._missing_ca:
+            verify = True
         self._http = httpx.Client(
             base_url=self.base_url, timeout=timeout, transport=transport, headers=headers, verify=verify
         )
 
+    def _check_ca(self) -> None:
+        if self._missing_ca:
+            raise TlsError(
+                f"o arquivo da CA não existe: {self._missing_ca}. Confira o caminho em KURO_CA_BUNDLE "
+                "(ou --ca-bundle); se o certificado nunca foi salvo, rode de novo o bloco de "
+                "configuração que `kuro mcp-config` imprime no servidor."
+            )
+
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        self._check_ca()
         # Uma nova tentativa para falhas de transporte transitórias (port-forward do
         # Docker). POST só repete se nem chegou a conectar, para não duplicar criação.
         for attempt in (1, 2):
@@ -162,6 +178,7 @@ class Client:
     def chat_stream(self, body: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
         """Consome o SSE de `POST /chat/stream`, rendendo `(evento, dados)`:
         `run`, `message`, `usage`, `error` e `done`."""
+        self._check_ca()
         try:
             with self._http.stream("POST", "/chat/stream", json=body, timeout=httpx.Timeout(10.0, read=None)) as response:
                 if response.status_code >= 400:

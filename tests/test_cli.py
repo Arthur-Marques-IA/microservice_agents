@@ -790,6 +790,17 @@ def test_certificado_recusado_nao_manda_olhar_o_container(monkeypatch):
     assert "docker compose" not in erro
 
 
+def test_ca_que_nao_existe_vira_erro_de_certificado_e_nao_traceback(monkeypatch, tmp_path):
+    """Caminho errado em KURO_CA_BUNDLE (ou o bloco de setup que nunca rodou): o httpx
+    estourava FileNotFoundError ao montar o cliente, com a pilha inteira na tela."""
+    falta = tmp_path / "kuro-ca.pem"
+    monkeypatch.setenv("KURO_CA_BUNDLE", str(falta))
+    result = _run("--json", "agents", "list")
+    assert result.exit_code == 3
+    erro = json.loads(result.stderr)["error"]
+    assert str(falta) in erro and "KURO_CA_BUNDLE" in erro and "mcp-config" in erro
+
+
 def test_conexao_recusada_continua_sugerindo_o_container(monkeypatch):
     def handler(request):
         raise httpx.ConnectError("connection refused", request=request)

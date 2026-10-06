@@ -102,6 +102,9 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
   `docker compose up` falhava com "cannot execute: required file not found". O repositório agora
   fixa LF nos arquivos que rodam dentro dos containers (`.gitattributes`). Quem já clonou: apague
   `docker/` e rode `git checkout -- docker/` para regravar os arquivos.
+- `KURO_CA_BUNDLE` apontando para um arquivo que não existe: a CLI, o `kuro-mcp` e o `kuro dash`
+  quebravam com um traceback do Python. Agora é um erro de certificado (sai com 3 na CLI) que diz
+  qual caminho faltou.
 
 ### Como atualizar
 
