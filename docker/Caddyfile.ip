@@ -1,0 +1,38 @@
+# HTTPS pelo IP da máquina, sem domínio (profile `ip`). Quem monta as variáveis
+# é o docker/caddy-ip.sh: KURO_SITE_HOST (o IP público, entre colchetes se for
+# IPv6), KURO_PUBLIC_IP e KURO_IP_PORT.
+#
+# O certificado vem da CA interna do Caddy, não do Let's Encrypt: dispensa
+# domínio, portas 80/443 e cota de emissão, e por isso convive com um Traefik ou
+# nginx que já esteja na máquina. Quem conecta precisa confiar nessa CA; o
+# `kuro mcp-config` entrega o certificado dela pronto para salvar.
+
+{
+	# Conectando por IP, o cliente não manda SNI, e por trás do NAT do Docker o
+	# Caddy veria o IP interno do container, sem certificado para ele: o
+	# handshake falharia. Sem SNI, vale o certificado do IP público.
+	default_sni {$KURO_PUBLIC_IP}
+	# Sem porta 80 aqui: nada de redirecionar http -> https.
+	auto_https disable_redirects
+	# A CA é para os clientes do Kuro, não para o sistema do container.
+	skip_install_trust
+}
+
+https://{$KURO_SITE_HOST}:{$KURO_IP_PORT} {
+	tls internal
+
+	reverse_proxy agent-service:8000 {
+		# O `/chat/stream` é SSE: sem isto as respostas chegariam de uma vez no fim.
+		flush_interval -1
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

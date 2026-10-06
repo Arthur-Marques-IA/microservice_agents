@@ -141,30 +141,40 @@ serviço pela API, local ou remoto.
 
 ### Jeito mais rápido: o servidor gera a configuração
 
-No servidor onde o Kuro roda:
+Se o servidor não tem domínio, ligue antes o HTTPS pelo IP. Uma vez, no servidor:
+
+```bash
+docker compose --profile ip up -d
+```
+
+Ele só sobe com as chaves do passo 2 preenchidas, porque põe o serviço na internet. Descobre o
+IP público sozinho e atende HTTPS na porta 58443, com uma CA própria. Não precisa
+de domínio, das portas 80 e 443 nem de configurar o `.env`, então convive com um Traefik ou nginx
+que já esteja na máquina. Se o provedor da VPS tiver firewall no painel, libere a porta 58443 lá.
+
+Depois, ainda no servidor:
 
 ```bash
 docker compose exec agent-service kuro mcp-config --show-key
 ```
 
-Ele imprime o comando `claude mcp add ...` e o `.mcp.json`, já com o endereço e a chave. Os dois
-instalam o `kuro-mcp` direto do GitHub com `uvx`, sem clonar: na sua máquina só precisa do uv.
-Sem `--show-key` a chave sai mascarada, para não ficar no histórico do terminal por descuido.
+Ele imprime, em versão bash e PowerShell, o que colar na sua máquina, uma vez:
 
-Não precisa passar o endereço: ele sai do `.env` do servidor.
+1. um comando que salva o certificado da CA do servidor em `~/.kuro/`. Ele chega pela sua sessão
+   SSH, então é o autêntico;
+2. o `claude mcp add ...`, já com o endereço, a chave e o certificado.
 
-| No `.env` | Endereço que o MCP usa |
+Os comandos instalam o `kuro-mcp` direto do GitHub com `uvx`, sem clonar: na sua máquina só precisa
+do uv. Sem `--show-key` a chave sai mascarada, para não ficar no histórico do terminal por descuido.
+
+O endereço sai sozinho, nesta ordem:
+
+| No servidor | Endereço que o MCP usa |
 |---|---|
-| `KURO_PUBLIC_URL=https://...` | Esse, como está |
-| `KURO_API_DOMAIN=kuro.suaempresa.com` (HTTPS pelo profile `tls`) | `https://kuro.suaempresa.com` |
-| Nenhum dos dois | `http://127.0.0.1:58000` (a porta de `AGENT_SERVICE_BIND`), por um túnel SSH |
-
-No último caso, o serviço só escuta na própria VPS, e o comando avisa como chegar nele da sua
-máquina: deixe um túnel aberto enquanto usa o MCP.
-
-```bash
-ssh -N -L 58000:127.0.0.1:58000 usuario@servidor
-```
+| `KURO_PUBLIC_URL=https://...` no `.env` | Esse, como está |
+| `KURO_API_DOMAIN=kuro.suaempresa.com` no `.env` (profile `tls`, Let's Encrypt) | `https://kuro.suaempresa.com` |
+| O profile `ip` de pé | `https://<ip-público>:58443`, com o certificado da CA para salvar |
+| Nenhum dos três | `http://127.0.0.1:58000`, que só serve para um MCP rodando no próprio servidor |
 
 `--url` sobrepõe tudo isso, para quando o serviço está atrás de outro proxy ou endereço.
 
@@ -233,6 +243,8 @@ claude mcp add kuro --env KURO_API_URL=http://127.0.0.1:58000 --env KURO_API_KEY
 | `ensurepip is not available` | Falta o `python3.12-venv` (`apt install python3.12-venv`); apague a `.venv` pela metade e crie de novo |
 | `kuro: command not found` | Use `uv run kuro ...`, ou instale como comando (passo 7) |
 | `sem permissão (HTTP 401)` | Exporte `KURO_API_KEY` com a `ADMIN_API_KEY` (passo 3) |
+| MCP: `o certificado de https://... não foi aceito` | O `KURO_CA_BUNDLE` não aponta para o certificado salvo, ou a CA do servidor mudou (o volume do Caddy foi apagado): rode o `mcp-config` de novo e salve outra vez |
+| MCP: conexão recusada ou expirada na porta 58443 | O profile `ip` não está de pé (`docker compose ps`; o motivo aparece em `docker compose logs caddy-ip`, como chave de API faltando), ou o firewall do provedor bloqueia a porta |
 | `kuro dash` reclama de TTY | O painel precisa de um terminal interativo; num script, use `kuro runs tail --json` |
 | Windows: a API demora 30 s para responder | Use `127.0.0.1`, não `localhost` (o Docker Desktop pode tentar IPv6 primeiro) |
 

@@ -37,7 +37,8 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
   humor dele mostra o estado do painel: execuções chegando, erro, pausado ou serviço fora do ar),
   a aba Execuções virou **Ao vivo**, com um resumo do que está na tela, e o **Panorama** virou
   cartões com a variação e um minigráfico do período. Nova tecla `a` (e um botão no cabeçalho)
-  liga e desliga as animações; `TEXTUAL_ANIMATIONS=none` já abre com elas desligadas. Tudo pelo
+  liga e desliga as animações; `TEXTUAL_ANIMATIONS=none` já abre com elas desligadas. As cores
+  certas também pelo SSH: o painel liga o truecolor sozinho (`KURO_TRUECOLOR=0` desliga). Tudo pelo
   teclado: `]`/`[` trocam de aba, `tab` circula entre as tabelas, `/` filtra por agente, `s`, `t`
   e `d` mudam status, testes e período, `j`/`k` movem a seleção, `?` mostra todas as teclas e `g`
   abre o repositório no GitHub. Veja [docs/tui.md](tui.md).
@@ -76,8 +77,16 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
 - `kuro mcp-config`: rodado no servidor (`docker compose exec agent-service kuro mcp-config
   --show-key`), imprime o `claude mcp add ...` e o `.mcp.json` prontos para conectar o
   servidor MCP. Eles instalam o `kuro-mcp` com `uvx` direto do GitHub, sem clone na máquina de quem opera.
-  O endereço sai do `.env`: `KURO_PUBLIC_URL`, ou `https://` + `KURO_API_DOMAIN`, ou, sem domínio,
-  `http://127.0.0.1` na porta de `AGENT_SERVICE_BIND` com o comando do túnel SSH. `--url` sobrepõe.
+  O endereço sai sozinho: `KURO_PUBLIC_URL`, ou `https://` + `KURO_API_DOMAIN`, ou o HTTPS pelo IP
+  do profile `ip`, com o certificado da CA para salvar (comandos em bash e PowerShell). `--url` sobrepõe.
+- **HTTPS pelo IP, sem domínio** (profile `ip`): `docker compose --profile ip up -d` descobre o IP
+  público e atende HTTPS na porta 58443 com a CA interna do Caddy. Não precisa de domínio, das portas
+  80/443 nem de mexer no `.env`, e convive com um Traefik ou nginx na mesma máquina. Volumes novos:
+  `caddy_ip_data` (a CA), `caddy_ip_config` e `kuro_public` (a URL e o certificado da CA, montado só
+  para leitura no agent-service). Ver [operação](operacao.md#https-pelo-ip-sem-domínio-profile-ip).
+- **Console com a marca Kuro**: o corvo do `kuro dash` no lugar do ícone de robô, "kuro" no topo da
+  barra lateral e no título da aba, e o favicon com o corvo. No tema escuro, os cinzas viraram os do
+  `kuro dash` (ardósia em vez de verde-azulado), e verde e âmbar de status são os mesmos nos dois.
 - Tool `kind="api"`: um parâmetro de header que não vem do modelo (`source` `dependency` ou
   `const`) aceita nome de header HTTP com hífen, como `Idempotency-Key` ou `X-Request-Id`. Antes só
   identificadores passavam, e não havia como mandar a `idempotency_key` no header esperado.
@@ -96,6 +105,10 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
 
 ### Como atualizar
 
+- Rode o `up` com `--build` e com todos os profiles que você já usa: o `kuro mcp-config` novo mora
+  na imagem. Para ligar o HTTPS pelo IP, acrescente `--profile ip`, por exemplo
+  `docker compose --profile ip up -d --build`. Ele só sobe com `ADMIN_API_KEY` e `RUNTIME_API_KEY`
+  preenchidas, e a porta 58443 precisa estar liberada no firewall do provedor.
 - A migração `0007` roda sozinha no startup: acrescenta `agent_definitions.stages` e cria a
   tabela `procedure_runs`. Nada muda nos agentes que já existem, nem a versão da configuração deles.
 

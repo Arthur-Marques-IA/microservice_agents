@@ -56,6 +56,10 @@ services:
       # nenhum — é por onde se dá manutenção quando o console está desligado.
       KURO_API_URL: http://localhost:8000
       KURO_API_KEY: ${ADMIN_API_KEY:-}
+    volumes:
+      # A URL e a CA raiz que o profile `ip` publica (só o público). É daqui que o
+      # `kuro mcp-config` monta a conexão por IP; sem o profile, fica vazio.
+      - kuro_public:/kuro-public:ro
     restart: unless-stopped
     ports:
       - "${AGENT_SERVICE_BIND:-127.0.0.1:58000}:8000"
@@ -71,6 +75,34 @@ services:
         condition: service_healthy
       # Sem depender do Langfuse de propósito: tracing é best-effort e o serviço
       # sobe (e responde) mesmo com o Langfuse fora do ar.
+
+  caddy-ip:
+    # HTTPS pelo IP da máquina, sem domínio: `docker compose --profile ip up -d`.
+    # Usa a CA interna do Caddy (não o Let's Encrypt), então só precisa da porta
+    # 58443: convive com um Traefik ou nginx que já ocupe 80/443. O IP público é
+    # descoberto sozinho (ou KURO_PUBLIC_IP no .env). Detalhes: docs/operacao.md.
+    profiles: ["ip"]
+    image: caddy:2-alpine
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/etc/caddy/caddy-ip.sh"]
+    ports:
+      - "${KURO_IP_PORT:-58443}:${KURO_IP_PORT:-58443}"
+    environment:
+      KURO_PUBLIC_IP: ${KURO_PUBLIC_IP:-}
+      KURO_IP_PORT: ${KURO_IP_PORT:-58443}
+      # Só sobe com a autenticação ligada; 1 pula a verificação (teste local).
+      KURO_IP_ALLOW_OPEN: ${KURO_IP_ALLOW_OPEN:-}
+    volumes:
+      - ./docker/Caddyfile.ip:/etc/caddy/Caddyfile:ro
+      - ./docker/caddy-ip.sh:/etc/caddy/caddy-ip.sh:ro
+      # A CA mora aqui. Apagar o volume (`down -v`) cria uma CA nova, e quem já
+      # conectou precisa salvar o certificado de novo.
+      - caddy_ip_data:/data
+      - caddy_ip_config:/config
+      - kuro_public:/kuro-public
+    depends_on:
+      agent-service:
+        condition: service_healthy
 
   caddy:
     # TLS na frente da API. Sem este profile nada muda: o serviço segue em HTTP
@@ -270,6 +302,9 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  caddy_ip_data:
+  caddy_ip_config:
+  kuro_public:
   agent_service_postgres_data:
   langfuse_clickhouse_data:
   langfuse_clickhouse_logs:

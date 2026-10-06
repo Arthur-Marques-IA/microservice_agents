@@ -1,5 +1,8 @@
 """TUI `kuro dash` dirigida pelo Pilot do Textual, contra um cliente falso."""
 
+import re
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("textual")
@@ -186,6 +189,26 @@ def test_offline_crow_is_upside_down_with_a_cross_eye():
     assert "×" not in crow.render(crow.frame_for("idle", 0, True)).plain
 
 
+def test_console_and_favicon_draw_the_same_crow_as_the_dash():
+    frontend = Path(__file__).resolve().parents[1] / "frontend" / "src"
+    colors = {**crow.COLORS, "E": crow.EYE_OK}
+    del colors["R"]  # a boca só aparece no corvo de erro, que o console não desenha
+
+    source = (frontend / "components" / "brand" / "kuro-crow.tsx").read_text(encoding="utf-8")
+    grid = re.search(r"const GRID = \[(.*?)\];", source, re.S).group(1)
+    assert tuple(re.findall(r'"([.A-Z]{16})"', grid)) == crow.BASE
+    assert dict(re.findall(r'(\w): "(#[0-9a-f]{6})"', source)) == colors
+
+    # icon.svg: o sprite deslocado 2 para a direita e 4 para baixo num ladrilho 20×20.
+    pixels = [["."] * 16 for _ in crow.BASE]
+    by_color = {color: key for key, color in colors.items()}
+    svg = (frontend / "app" / "icon.svg").read_text(encoding="utf-8")
+    for x, y, width, fill in re.findall(r'<rect x="(\d+)" y="(\d+)" width="(\d+)" height="1" fill="(#\w+)"', svg):
+        for dx in range(int(width)):
+            pixels[int(y) - 4][int(x) - 2 + dx] = by_color[fill]
+    assert tuple("".join(row) for row in pixels) == crow.BASE
+
+
 def test_error_crow_opens_the_beak_and_paused_crow_snores():
     error = crow.frame_for("error", 0, False)
     assert error.eye == crow.EYE_ALERT and "R" in "".join(error.grid)
@@ -322,26 +345,33 @@ async def test_textual_animations_none_starts_still(monkeypatch):
 # -- teclado ------------------------------------------------------------------------
 
 
+async def _focus_on(pilot, app, widget_id: str, tab: str | None = None) -> None:
+    """Espera o foco chegar ao widget. Trocar de aba move o foco depois da próxima
+    renderização (`call_after_refresh`); com a máquina carregada, um `pause` só não basta."""
+    for _ in range(40):
+        if getattr(app.focused, "id", None) == widget_id and (tab is None or app.active_tab() == tab):
+            return
+        await pilot.pause(0.05)
+    assert getattr(app.focused, "id", None) == widget_id, f"foco em {app.focused!r}, esperado #{widget_id}"
+    assert tab is None or app.active_tab() == tab
+
+
 async def test_tab_cycles_data_panels_and_brackets_switch_tabs():
     app = KuroDash(FakeClient(), interval=60)
     async with app.run_test(size=(140, 40)) as pilot:
         await app.workers.wait_for_complete()
-        await pilot.pause()
-        assert app.focused.id == "runs"
+        await _focus_on(pilot, app, "runs")
         await pilot.press("tab")  # só um painel no Ao vivo: o foco fica na tabela
-        assert app.focused.id == "runs"
+        await _focus_on(pilot, app, "runs")
         await pilot.press("right_square_bracket")
         await app.workers.wait_for_complete()
-        await pilot.pause()
-        assert app.active_tab() == "overview-pane"
-        assert app.focused.id == "agents"
+        await _focus_on(pilot, app, "agents", tab="overview-pane")
         await pilot.press("tab")
-        assert app.focused.id == "tool-failures"
+        await _focus_on(pilot, app, "tool-failures")
         await pilot.press("shift+tab")
-        assert app.focused.id == "agents"
+        await _focus_on(pilot, app, "agents")
         await pilot.press("left_square_bracket")
-        await pilot.pause()
-        assert app.active_tab() == "runs-pane" and app.focused.id == "runs"
+        await _focus_on(pilot, app, "runs", tab="runs-pane")
 
 
 async def test_filters_from_the_keyboard():
@@ -349,13 +379,13 @@ async def test_filters_from_the_keyboard():
     app = KuroDash(client, interval=60)
     async with app.run_test(size=(140, 40)) as pilot:
         await app.workers.wait_for_complete()
-        await pilot.pause()
+        await _focus_on(pilot, app, "runs")
         await pilot.press("slash")
-        assert app.focused.id == "agent"
+        await _focus_on(pilot, app, "agent")
         await pilot.press("s", "u", "p")  # dentro do filtro, letras são texto, não atalhos
         assert app.query_one("#agent").value == "sup"
         await pilot.press("escape")
-        assert app.focused.id == "runs"
+        await _focus_on(pilot, app, "runs")
         await pilot.press("s")
         await app.workers.wait_for_complete()
         assert client.run_queries[-1]["status"] == "success"
@@ -417,8 +447,38 @@ async def test_slash_from_overview_goes_to_the_filter():
     async with app.run_test(size=(140, 40)) as pilot:
         await app.workers.wait_for_complete()
         await pilot.press("2")
-        await pilot.pause()
+        await _focus_on(pilot, app, "agents", tab="overview-pane")
         await pilot.press("slash")
-        await pilot.pause()
-        await pilot.pause()
-        assert app.active_tab() == "runs-pane" and app.focused.id == "agent"
+        await _focus_on(pilot, app, "agent", tab="runs-pane")
+
+
+# -- cores ----------------------------------------------------------------------------
+
+
+def test_truecolor_is_turned_on_over_ssh(monkeypatch):
+    """Pelo SSH chega só o TERM: sem o COLORTERM, o Rich reduziria o tema a 256 cores."""
+    import rich.console
+
+    from agent_service.tui.app import prefer_truecolor
+
+    env = {"TERM": "xterm-256color"}
+    assert prefer_truecolor(env) and env["COLORTERM"] == "truecolor"
+    monkeypatch.setattr(rich.console, "WINDOWS", False)  # no Windows o Rich nem olha o ambiente
+    console = rich.console.Console(force_terminal=True, _environ=env)
+    assert console.color_system == "truecolor"
+
+
+def test_truecolor_respects_who_said_otherwise():
+    from agent_service.tui.app import prefer_truecolor
+
+    for env in (
+        {"TERM": "xterm-256color", "COLORTERM": "256"},  # já definido: não mexe
+        {"TERM": "xterm-256color", "NO_COLOR": "1"},
+        {"TERM": "xterm-256color", "KURO_TRUECOLOR": "0"},
+        {"TERM": "linux"},  # console do Linux, sem X
+        {"TERM": "dumb"},
+        {"TERM": "xterm-256color", "TERM_PROGRAM": "Apple_Terminal"},
+    ):
+        before = dict(env)
+        assert not prefer_truecolor(env)
+        assert env == before

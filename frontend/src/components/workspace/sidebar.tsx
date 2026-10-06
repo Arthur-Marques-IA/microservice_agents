@@ -34,6 +34,7 @@ import { sessionTitle } from "@/lib/sessions";
 import { useTheme } from "@/lib/theme";
 import { useModifierKeyLabel } from "@/lib/use-platform";
 import type { SessionSummary } from "@/lib/types";
+import { KuroCrow } from "@/components/brand/kuro-crow";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -74,12 +75,10 @@ export function Sidebar({
       <div className={cn("flex h-14 shrink-0 items-center gap-2", collapsed ? "justify-center px-2" : "px-3")}>
         {!collapsed && (
           <Link href="/chat" onClick={onNavigate} className="flex min-w-0 items-center gap-2.5 rounded-lg px-1 py-1">
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-xs">
-              <Bot className="size-4" />
-            </span>
+            <KuroCrow scale={2} />
             <span className="flex min-w-0 flex-col leading-tight">
-              <span className="truncate text-sm font-semibold">agent-service</span>
-              <span className="text-[11px] text-muted-foreground">Console de agentes</span>
+              <span className="truncate font-mono text-sm font-semibold">kuro</span>
+              <span className="truncate text-[11px] text-muted-foreground">Agents, under control.</span>
             </span>
           </Link>
         )}

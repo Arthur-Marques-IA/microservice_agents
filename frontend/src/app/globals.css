@@ -38,27 +38,29 @@
   --viz-critical: #d03b3b;
 }
 
+/* As mesmas cores do `kuro dash` (KURO_THEME em src/agent_service/tui/app.py): neutros
+   cinza-ardósia, da família do corpo do corvo; o cyan fica só para o que é do Kuro ou está ativo. */
 .dark {
-  --background: #0c0c0f;
-  --foreground: #ececf1;
-  --surface: #101316;
-  --card: #12181b;
-  --card-foreground: #ececf1;
-  --popover: #141c1f;
-  --popover-foreground: #ececf1;
-  --border: #223035;
-  --input: #293c42;
-  --muted: #172225;
-  --muted-foreground: #8fa3a8;
-  --accent: #1c2b30;
-  --accent-foreground: #ececf1;
+  --background: #0a0a0c;
+  --foreground: #e2e8f0;
+  --surface: #0e1115;
+  --card: #111418;
+  --card-foreground: #e2e8f0;
+  --popover: #161b22;
+  --popover-foreground: #e2e8f0;
+  --border: #232b35;
+  --input: #2c3541;
+  --muted: #161b22;
+  --muted-foreground: #8b98a9;
+  --accent: #1a212a;
+  --accent-foreground: #e2e8f0;
   --primary: #22d3ee;
   --primary-foreground: #062a33;
   --primary-soft: #113640;
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
-  --success: #34d399;
-  --warning: #fbbf24;
+  --success: #22c55e;
+  --warning: #f59e0b;
   --ring: #67e8f9;
 }
 
