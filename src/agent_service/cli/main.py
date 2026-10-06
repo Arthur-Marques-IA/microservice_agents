@@ -19,6 +19,7 @@ from rich.table import Table
 from agent_service.cli import agents, collections, runs, sessions, tools
 from agent_service.cli.analyze import analyze
 from agent_service.cli.chat import chat
+from agent_service.cli.connect import connect
 from agent_service.cli.eval import eval_command
 from agent_service.cli.client import ApiError, Client, ServiceUnavailable
 from agent_service.cli.common import (
@@ -51,6 +52,7 @@ app.add_typer(sessions.app, name="sessions")
 app.command("chat")(chat)
 app.command("analyze")(analyze)
 app.command("eval")(eval_command)
+app.command("connect")(connect)
 
 providers_app = typer.Typer(help="Provedores de modelo (LLM) suportados.")
 app.add_typer(providers_app, name="providers")
@@ -177,11 +179,13 @@ def mcp_config(
     show_key: bool = typer.Option(False, "--show-key", help="Mostra a chave inteira (senão ela sai mascarada)."),
     source: str = typer.Option(MCP_SOURCE, "--source", envvar="KURO_MCP_SOURCE", help="De onde o uvx instala o kuro-mcp."),
 ) -> None:
-    """Como conectar o servidor MCP (`kuro-mcp`) a este serviço: o comando do Claude Code
-    e o `.mcp.json`, prontos para copiar. Rode no servidor:
-    `docker compose exec agent-service kuro mcp-config --show-key`. O endereço sai sozinho:
-    o domínio do `.env` (`KURO_API_DOMAIN`) ou, sem domínio, o HTTPS por IP do profile `ip`,
-    com o certificado da CA para salvar; `--url` sobrepõe."""
+    """Como conectar o servidor MCP do Kuro a este serviço, pronto para copiar. Rode no servidor:
+    `docker compose exec agent-service kuro mcp-config --show-key`.
+
+    Primeiro o caminho pelo SSH (`kuro connect`), que não precisa de porta aberta; com um
+    domínio (`KURO_API_DOMAIN`, profile `tls`), o MCP por URL em `/mcp`; e o `kuro-mcp` local
+    apontado para a URL (o domínio ou, sem domínio, o HTTPS por IP do profile `ip`, com o
+    certificado da CA para salvar). `--url` sobrepõe o endereço."""
     st = state(ctx)
     key = ctx.find_root().params.get("api_key") or ""
     url, url_source = _public_url(public_url, st.client.base_url)
@@ -190,8 +194,8 @@ def mcp_config(
     if url_source == "local":
         warnings.append(
             "Sem domínio (KURO_API_DOMAIN) e sem o profile `ip`, o serviço só escuta na própria máquina: "
-            "o endereço abaixo só serve para um MCP rodando aqui. Para conectar de qualquer lugar, suba o "
-            "HTTPS pelo IP com `docker compose --profile ip up -d` e rode este comando de novo."
+            "conecte pelo SSH (`kuro connect`, abaixo), que não precisa de porta aberta. A URL abaixo só "
+            "serve para um MCP rodando aqui; para expô-la, `docker compose --profile ip up -d`."
         )
     elif url.startswith("http://") and not any(host in url for host in _LOOPBACK):
         warnings.append(
@@ -227,7 +231,19 @@ def mcp_config(
     else:
         claude_cmd = claude_ps = f"claude mcp add kuro -s user --env KURO_API_URL={url}{tail}"
 
+    # Pelo SSH: o host público, quando se sabe qual é; o usuário do SSH, não (o do container não é).
+    host = url.split("://", 1)[-1].split("/", 1)[0].rsplit(":", 1)[0] if url_source in ("domain", "ip", "explicit") else ""
+    ssh_cmd = f'uvx --from "{package}" kuro connect usuario@{host or "servidor"}'
+    # Por URL só com certificado público: o Claude Code (Node) não confia na CA própria do
+    # profile `ip`, e HTTP puro levaria a chave em texto claro.
+    http_cmd = None
+    if url_source == "domain" or (url_source == "explicit" and url.startswith("https://")):
+        auth_header = f' --header "Authorization: Bearer {shown}"' if key else ""
+        http_cmd = f"claude mcp add --transport http kuro {url}/mcp -s user{auth_header}"
+
     report = {
+        "ssh_command": ssh_cmd,
+        "http_command": http_cmd,
         "url": url,
         "url_source": url_source,
         "api_key": shown or None,
@@ -245,9 +261,21 @@ def mcp_config(
     def render(r: dict[str, Any]) -> None:
         for w in r["warnings"]:
             err_console.print(f"[yellow]aviso:[/] {w}", highlight=False)
-        console.print("[bold]Servidor MCP do Kuro[/] — rode na sua máquina (precisa do uv).\n")
         # markup=False em tudo que é comando: o Rich leria `[mcp]` (de `agent-service[mcp]`)
         # como marcação e o apagaria.
+        console.print("[bold]Servidor MCP do Kuro[/] — rode na sua máquina.\n")
+        console.print(
+            "[bold]Pelo SSH[/] (recomendado: não precisa de porta aberta, de certificado nem da chave na sua "
+            "máquina; precisa do uv). Troque `usuario` pelo seu usuário do SSH:"
+        )
+        console.print(r["ssh_command"], markup=False, highlight=False, soft_wrap=True)
+        if r["http_command"]:
+            console.print("\n[bold]Ou pela URL[/] (sem instalar nada; o serviço atende o MCP em /mcp):")
+            console.print(r["http_command"], markup=False, highlight=False, soft_wrap=True)
+        console.print(
+            "\n[bold]Ou com o kuro-mcp na sua máquina[/], falando com a URL"
+            + (" (a porta precisa estar aberta no firewall do provedor):" if r["setup"] else ":")
+        )
         step = 1
         if r["setup"]:
             console.print(

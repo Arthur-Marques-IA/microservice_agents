@@ -22,6 +22,7 @@ da CLI): `chat` devolve o `session_id`, e quem chama o repassa para continuar.
 """
 
 import json
+import logging
 import os
 import uuid
 from collections.abc import Callable
@@ -36,7 +37,7 @@ from pydantic import BaseModel, Field
 from agent_service.cli.agents import EDITABLE_FIELDS as AGENT_FIELDS
 from agent_service.cli.agents import editable as agent_editable
 from agent_service.cli.chat import _coerce, collect_stream
-from agent_service.cli.client import ApiError, Client, ServiceUnavailable, TlsError
+from agent_service.cli.client import ApiError, Client, PortBlocked, ServiceUnavailable, TlsError
 from agent_service.cli.connection import client_from_env
 from agent_service.cli.eval import EvalInputError, check_rules_spec, parse_cases, run_evaluation
 from agent_service.cli.tools import EDITABLE_FIELDS as TOOL_FIELDS
@@ -121,7 +122,7 @@ def _api_message(exc: ApiError) -> str:
 def _tool_error(exc: ApiError | ServiceUnavailable) -> ToolError:
     """A falha do client como `ToolError`, cuja mensagem chega ao modelo — qualquer
     outra exceção o SDK esconde atrás de uma mensagem genérica."""
-    if isinstance(exc, TlsError):
+    if isinstance(exc, (TlsError, PortBlocked)):
         return ToolError(str(exc))
     if isinstance(exc, ServiceUnavailable):
         return ToolError(f"{exc}. Confira KURO_API_URL e se o serviço está no ar.")
@@ -158,18 +159,45 @@ def _dependencies(definition: dict[str, Any], given: dict[str, Any] | None) -> d
     return deps
 
 
-def _read_text(path: str) -> str:
-    try:
-        return Path(path).read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ToolError(f"não consegui ler {path}: {exc}") from exc
+NO_LOCAL_FILES = (
+    "este servidor MCP roda no servidor do Kuro, não na sua máquina: não lê arquivos por caminho. "
+    "Mande o conteúdo inline ({inline})."
+)
+
+
+def _files(local_files: bool) -> tuple[Callable[[str, str], str], Callable[[str, str], bytes]]:
+    """Leitores de arquivo por caminho — ou a recusa, quando o servidor MCP não roda na
+    máquina de quem usa (`/mcp` e `docker exec`): ali o caminho seria do container, e ler
+    o `.env` ou o `/proc/self/environ` dele entregaria os segredos do serviço."""
+
+    def read_bytes(path: str, inline: str) -> bytes:
+        if not local_files:
+            raise ToolError(NO_LOCAL_FILES.format(inline=inline))
+        try:
+            return Path(path).read_bytes()
+        except OSError as exc:
+            raise ToolError(f"não consegui ler {path}: {exc}") from exc
+
+    def read_text(path: str, inline: str) -> str:
+        try:
+            return read_bytes(path, inline).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ToolError(f"{path} não é texto UTF-8: {exc}") from exc
+
+    return read_text, read_bytes
 
 
 # -- servidor --------------------------------------------------------------------
 
 
-def build_server(client: Client) -> MCPServer:
-    server = MCPServer(name="kuro", title="Kuro", instructions=INSTRUCTIONS, version=_version())
+def build_server(client: Client, local_files: bool = True) -> MCPServer:
+    """`local_files=False` quando o servidor MCP roda junto do serviço, e não na máquina
+    de quem usa: os parâmetros que recebem um caminho de arquivo passam a ser recusados."""
+    instructions = INSTRUCTIONS
+    if not local_files:
+        instructions += NO_LOCAL_FILES.format(inline="document, cases, rules, text") + "\n"
+    server = MCPServer(name="kuro", title="Kuro", instructions=instructions, version=_version())
+    _read_text, _read_bytes = _files(local_files)
 
     # -- saúde e modelos ------------------------------------------------------
 
@@ -441,7 +469,7 @@ def build_server(client: Client) -> MCPServer:
             raise ToolError(f"{agent_type!r} não é kind=analysis — use chat")
         body: dict[str, Any] = {
             "agent_type": agent_type,
-            "document": document if document is not None else _read_text(document_file or ""),
+            "document": document if document is not None else _read_text(document_file or "", "document"),
             "dependencies": _dependencies(definition, dependencies) or None,
         }
         if session_id:
@@ -471,12 +499,12 @@ def build_server(client: Client) -> MCPServer:
         try:
             if (cases_file is None) == (cases is None):
                 raise EvalInputError("informe cases_file ou cases (um dos dois)")
-            parsed = parse_cases(_read_text(cases_file), cases_file) if cases_file else parse_cases(
+            parsed = parse_cases(_read_text(cases_file, "cases"), cases_file) if cases_file else parse_cases(
                 "\n".join(json.dumps(c, ensure_ascii=False) for c in cases or []), "cases"
             )
             if rules_file and rules is not None:
                 raise EvalInputError("informe rules_file ou rules, não os dois")
-            raw_rules = json.loads(_read_text(rules_file)) if rules_file else (rules or [])
+            raw_rules = json.loads(_read_text(rules_file, "rules")) if rules_file else (rules or [])
             report = run_evaluation(
                 client,
                 agent_type,
@@ -678,12 +706,8 @@ def build_server(client: Client) -> MCPServer:
         if (text is None) == (file is None):
             raise ToolError("informe text ou file (um dos dois)")
         if file is not None:
-            path = Path(file)
-            try:
-                content = path.read_bytes()
-            except OSError as exc:
-                raise ToolError(f"não consegui ler {file}: {exc}") from exc
-            return _call(client.add_collection_file, name, filename=path.name, content=content, title=title)
+            content = _read_bytes(file, "text")
+            return _call(client.add_collection_file, name, filename=Path(file).name, content=content, title=title)
         return _call(client.add_document, name, {"text": text, "name": title})
 
     def _confirm_rm_doc(name: str, content_id: str, ctx: Context) -> Elicit[Confirmacao]:
@@ -714,7 +738,13 @@ def _version() -> str:
 def main() -> None:
     # O stdout é o canal do protocolo: nada pode ser impresso nele.
     timeout = float(os.environ.get("KURO_TIMEOUT") or 300)
-    build_server(client_from_env(timeout=timeout)).run("stdio")
+    # `KURO_MCP_LOCAL_FILES=0`: o processo roda no container (o `kuro connect` o chama por
+    # `docker exec`), então um caminho de arquivo seria do servidor, não de quem pediu.
+    local_files = os.environ.get("KURO_MCP_LOCAL_FILES", "1").strip().lower() not in ("0", "false", "no")
+    # Uma linha INFO no stderr por chamada à API: vira ruído no log do cliente MCP e, pelo
+    # `kuro connect`, no terminal de quem conecta. Erro de conexão já volta na tool.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    build_server(client_from_env(timeout=timeout), local_files=local_files).run("stdio")
 
 
 if __name__ == "__main__":

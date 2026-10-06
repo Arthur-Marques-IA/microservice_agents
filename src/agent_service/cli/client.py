@@ -7,6 +7,7 @@ da resposta; erros viram `ApiError` (HTTP 4xx/5xx) ou `ServiceUnavailable`
 
 import json
 import mimetypes
+import os
 from collections.abc import Iterator
 from typing import Any
 
@@ -32,6 +33,13 @@ class TlsError(ServiceUnavailable):
     é confiar na CA. Tratar os dois igual manda quem opera olhar o lugar errado."""
 
 
+class PortBlocked(ServiceUnavailable):
+    """A conexão ficou sem resposta até o timeout: um firewall descartando os pacotes.
+
+    Também separado: "o serviço está no ar? (docker compose up -d)" manda olhar a máquina,
+    e o serviço pode estar de pé atrás de um firewall que nem roda nela."""
+
+
 def _transport_failure(base_url: str, exc: Exception) -> ServiceUnavailable:
     texto = str(exc)
     if "SSL" in texto.upper() or "CERTIFICATE" in texto.upper():
@@ -39,6 +47,15 @@ def _transport_failure(base_url: str, exc: Exception) -> ServiceUnavailable:
             f"o certificado de {base_url} não foi aceito: {texto.strip()}. "
             "Se ele vem de uma CA própria, aponte-a com KURO_CA_BUNDLE=/caminho/ca.pem "
             "(ou --ca-bundle). Para um teste local com certificado autoassinado, --insecure."
+        )
+    if isinstance(exc, httpx.ConnectTimeout):
+        # Recusa (nada escutando) volta na hora; ficar sem resposta até o timeout é um
+        # firewall descartando os pacotes — quase sempre o do painel do provedor, que
+        # fica fora da máquina e não aparece no `ufw`.
+        return PortBlocked(
+            f"{base_url} não respondeu: a porta parece bloqueada por um firewall no caminho "
+            "(o do painel do provedor da VPS, por exemplo). Libere a porta lá, ou conecte o MCP "
+            "pelo SSH com `kuro connect usuario@servidor`, que não precisa de porta aberta."
         )
     return ServiceUnavailable(f"não consegui falar com {base_url} ({type(exc).__name__})")
 
@@ -56,11 +73,26 @@ class Client:
         # A chave vai no cliente, não em cada chamada: esquecer de passá-la em
         # um comando novo viraria um 401 sem explicação.
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+        # CA que não existe: o httpx estoura um FileNotFoundError aqui mesmo, antes de
+        # qualquer comando tratar o erro. Vira um TlsError na primeira chamada, com a saída
+        # de "certificado não aceito" (sai com 3 na CLI, erro da tool no MCP).
+        self._missing_ca = verify if isinstance(verify, str) and not os.path.exists(verify) else None
+        if self._missing_ca:
+            verify = True
         self._http = httpx.Client(
             base_url=self.base_url, timeout=timeout, transport=transport, headers=headers, verify=verify
         )
 
+    def _check_ca(self) -> None:
+        if self._missing_ca:
+            raise TlsError(
+                f"o arquivo da CA não existe: {self._missing_ca}. Confira o caminho em KURO_CA_BUNDLE "
+                "(ou --ca-bundle); se o certificado nunca foi salvo, rode de novo o bloco de "
+                "configuração que `kuro mcp-config` imprime no servidor."
+            )
+
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        self._check_ca()
         # Uma nova tentativa para falhas de transporte transitórias (port-forward do
         # Docker). POST só repete se nem chegou a conectar, para não duplicar criação.
         for attempt in (1, 2):
@@ -71,7 +103,7 @@ class Client:
                 retryable = method in ("GET", "PUT", "DELETE") or isinstance(exc, httpx.ConnectError)
                 # Certificado recusado não melhora na segunda tentativa.
                 falha = _transport_failure(self.base_url, exc)
-                if attempt == 2 or not retryable or isinstance(falha, TlsError):
+                if attempt == 2 or not retryable or isinstance(falha, (TlsError, PortBlocked)):
                     raise falha from exc
         if response.status_code >= 400:
             raise ApiError(response.status_code, _detail(response))
@@ -162,6 +194,7 @@ class Client:
     def chat_stream(self, body: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
         """Consome o SSE de `POST /chat/stream`, rendendo `(evento, dados)`:
         `run`, `message`, `usage`, `error` e `done`."""
+        self._check_ca()
         try:
             with self._http.stream("POST", "/chat/stream", json=body, timeout=httpx.Timeout(10.0, read=None)) as response:
                 if response.status_code >= 400:

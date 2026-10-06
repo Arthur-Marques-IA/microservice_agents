@@ -18,6 +18,9 @@ dependencies = [
     "fastapi>=0.141.1",
     "google-genai>=2.23.0",
     "httpx>=0.28",
+    # O serviço serve as tools MCP em `/mcp`, e a imagem traz o `kuro-mcp` para o
+    # `kuro connect` chamar por SSH (`docker exec`).
+    "mcp>=2.3",
     "ollama>=0.4",
     "openai>=1.0",
     "openpyxl>=3.1.5",
@@ -58,11 +61,12 @@ tools = [
     # disso; as demais builtins do catálogo já funcionam sem instalar nada.
     "ddgs>=9.0.0",
 ]
-# Só na máquina de quem opera: o servidor MCP (`kuro-mcp`) e a TUI (`kuro dash`)
-# são clientes da API, como a CLI. A imagem do serviço não precisa de nenhum dos dois.
+# O `mcp` já é dependência do serviço; o extra fica para não quebrar quem instala com
+# `agent-service[mcp]` (os comandos do `uvx` na documentação e no `kuro mcp-config`).
 mcp = [
     "mcp>=2.3",
 ]
+# Só na máquina de quem opera: a TUI (`kuro dash`) é cliente da API, como a CLI.
 tui = [
     "textual>=8.2",
 ]

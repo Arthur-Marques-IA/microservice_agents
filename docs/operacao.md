@@ -71,12 +71,18 @@ confiar no certificado; use `--insecure` **só nesse teste**, ou aponte a CA com
 O `58000` continua publicado em `127.0.0.1` para a CLI local. Quem vem de fora
 entra pelo 443.
 
+Com o domínio, o MCP também fica acessível pela URL: o serviço o atende em `/mcp`, com a chave
+admin (ver [MCP](mcp.md#pela-url-mcp)). O serviço precisa rodar com um worker só, o padrão.
+
 > **Windows:** use `127.0.0.1` para a API, não `localhost`. Com o Docker
 > Desktop, `localhost:58000` pode tentar IPv6 primeiro e travar por 30 s.
 
 ## HTTPS pelo IP, sem domínio (profile `ip`)
 
-Sem domínio, o profile `ip` dá HTTPS no IP público da máquina:
+Sem domínio, o profile `ip` dá HTTPS no IP público da máquina. Para o MCP de quem tem SSH no
+servidor, ele não é necessário: o `kuro connect` conecta pelo SSH, sem porta aberta (ver
+[MCP](mcp.md#pelo-ssh-kuro-connect)). O profile serve para a CLI, o painel e o MCP de quem não
+entra no servidor.
 
 ```bash
 docker compose --profile ip up -d
@@ -97,8 +103,12 @@ docker compose --profile ip up -d
   horas, mas o Caddy os renova sozinho, sem mudar a CA. Uma atualização ou um `down` comum não
   mexem nela; um `docker compose down -v` apaga o volume e cria uma CA nova, e quem já conectou
   precisa salvar o certificado de novo.
-- **O Docker publica a porta por cima do `ufw`.** Se o provedor tiver firewall no painel, é lá que
-  a 58443 precisa estar liberada.
+- **O Docker publica a porta por cima do `ufw`, mas não do firewall do provedor.** Se o provedor
+  tiver firewall no painel (Hostinger, AWS, Oracle, GCP...), a 58443 precisa estar liberada lá, e
+  ele fica fora da VPS: nada no terminal mostra o bloqueio. O sintoma é a conexão ficar sem resposta
+  até o timeout, e a CLI e o MCP dizem "a porta parece bloqueada por um firewall". Para conferir do
+  lado do servidor, sem passar pelo firewall:
+  `curl -k --resolve <ip>:58443:127.0.0.1 https://<ip>:58443/health`.
 - **Se o IP da máquina mudar**, recrie o `caddy-ip` e rode o `kuro mcp-config` de novo.
 
 O `kuro mcp-config` só publica o certificado da CA (no volume `kuro_public`, só leitura para o

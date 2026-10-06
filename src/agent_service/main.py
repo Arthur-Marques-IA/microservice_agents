@@ -12,7 +12,7 @@ from fastapi import FastAPI
 
 from agent_service.agents.registry import all_agents
 from agent_service.agents.seed import seed_default_agents
-from agent_service.api import auth, errors
+from agent_service.api import auth, errors, mcp_routes
 from agent_service.api.agents_routes import router as agents_router
 from agent_service.api.collections_routes import router as collections_router
 from agent_service.api.integration_routes import router as integration_router
@@ -40,7 +40,12 @@ seed_default_tools()
 seed_default_agents()
 warm_up_model_listing()
 
-base_app = FastAPI(title=settings.app_name)
+# O MCP em `/mcp` (Streamable HTTP): as mesmas tools do `kuro-mcp`, para quem conecta
+# direto por URL. O lifespan do base_app entra no do AgentOS, que o combina com os dele.
+mcp_route, mcp_lifespan = mcp_routes.build()
+
+base_app = FastAPI(title=settings.app_name, lifespan=mcp_lifespan)
+base_app.router.routes.append(mcp_route)
 base_app.include_router(router)
 base_app.include_router(agents_router)
 base_app.include_router(collections_router)

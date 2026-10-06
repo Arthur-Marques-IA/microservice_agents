@@ -507,6 +507,9 @@ def test_mcp_config_without_domain_or_ip_profile_says_how_to_expose(api, monkeyp
     assert data["url"] == "http://127.0.0.1:58123" and data["url_source"] == "local"
     assert len(data["warnings"]) == 2
     assert "--profile ip" in data["warnings"][0] and "401" in data["warnings"][1]
+    # Sem endereço público, o caminho é o SSH, e não há URL para o MCP por HTTP.
+    assert "kuro connect" in data["warnings"][0]
+    assert data["ssh_command"].endswith("kuro connect usuario@servidor") and data["http_command"] is None
     assert "KURO_API_KEY" not in data["mcp_json"]["mcpServers"]["kuro"]["env"]
     assert data["setup"] is None
 
@@ -536,6 +539,9 @@ def test_mcp_config_with_ip_profile_hands_over_the_ca(api, monkeypatch, tmp_path
     assert '--env KURO_CA_BUNDLE="$HOME/.kuro/kuro-ca-69-62-89-141.pem"' in data["claude_command"]
     assert '--env KURO_CA_BUNDLE="$HOME\\.kuro\\kuro-ca-69-62-89-141.pem"' in data["claude_command_powershell"]
     assert data["mcp_json"]["mcpServers"]["kuro"]["env"]["KURO_CA_BUNDLE"] == "${KURO_CA_BUNDLE}"
+    assert data["ssh_command"].endswith("kuro connect usuario@69.62.89.141")
+    # O Claude Code (Node) não confia na CA própria: sem MCP por URL no profile `ip`.
+    assert data["http_command"] is None
     texto = _run("--url", "http://localhost:8000", "mcp-config").stdout
     assert "PowerShell" in texto and 'agent-service[mcp] @ git+' in texto
 
@@ -553,6 +559,10 @@ def test_mcp_config_uses_the_tls_domain_from_env(api, monkeypatch):
     data = json.loads(_run("--json", "--url", "http://localhost:8000", "mcp-config").stdout)
     assert data["url"] == "https://kuro.empresa.com" and data["url_source"] == "domain"
     assert data["warnings"] == []
+    assert data["http_command"] == (
+        'claude mcp add --transport http kuro https://kuro.empresa.com/mcp -s user --header "Authorization: Bearer chav…cdef"'
+    )
+    assert 'agent-service[mcp] @ git+' in data["ssh_command"] and data["ssh_command"].endswith("usuario@kuro.empresa.com")
     # --url continua mandando
     data = json.loads(_run("--json", "mcp-config", "--url", "https://outro.example.com").stdout)
     assert data["url"] == "https://outro.example.com" and data["url_source"] == "explicit"
@@ -788,6 +798,37 @@ def test_certificado_recusado_nao_manda_olhar_o_container(monkeypatch):
     erro = json.loads(result.stderr)["error"]
     assert "certificado" in erro and "KURO_CA_BUNDLE" in erro
     assert "docker compose" not in erro
+
+
+def test_porta_sem_resposta_aponta_o_firewall_e_nao_o_container(monkeypatch):
+    """Recusa volta na hora; ficar sem resposta até o timeout é firewall descartando
+    pacotes (o do painel do provedor, que nem roda na VPS). Sem nova tentativa: seriam
+    mais 20 s esperando a mesma coisa."""
+    tentativas = []
+
+    def handler(request):
+        tentativas.append(request)
+        raise httpx.ConnectTimeout("timed out", request=request)
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(cli_main, "Client", lambda url, timeout, **kw: Client(url, timeout, transport=transport))
+    result = _run("--json", "agents", "list")
+    assert result.exit_code == 3
+    erro = json.loads(result.stderr)["error"]
+    assert "firewall" in erro and "kuro connect" in erro
+    assert "docker compose" not in erro
+    assert len(tentativas) == 1
+
+
+def test_ca_que_nao_existe_vira_erro_de_certificado_e_nao_traceback(monkeypatch, tmp_path):
+    """Caminho errado em KURO_CA_BUNDLE (ou o bloco de setup que nunca rodou): o httpx
+    estourava FileNotFoundError ao montar o cliente, com a pilha inteira na tela."""
+    falta = tmp_path / "kuro-ca.pem"
+    monkeypatch.setenv("KURO_CA_BUNDLE", str(falta))
+    result = _run("--json", "agents", "list")
+    assert result.exit_code == 3
+    erro = json.loads(result.stderr)["error"]
+    assert str(falta) in erro and "KURO_CA_BUNDLE" in erro and "mcp-config" in erro
 
 
 def test_conexao_recusada_continua_sugerindo_o_container(monkeypatch):

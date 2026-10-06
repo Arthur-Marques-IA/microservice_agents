@@ -136,54 +136,32 @@ O resto está em [`kuro dash`](tui.md).
 ## 6. Ligar o MCP
 
 O MCP dá as operações da CLI a um agente de IA como tools tipadas: o Claude Code cria, testa e
-depura agentes do Kuro sem montar comandos de shell. O `kuro-mcp` roda na sua máquina e fala com o
-serviço pela API, local ou remoto.
+depura agentes do Kuro sem montar comandos de shell.
 
-### Jeito mais rápido: o servidor gera a configuração
+### Serviço num servidor: pelo SSH
 
-Se o servidor não tem domínio, ligue antes o HTTPS pelo IP. Uma vez, no servidor:
+Se você entra no servidor por SSH, é um comando, na sua máquina:
 
 ```bash
-docker compose --profile ip up -d
+uvx --from "agent-service[mcp] @ git+https://github.com/Arthur-Marques-IA/microservice_agents" kuro connect root@meu-servidor
 ```
 
-Ele só sobe com as chaves do passo 2 preenchidas, porque põe o serviço na internet. Descobre o
-IP público sozinho e atende HTTPS na porta 58443, com uma CA própria. Não precisa
-de domínio, das portas 80 e 443 nem de configurar o `.env`, então convive com um Traefik ou nginx
-que já esteja na máquina. Se o provedor da VPS tiver firewall no painel, libere a porta 58443 lá.
+Ele entra pelo SSH, acha o container do serviço, testa o MCP de verdade (chama a tool `health`) e
+só então o registra no Claude Code. O MCP roda dentro do container, chamado pelo SSH: não precisa
+abrir porta no firewall, salvar certificado nem copiar a chave de API para a sua máquina. Se o SSH
+pedir senha, ele oferece instalar uma chave SSH, porque o Claude Code não tem como digitar senha.
 
-Depois, ainda no servidor:
+Com um domínio e o HTTPS do profile `tls`, dá também para conectar pela URL, sem instalar nada: o
+serviço atende o MCP em `/mcp`. O comando pronto sai no servidor, com
+`docker compose exec agent-service kuro mcp-config --show-key`. Os jeitos e as opções estão em
+[MCP](mcp.md#conectar).
 
-```bash
-docker compose exec agent-service kuro mcp-config --show-key
-```
+### Serviço local, a partir do clone
 
-Ele imprime, em versão bash e PowerShell, o que colar na sua máquina, uma vez:
-
-1. um comando que salva o certificado da CA do servidor em `~/.kuro/`. Ele chega pela sua sessão
-   SSH, então é o autêntico;
-2. o `claude mcp add ...`, já com o endereço, a chave e o certificado.
-
-Os comandos instalam o `kuro-mcp` direto do GitHub com `uvx`, sem clonar: na sua máquina só precisa
-do uv. Sem `--show-key` a chave sai mascarada, para não ficar no histórico do terminal por descuido.
-
-O endereço sai sozinho, nesta ordem:
-
-| No servidor | Endereço que o MCP usa |
-|---|---|
-| `KURO_PUBLIC_URL=https://...` no `.env` | Esse, como está |
-| `KURO_API_DOMAIN=kuro.suaempresa.com` no `.env` (profile `tls`, Let's Encrypt) | `https://kuro.suaempresa.com` |
-| O profile `ip` de pé | `https://<ip-público>:58443`, com o certificado da CA para salvar |
-| Nenhum dos três | `http://127.0.0.1:58000`, que só serve para um MCP rodando no próprio servidor |
-
-`--url` sobrepõe tudo isso, para quando o serviço está atrás de outro proxy ou endereço.
-
-### A partir do clone
-
-Se você já tem o repositório na máquina, com o serviço local:
+Com o serviço rodando na sua máquina:
 
 ```bash
-claude mcp add kuro --env KURO_API_URL=http://127.0.0.1:58000 --env KURO_API_KEY="$KURO_API_KEY" -- uv --directory "$PWD" run --extra mcp kuro-mcp
+claude mcp add kuro --env KURO_API_URL=http://127.0.0.1:58000 --env KURO_API_KEY="$KURO_API_KEY" -- uv --directory "$PWD" run kuro-mcp
 ```
 
 Ou, num `.mcp.json` do projeto onde seus agentes trabalham, com a chave lida do ambiente (assim o
@@ -194,7 +172,7 @@ arquivo pode ir para o git):
   "mcpServers": {
     "kuro": {
       "command": "uv",
-      "args": ["--directory", "/caminho/para/microservice_agents", "run", "--extra", "mcp", "kuro-mcp"],
+      "args": ["--directory", "/caminho/para/microservice_agents", "run", "kuro-mcp"],
       "env": {
         "KURO_API_URL": "http://127.0.0.1:58000",
         "KURO_API_KEY": "${KURO_API_KEY}"
@@ -206,11 +184,13 @@ arquivo pode ir para o git):
 
 ### Conferir
 
-Abra o Claude Code e peça "rode o health do kuro". A tool `health` devolve a versão do serviço,
-se a autenticação está ligada e os provedores com credencial. Para ver as tools sem um cliente:
+Abra uma sessão nova do Claude Code e peça "use a tool health do kuro". A tool `health` devolve a
+versão do serviço, se a autenticação está ligada e os provedores com credencial. O `claude mcp list`
+mostrar "Connected" só diz que o processo do MCP subiu; quem confirma que ele alcança o serviço é a
+`health`. Para ver as tools sem um cliente:
 
 ```bash
-npx @modelcontextprotocol/inspector uv run --extra mcp kuro-mcp
+npx @modelcontextprotocol/inspector uv run kuro-mcp
 ```
 
 Duas coisas que o MCP faz diferente da CLI:
@@ -244,7 +224,10 @@ claude mcp add kuro --env KURO_API_URL=http://127.0.0.1:58000 --env KURO_API_KEY
 | `kuro: command not found` | Use `uv run kuro ...`, ou instale como comando (passo 7) |
 | `sem permissão (HTTP 401)` | Exporte `KURO_API_KEY` com a `ADMIN_API_KEY` (passo 3) |
 | MCP: `o certificado de https://... não foi aceito` | O `KURO_CA_BUNDLE` não aponta para o certificado salvo, ou a CA do servidor mudou (o volume do Caddy foi apagado): rode o `mcp-config` de novo e salve outra vez |
-| MCP: conexão recusada ou expirada na porta 58443 | O profile `ip` não está de pé (`docker compose ps`; o motivo aparece em `docker compose logs caddy-ip`, como chave de API faltando), ou o firewall do provedor bloqueia a porta |
+| MCP: "a porta parece bloqueada por um firewall" | O firewall do painel do provedor descarta a porta (58443 no profile `ip`). Libere lá ou conecte pelo SSH (passo 6), que não precisa de porta |
+| MCP: conexão recusada na porta 58443 | O profile `ip` não está de pé (`docker compose ps`; o motivo aparece em `docker compose logs caddy-ip`, como chave de API faltando) |
+| `kuro connect`: "o SSH pediu senha" | Rode-o num terminal interativo, que ele instala uma chave SSH; ou instale você mesmo (`ssh-copy-id`) |
+| `kuro connect`: "a imagem é de antes do `kuro connect`" | No servidor: `git pull && docker compose up -d --build` |
 | `kuro dash` reclama de TTY | O painel precisa de um terminal interativo; num script, use `kuro runs tail --json` |
 | Windows: a API demora 30 s para responder | Use `127.0.0.1`, não `localhost` (o Docker Desktop pode tentar IPv6 primeiro) |
 
