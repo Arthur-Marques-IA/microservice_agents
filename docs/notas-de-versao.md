@@ -84,6 +84,9 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
   80/443 nem de mexer no `.env`, e convive com um Traefik ou nginx na mesma máquina. Volumes novos:
   `caddy_ip_data` (a CA), `caddy_ip_config` e `kuro_public` (a URL e o certificado da CA, montado só
   para leitura no agent-service). Ver [operação](operacao.md#https-pelo-ip-sem-domínio-profile-ip).
+- **Console com a marca Kuro**: o corvo do `kuro dash` no lugar do ícone de robô, "kuro" no topo da
+  barra lateral e no título da aba, e o favicon com o corvo. No tema escuro, os cinzas viraram os do
+  `kuro dash` (ardósia em vez de verde-azulado), e verde e âmbar de status são os mesmos nos dois.
 - Tool `kind="api"`: um parâmetro de header que não vem do modelo (`source` `dependency` ou
   `const`) aceita nome de header HTTP com hífen, como `Idempotency-Key` ou `X-Request-Id`. Antes só
   identificadores passavam, e não havia como mandar a `idempotency_key` no header esperado.

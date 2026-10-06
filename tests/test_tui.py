@@ -1,5 +1,8 @@
 """TUI `kuro dash` dirigida pelo Pilot do Textual, contra um cliente falso."""
 
+import re
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("textual")
@@ -184,6 +187,26 @@ def test_offline_crow_is_upside_down_with_a_cross_eye():
     assert frame.grid == tuple(reversed(crow.BASE))
     assert "×" in crow.render(frame).plain
     assert "×" not in crow.render(crow.frame_for("idle", 0, True)).plain
+
+
+def test_console_and_favicon_draw_the_same_crow_as_the_dash():
+    frontend = Path(__file__).resolve().parents[1] / "frontend" / "src"
+    colors = {**crow.COLORS, "E": crow.EYE_OK}
+    del colors["R"]  # a boca só aparece no corvo de erro, que o console não desenha
+
+    source = (frontend / "components" / "brand" / "kuro-crow.tsx").read_text(encoding="utf-8")
+    grid = re.search(r"const GRID = \[(.*?)\];", source, re.S).group(1)
+    assert tuple(re.findall(r'"([.A-Z]{16})"', grid)) == crow.BASE
+    assert dict(re.findall(r'(\w): "(#[0-9a-f]{6})"', source)) == colors
+
+    # icon.svg: o sprite deslocado 2 para a direita e 4 para baixo num ladrilho 20×20.
+    pixels = [["."] * 16 for _ in crow.BASE]
+    by_color = {color: key for key, color in colors.items()}
+    svg = (frontend / "app" / "icon.svg").read_text(encoding="utf-8")
+    for x, y, width, fill in re.findall(r'<rect x="(\d+)" y="(\d+)" width="(\d+)" height="1" fill="(#\w+)"', svg):
+        for dx in range(int(width)):
+            pixels[int(y) - 4][int(x) - 2 + dx] = by_color[fill]
+    assert tuple("".join(row) for row in pixels) == crow.BASE
 
 
 def test_error_crow_opens_the_beak_and_paused_crow_snores():

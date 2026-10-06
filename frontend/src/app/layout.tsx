@@ -16,8 +16,8 @@ import { themeInitScript } from "@/lib/theme-script";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: { default: "agent-service", template: "%s · agent-service" },
-  description: "Console do microserviço de agentes de IA: playground, agentes versionados e base de conhecimento.",
+  title: { default: "kuro", template: "%s · kuro" },
+  description: "Console do Kuro, runtime de agentes de IA: playground, agentes versionados, base de conhecimento e logs.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
