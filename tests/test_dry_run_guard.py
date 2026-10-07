@@ -127,3 +127,19 @@ def test_sem_tool_barrada_o_agente_fica_sem_hook(gravar_lead):
     update_tool(gravar_lead, ToolUpdateIn(side_effect=False))
     _, hook = _functions([gravar_lead])
     assert hook is None
+
+
+def test_agente_do_registry_traz_o_hook_e_perde_quando_a_tool_e_classificada(gravar_lead):
+    """O caminho de produção: o `/chat` pega o agente do registry, não um `Agent` montado
+    à mão. Classificar a tool muda o `updated_at` dela, e o agente em cache é refeito."""
+    from agent_service.agents.registry import get_agent
+    from agent_service.agents.store import create_definition, delete_definition
+
+    create_definition(agent_type="usa-gravar-lead", name="Usa", instructions=["oi"], tools=[gravar_lead])
+    try:
+        agente = get_agent("usa-gravar-lead")
+        assert agente.tool_hooks and agente.tool_hooks[0].__name__ == "kuro_dry_run_guard"
+        update_tool(gravar_lead, ToolUpdateIn(side_effect=False))
+        assert get_agent("usa-gravar-lead").tool_hooks is None
+    finally:
+        delete_definition("usa-gravar-lead")

@@ -127,7 +127,10 @@ def resolve(value: Any, found: dict[str, str] | None = None) -> Any:
 
 def redact(text: str, values: Any) -> str:
     """Tira os valores dos segredos de um texto que vai ao modelo ou ao trace: muita API
-    devolve os headers recebidos no corpo, e um erro do httpx pode trazer a URL inteira."""
-    for value in sorted({v for v in values if v and len(v) >= 4}, key=len, reverse=True):
+    devolve os headers recebidos no corpo, e um erro do httpx pode trazer a URL inteira.
+
+    Só valores com 8+ caracteres: um valor curto e comum num campo de nome sensível (um
+    `Idempotency-Key: abc`) seria trocado em todo lugar da resposta, estragando o texto."""
+    for value in sorted({v for v in values if v and len(v) >= 8}, key=len, reverse=True):
         text = text.replace(value, "{{secret}}")
     return text
