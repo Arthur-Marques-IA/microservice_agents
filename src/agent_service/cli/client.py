@@ -258,6 +258,17 @@ class Client:
             "GET", f"/model-providers/{provider}/models", params={k: v for k, v in params.items() if v is not None}
         )
 
+    # -- segredos das tools (o valor só entra; nenhuma leitura o devolve) ----
+
+    def list_secrets(self) -> list[dict[str, Any]]:
+        return self._request("GET", "/secrets")
+
+    def set_secret(self, name: str, body: dict[str, Any]) -> dict[str, Any]:
+        return self._request("PUT", f"/secrets/{name}", json=body)
+
+    def delete_secret(self, name: str) -> None:
+        self._request("DELETE", f"/secrets/{name}")
+
     def list_credentials(self) -> list[dict[str, Any]]:
         return self._request("GET", "/model-credentials")
 

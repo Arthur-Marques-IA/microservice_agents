@@ -332,3 +332,31 @@ async def test_target_diz_em_qual_kuro_o_servidor_mexe():
     assert "root@69.62.89.141" in instructions
     async with McpClient(build_server(client)) as mcp:
         assert "target" not in _data(await mcp.call_tool("health", {}))
+
+
+async def test_ambiente_aparece_nas_instrucoes_e_na_health():
+    def handler(request):
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok", "environment": "prod"})
+        return httpx.Response(200, json=[])
+
+    client = Client("http://localhost:8000", transport=httpx.MockTransport(handler))
+    async with McpClient(build_server(client, target="root@vps", environment="prod")) as mcp:
+        instructions = mcp.instructions or ""
+        health = _data(await mcp.call_tool("health", {}))
+    assert "o Kuro de prod em root@vps" in instructions
+    assert health["environment"] == "prod" and health["target"] == "root@vps"
+    # Sem o nome no processo (o kuro-mcp na máquina de quem usa), vem do /health do serviço.
+    async with McpClient(build_server(client)) as mcp:
+        assert _data(await mcp.call_tool("health", {}))["environment"] == "prod"
+
+
+async def test_secrets_list_so_mostra_nomes(api):
+    server, routes, _ = api
+    routes[("GET", "/secrets")] = httpx.Response(200, json=[{"name": "REGENTE_TOKEN", "used_by": ["ficha"]}])
+    async with McpClient(server) as mcp:
+        tools = {t.name for t in (await mcp.list_tools()).tools}
+        out = _data(await mcp.call_tool("secrets_list", {}))
+    assert out["items"][0]["name"] == "REGENTE_TOKEN"
+    # Nenhuma tool do MCP grava segredo: o valor passaria pela conversa do modelo.
+    assert not any("secret" in name and name != "secrets_list" for name in tools)

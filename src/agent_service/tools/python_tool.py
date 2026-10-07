@@ -306,6 +306,12 @@ def _run_with_timeout(fn: Callable[..., Any], timeout: float, *args: Any, **kwar
     return box.get("value")
 
 
+def _secret(name: str) -> str:
+    from agent_service.tools.secrets import get_value
+
+    return get_value(name)
+
+
 def compile_python_tool(*, tool_name: str, config: dict[str, Any], enabled: bool) -> Callable[..., Any]:
     """`config` já validado (`validate_python_config`). Levanta
     `PythonToolDisabledError` se `enabled=False` — o caller decide a origem
@@ -316,7 +322,13 @@ def compile_python_tool(*, tool_name: str, config: dict[str, Any], enabled: bool
             "agent_service.tools.python_tool."
         )
 
-    namespace: dict[str, Any] = {"__builtins__": _safe_builtins(), "__name__": f"agent_service.tools.python.{tool_name}"}
+    namespace: dict[str, Any] = {
+        "__builtins__": _safe_builtins(),
+        "__name__": f"agent_service.tools.python.{tool_name}",
+        # O token fora do `code`: o código aparece em toda leitura da tool (inclusive no
+        # MCP), e um valor escrito nele vazaria. `secret("NOME")` lê `kuro secrets set NOME`.
+        "secret": _secret,
+    }
     try:
         exec(compile(config["code"], filename=f"<tool:{tool_name}>", mode="exec"), namespace)
     except Exception as exc:  # noqa: BLE001 - reportado como erro de configuração da tool

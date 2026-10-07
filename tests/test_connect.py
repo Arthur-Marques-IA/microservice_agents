@@ -81,6 +81,8 @@ def test_testa_antes_e_registra_o_ssh_no_claude_code(fake):
     assert out["registered"] and not out["replaced"] and out["container"] == CONTAINER
     command = out["command"]
     assert command[:4] == ["ssh", "-T", "-o", "BatchMode=yes"]
+    # Keepalive: sem tráfego, um NAT no caminho derruba a conexão parada ("Connection closed").
+    assert "ServerAliveInterval=30" in command and command.index("ServerAliveInterval=30") < command.index("root@69.62.89.141")
     assert command[-9:] == [
         "docker", "exec", "-i", "-e", "KURO_MCP_LOCAL_FILES=0", "-e", "KURO_MCP_TARGET=root@69.62.89.141", CONTAINER, "kuro-mcp",
     ]

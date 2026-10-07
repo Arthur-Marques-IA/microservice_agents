@@ -280,7 +280,11 @@ CONFIG_DRY_RUN = {
 
 @pytest.fixture
 def acordo_tool():
-    create_tool(ToolIn(tool_name="fechar_acordo", kind="api", label="Fechar acordo", config=CONFIG_DRY_RUN))
+    # Declara que trata o teste: sem isto, num dry_run ela nem seria chamada (tools/dry_run.py).
+    create_tool(
+        ToolIn(tool_name="fechar_acordo", kind="api", label="Fechar acordo", config=CONFIG_DRY_RUN,
+               side_effect=True, dry_run_support=True)
+    )
     yield "fechar_acordo"
     delete_tool("fechar_acordo")
 

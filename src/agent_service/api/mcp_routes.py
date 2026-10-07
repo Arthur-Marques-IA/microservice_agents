@@ -45,7 +45,7 @@ def _internal_client() -> Client:
 
 def build() -> tuple[BaseRoute, Any]:
     """A rota `/mcp` e o lifespan que mantém o gerenciador de sessões no ar."""
-    server = build_server(_internal_client(), local_files=False)
+    server = build_server(_internal_client(), local_files=False, environment=get_settings().kuro_env_name)
     app = server.streamable_http_app(
         streamable_http_path=PATH,
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),

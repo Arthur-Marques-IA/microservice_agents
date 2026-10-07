@@ -17,6 +17,7 @@ Depois de criada, uma tool entra na lista de um agente pelo nome
 """
 
 import copy
+import json
 import re
 from datetime import datetime
 from typing import Any, Literal
@@ -26,18 +27,19 @@ from pydantic import BaseModel, Field, model_validator
 
 from agent_service.agents.store import list_definitions as list_agent_definitions
 from agent_service.config import get_settings
-from agent_service.tools import registry, store
+from agent_service.tools import registry, secrets, store
 from agent_service.tools.api_tool import ApiToolConfigError, required_dependencies, validate_api_config
 from agent_service.tools.catalog import BuiltinConfigError, list_builtin_catalog, validate_builtin_config
 from agent_service.tools.invoke import ToolUnavailableError
 from agent_service.tools.invoke import invoke_tool as run_tool
 from agent_service.tools.python_tool import PythonToolConfigError, validate_python_config
 from agent_service.tools.registry import ToolBuildError
+from agent_service.tools.sensitive import SECRET_MASK, get_slot, sensitive_slots, set_slot
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-_SECRET_MASK = "••••••••"
+_SECRET_MASK = SECRET_MASK
 ToolKind = Literal["builtin", "api", "python"]
 
 
@@ -58,12 +60,15 @@ def _validate_config(kind: str, config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _mask_config(kind: str, config: dict[str, Any]) -> dict[str, Any]:
+    """A config como sai em toda leitura (API, CLI, MCP, console): todo valor que parece
+    segredo vira a máscara — o `auth`, os headers e os parâmetros fixos com nome sensível
+    (`tools/sensitive.py`). Uma referência (`{{secret:NOME}}`) sai como está: não é o valor."""
     masked = copy.deepcopy(config)
     if kind == "api":
-        auth = masked.get("auth") or {}
-        for field_name in ("token", "value", "password"):
-            if auth.get(field_name):
-                auth[field_name] = _SECRET_MASK
+        for slot in sensitive_slots(masked):
+            value = get_slot(masked, slot)
+            if value and not secrets.references(value):
+                set_slot(masked, slot, _SECRET_MASK)
     elif kind == "builtin":
         from agent_service.tools.catalog import get_builtin_spec
 
@@ -77,15 +82,30 @@ def _mask_config(kind: str, config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _unmask_config(kind: str, incoming: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
-    """Se o campo secreto veio de volta como a máscara (a UI ecoou o valor
-    mascarado sem editá-lo), restaura o valor real guardado."""
+    """Se o campo secreto veio de volta como a máscara (quem editou leu a tool e devolveu o
+    valor mascarado sem mexer nele), restaura o valor guardado.
+
+    O header ou parâmetro precisa continuar com o mesmo nome: renomeado com a máscara no
+    valor, não há o que restaurar, e gravar a máscara trocaria o token por "••••••••" sem
+    ninguém perceber — isso é 422 pedindo o valor."""
     merged = copy.deepcopy(incoming)
     if kind == "api":
-        auth = merged.get("auth") or {}
-        existing_auth = existing.get("auth") or {}
-        for field_name in ("token", "value", "password"):
-            if auth.get(field_name) == _SECRET_MASK:
-                auth[field_name] = existing_auth.get(field_name)
+        stored = {slot: get_slot(existing, slot) for slot in sensitive_slots(existing)}
+        stored_params = {
+            p.get("name"): p.get("value") for p in existing.get("parameters") or [] if p.get("source") == "const"
+        }
+        for slot in sensitive_slots(merged):
+            if get_slot(merged, slot) != _SECRET_MASK:
+                continue
+            if slot[0] == "parameters":
+                name = merged["parameters"][slot[1]].get("name")
+                if name not in stored_params:
+                    raise HTTPException(status_code=422, detail=_mask_left(f"parâmetro {name!r}"))
+                set_slot(merged, slot, stored_params[name])
+            elif slot in stored:
+                set_slot(merged, slot, stored[slot])
+            else:
+                raise HTTPException(status_code=422, detail=_mask_left(f"{slot[0]}.{slot[1]}"))
     elif kind == "builtin":
         from agent_service.tools.catalog import get_builtin_spec
 
@@ -97,6 +117,31 @@ def _unmask_config(kind: str, incoming: dict[str, Any], existing: dict[str, Any]
                 if p.secret and params.get(p.name) == _SECRET_MASK:
                     params[p.name] = existing_params.get(p.name)
     return merged
+
+
+def _mask_left(where: str) -> str:
+    return (
+        f"{where} veio com o valor mascarado ({_SECRET_MASK}), mas não há valor guardado com esse nome para "
+        "restaurar (nome novo ou renomeado, ou uma tool nova criada a partir da leitura de outra). Mande o "
+        "valor de verdade — de preferência uma referência {{secret:NOME}} (kuro secrets set NOME)."
+    )
+
+
+def _check_secrets(kind: str, config: dict[str, Any]) -> None:
+    """Na gravação: nada de máscara sobrando (vira o valor do header sem ninguém notar) e
+    toda referência apontando para um segredo que existe."""
+    if kind == "builtin":
+        return
+    if _SECRET_MASK in json.dumps(config, ensure_ascii=False):
+        raise HTTPException(status_code=422, detail=_mask_left("um campo"))
+    missing = sorted(name for name in secrets.references(config) if not secrets.exists(name))
+    if missing:
+        nomes = ", ".join(missing)
+        raise HTTPException(
+            status_code=422,
+            detail=f"a config referencia segredos que não existem: {nomes}. Cadastre antes com "
+            f"`kuro secrets set {missing[0]}` (o valor vem do ambiente ou do stdin, nunca da linha de comando).",
+        )
 
 
 def _row_out(row: dict[str, Any]) -> dict[str, Any]:
@@ -116,14 +161,29 @@ class ToolIn(BaseModel):
     side_effect: bool | None = Field(
         default=None,
         description="A tool muda algo no sistema chamado (grava, cobra, transfere, envia)? "
-        "Vazio = ainda não classificada. Serve para a fila de revisão dos Logs.",
+        "Vazio = ainda não classificada: num teste (dry_run) ela não é chamada, por precaução.",
+    )
+    dry_run_support: bool | None = Field(
+        default=None,
+        description="A API da tool trata o header X-Kuro-Dry-Run (simula em vez de gravar)? Num teste (dry_run), uma tool "
+        "com efeito colateral ou não classificada só é chamada com isto true. Só kind api e python. "
+        "Vazio = não declarado.",
     )
 
     @model_validator(mode="after")
     def _validate_slug(self) -> "ToolIn":
         if not _SLUG_RE.match(self.tool_name):
             raise ValueError("tool_name deve ser um slug: letras minúsculas, números, '-' ou '_'")
+        _check_dry_run_support(self.kind, self.dry_run_support)
         return self
+
+
+def _check_dry_run_support(kind: str, dry_run_support: bool | None) -> None:
+    if dry_run_support and kind == "builtin":
+        raise ValueError(
+            "dry_run_support=true não vale para kind='builtin': uma toolkit do Agno não recebe o header "
+            "X-Kuro-Dry-Run, então não tem como simular"
+        )
 
 
 class ToolUpdateIn(BaseModel):
@@ -133,6 +193,9 @@ class ToolUpdateIn(BaseModel):
     enabled: bool | None = None
     side_effect: bool | None = Field(
         default=None, description="Mandar `null` explícito volta para 'não classificada'; omitir não mexe."
+    )
+    dry_run_support: bool | None = Field(
+        default=None, description="Mandar `null` explícito volta para 'não declarado'; omitir não mexe."
     )
 
 
@@ -146,6 +209,8 @@ class ToolOut(BaseModel):
     is_seed: bool
     side_effect: bool | None = None
     """`None` = ainda não classificada."""
+    dry_run_support: bool | None = None
+    """A API trata o `X-Kuro-Dry-Run`? `None` = não declarado."""
     created_at: datetime
     updated_at: datetime
 
@@ -201,6 +266,9 @@ class ToolInvokeOut(BaseModel):
     failure: str | None = None
     """invalid_arguments | not_found | auth | unavailable | config | exception (`tools/failures.py`)."""
     http_status: int | None = None
+    dry_run_skipped: bool = False
+    """Teste (`dry_run`) com uma tool que não pode rodar nele: ela não foi chamada, e `result`
+    diz por quê (ver `tools/dry_run.py`)."""
 
 
 # -- config ---------------------------------------------------------------
@@ -256,6 +324,7 @@ def list_tools() -> list[dict[str, Any]]:
 def create_tool(body: ToolIn) -> dict[str, Any]:
     if store.get_tool(body.tool_name) is not None:
         raise HTTPException(status_code=409, detail=f"Tool {body.tool_name!r} já existe")
+    _check_secrets(body.kind, body.config)
     config = _validate_config(body.kind, body.config)
     created = store.create_tool(
         tool_name=body.tool_name,
@@ -265,6 +334,7 @@ def create_tool(body: ToolIn) -> dict[str, Any]:
         config=config,
         enabled=body.enabled,
         side_effect=body.side_effect,
+        dry_run_support=body.dry_run_support,
     )
     return _row_out(created)
 
@@ -290,9 +360,16 @@ def update_tool(tool_name: str, body: ToolUpdateIn) -> dict[str, Any]:
     if current is None:
         raise HTTPException(status_code=404, detail=f"Tool {tool_name!r} não encontrada")
 
+    if "dry_run_support" in body.model_fields_set:
+        try:
+            _check_dry_run_support(current["kind"], body.dry_run_support)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     config = None
     if body.config is not None:
         merged = _unmask_config(current["kind"], body.config, current["config"])
+        _check_secrets(current["kind"], merged)
         config = _validate_config(current["kind"], merged)
         if current["kind"] == "api":
             _check_agents_declare_dependencies(tool_name, config)
@@ -304,6 +381,7 @@ def update_tool(tool_name: str, body: ToolUpdateIn) -> dict[str, Any]:
         config=config,
         enabled=body.enabled,
         **({"side_effect": body.side_effect} if "side_effect" in body.model_fields_set else {}),
+        **({"dry_run_support": body.dry_run_support} if "dry_run_support" in body.model_fields_set else {}),
     )
     return _row_out(updated)
 

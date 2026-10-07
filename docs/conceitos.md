@@ -202,9 +202,28 @@ uv run kuro tools invoke cep -a cep=01310-100          # testa sem montar agente
 uv run kuro agents set suporte tools='["cep"]'          # liga ao agente
 ```
 
-Segredos (token, senha) voltam mascarados nas leituras, e editar sem mexer no
-campo mascarado preserva o valor salvo. Uma tool em uso por algum agente não
-pode ser excluída. O seed cria `calculator`, `hackernews` e `cat_fact`.
+**Segredos.** Token, senha ou chave não precisam ficar escritos na tool:
+referencie um segredo e cadastre o valor uma vez.
+
+```bash
+TOKEN=... uv run kuro secrets set REGENTE_TOKEN --value-env TOKEN   # o valor nunca vai como argumento
+# na config da tool: "headers": {"X-Regente-Token": "{{secret:REGENTE_TOKEN}}"}
+uv run kuro secrets list                                            # nomes e quem usa; o valor, nunca
+```
+
+A referência vale nos headers, no `auth` e nos parâmetros `source="const"`; numa
+tool `kind="python"`, `secret("REGENTE_TOKEN")`. Ela é resolvida a cada chamada
+(trocar o valor vale na hora) e o valor fica cifrado com a
+`CREDENTIALS_ENCRYPTION_KEY`. O que ainda estiver escrito na tool e tiver nome de
+segredo (`*token*`, `*key*`, `*secret*`, `authorization`...) volta mascarado nas
+leituras, e editar sem mexer no campo mascarado preserva o valor salvo. Uma tool
+em uso por algum agente não pode ser excluída.
+
+**Tools num teste.** `side_effect` diz se a tool grava, cobra ou envia algo, e
+`dry_run_support` diz se a API dela trata o `X-Kuro-Dry-Run`. Num teste
+(`dry_run`), só rodam as tools com `side_effect=false` ou `dry_run_support=true`;
+as outras não são chamadas, e o modelo é avisado (ver
+[integração](integracao.md#modo-teste-dry_run)). O seed cria `calculator`, `hackernews` e `cat_fact`.
 A builtin `web_search` precisa do extra `tools` (`uv sync --extra tools`); as
 demais do catálogo (`calculator`, `hackernews`, `reasoning`, `email`, `files`,
 `pubmed`, `openweather`, `file_generation`, `sleep`) funcionam sem instalar nada.

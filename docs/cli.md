@@ -26,6 +26,7 @@ se configura pelo console dá para configurar pela CLI, e vice-versa:
 | Analisar documento | `/analyze` | `analyze` | Análise |
 | Tools: CRUD, catálogo, invocar | `/tools` | `tools ...` | Tools |
 | Testar tool com `dependencies` | `/tools/{n}/invoke` | `tools invoke -d` | Testar tool |
+| Segredos das tools (`{{secret:NOME}}`) | `/secrets` | `secrets list\|set\|delete` | — |
 | Collections: CRUD e busca | `/collections` | `collections ...` | Conhecimento |
 | Embedder de cada collection | `/collections/embedders` | `collections embedders` | diálogo nova coleção |
 | Indexar texto e arquivo | `/collections/{n}/documents`, `/files` | `collections add`, `add -f` | abas Texto e Arquivo |
@@ -174,6 +175,7 @@ uv run kuro tools invoke calculator --fn add -a a=2 -a b=3
 uv run kuro tools invoke ficha -a assunto=fatura -d cpf=12345678900  # -d simula o dependencies do /chat
 uv run kuro tools apply -f cep.json             # cria ou atualiza uma tool
 uv run kuro tools set cep enabled=false         # muda só esses campos
+TOKEN=... uv run kuro secrets set CEP_TOKEN --value-env TOKEN   # e na tool: {{secret:CEP_TOKEN}}
 uv run kuro collections embedders               # quem gera os vetores, e quem já tem credencial
 uv run kuro collections add manuais -f manual.pdf   # indexa um arquivo
 uv run kuro collections docs manuais            # o que está indexado, com o status

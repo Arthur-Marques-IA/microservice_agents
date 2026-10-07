@@ -22,7 +22,7 @@ from agent_service.agents.versions import effective_config, ensure_version
 from agent_service.documents.collections import EmbedderError
 from agent_service.models.provider import ProviderNotConfiguredError
 from agent_service.tools.store import get_tool as get_tool_row
-from agent_service.tools.registry import resolve_tools_with_stamp
+from agent_service.tools.registry import resolve_for_agent
 
 # (agent, definition.updated_at, tools_stamp, feedback_note.updated_at, (agent_version, config_hash))
 _CacheEntry = tuple[Agent, datetime, tuple[datetime, ...], datetime | None, tuple[int, str]]
@@ -39,7 +39,7 @@ class UnknownAgentTypeError(ValueError):
 
 
 def _build_from_definition(definition: dict[str, Any]) -> tuple[Agent, tuple[datetime, ...]]:
-    tools, tools_stamp = resolve_tools_with_stamp(definition["tools"] or [])
+    tools, tools_stamp, dry_run_guard = resolve_for_agent(definition["tools"] or [])
     kind = definition.get("kind") or "conversational"
     instructions = definition["instructions"]
     output_schema = None
@@ -58,6 +58,7 @@ def _build_from_definition(definition: dict[str, Any]) -> tuple[Agent, tuple[dat
         name=definition["name"],
         instructions=instructions,
         tools=tools,
+        tool_hooks=[dry_run_guard] if dry_run_guard else None,
         model_provider=definition["model_provider"],
         model_id=definition["model_id"],
         model_credential_id=definition.get("model_credential_id"),

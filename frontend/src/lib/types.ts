@@ -449,6 +449,8 @@ export interface ToolSummary {
   is_seed: boolean;
   /** A tool muda algo no sistema chamado? `null` = ainda não classificada. */
   side_effect?: boolean | null;
+  /** A API trata o `X-Kuro-Dry-Run`? Num teste, tool com efeito colateral só roda com `true`. */
+  dry_run_support?: boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -467,6 +469,7 @@ export interface ToolInput {
   config: Record<string, unknown>;
   enabled?: boolean;
   side_effect?: boolean | null;
+  dry_run_support?: boolean | null;
 }
 
 export type ToolUpdateInput = Partial<Omit<ToolInput, "tool_name" | "kind">>;

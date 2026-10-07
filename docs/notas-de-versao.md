@@ -24,7 +24,23 @@ Aqui não entram as mudanças internas; essas ficam no histórico do git.
 
 ### Ação necessária
 
-Nenhuma, mas muda o comportamento no limite: acima de `MAX_CONCURRENT_RUNS`, a chamada **espera**
+**Num teste (`dry_run`), tool com efeito colateral só é chamada se declara que trata o teste.**
+O `dry_run` era só um aviso (o header `X-Kuro-Dry-Run`), e uma API que o ignorava gravava de
+verdade num teste que parecia seguro. Agora, num `dry_run` (Playground, `--dry-run`, o MCP por
+padrão, a etapa `action` de um procedural em teste), uma tool com `side_effect=true` **ou ainda não
+classificada** não é chamada: o modelo recebe "[teste] Não executada: ..." com os argumentos que
+mandaria, e a conversa segue. Fora de teste, nada muda. **O que fazer**, para cada tool que deve
+rodar nos testes:
+
+- só lê (consulta, busca): `kuro tools set <tool> side_effect=false`;
+- grava, e a API dela trata o `X-Kuro-Dry-Run` (simula em vez de gravar): `kuro tools set <tool>
+  side_effect=true dry_run_support=true`. Confira antes que a API respeita o header;
+- builtin com efeito colateral (o `email`): não roda em teste — uma toolkit não recebe o header.
+
+`kuro tools list` mostra a coluna "no teste" (roda / não roda), e o console tem a opção no editor
+da tool. A migração `0008` roda sozinha no boot.
+
+Também muda o comportamento no limite: acima de `MAX_CONCURRENT_RUNS`, a chamada **espera**
 na fila (até `QUEUE_MAX_WAIT_SECONDS`, 30 s) em vez de receber 503 na hora, e só então o run começa
 a contar o `timeout_seconds`. O timeout do seu cliente precisa cobrir as duas esperas
 (`QUEUE_MAX_WAIT_SECONDS + timeout_seconds + 5`); um cliente com `timeout_seconds + 5`, como o
@@ -33,6 +49,20 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
 
 ### Novo
 
+- **Segredos das tools: `{{secret:NOME}}`.** Um header, o `auth` (token, value, password) ou um
+  parâmetro fixo de uma tool `kind="api"` pode referenciar um segredo em vez de guardar o valor; numa
+  tool `kind="python"`, `secret("NOME")`. O valor é cadastrado uma vez, cifrado com a
+  `CREDENTIALS_ENCRYPTION_KEY` (`kuro secrets set NOME --value-env VARIAVEL`, `PUT /secrets/{nome}`),
+  resolvido a cada chamada (trocar vale na hora, sem editar a tool) e nunca devolvido: `kuro secrets
+  list` / `GET /secrets` mostram o nome e as tools que o usam. Salvar uma tool com referência a um
+  segredo que não existe é 422; remover um segredo em uso, 409. O MCP só lista os nomes
+  (`secrets_list`). Ver [conceitos](conceitos.md).
+- **Nome do ambiente (`KURO_ENV_NAME`)**, ex.: `prod`. Aparece no `/health` (`environment`), nas
+  instruções e na tool `health` do MCP, no cabeçalho do `kuro dash` e no rodapé do console: com mais
+  de um Kuro, diz em qual se está mexendo.
+- `kuro connect` registra o SSH com keepalive (`ServerAliveInterval=30`): uma conexão parada não é
+  mais derrubada por um NAT no caminho, que aparecia como "Connection closed" no cliente MCP. Quem
+  já conectou ganha isso rodando o `kuro connect` de novo (`--yes`).
 - **`kuro dash` de cara nova**: tema com as cores do console, um cabeçalho com o corvo do Kuro (o
   humor dele mostra o estado do painel: execuções chegando, erro, pausado ou serviço fora do ar),
   a aba Execuções virou **Ao vivo**, com um resumo do que está na tela, e o **Panorama** virou
@@ -112,6 +142,15 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
 
 ### Corrigido
 
+- **Segredo de tool em texto puro na leitura.** Só o `auth` era mascarado: um token num header
+  comum (`X-Regente-Token`) ou num parâmetro fixo (`api_key`) saía inteiro no `GET /tools`, na CLI,
+  no console e no `tool_get` do MCP — e daí na conversa do modelo. Agora todo header e parâmetro
+  fixo com nome de segredo (`*token*`, `*secret*`, `*key*`, `authorization`, `cookie`...) sai
+  mascarado. Devolver a máscara ao editar mantém o valor guardado; a máscara num campo novo ou
+  renomeado (ou numa tool criada a partir da leitura de outra) é 422. Os valores de segredo enviados
+  também saem do que volta ao modelo e ao trace, quando a API os ecoa na resposta. **Se um token já
+  passou por uma conversa pelo MCP, troque-o no sistema de destino** — de preferência já como
+  `{{secret:NOME}}`.
 - O título de uma conversa com `dependencies` mostrava os dados do cliente: sem nome definido, o
   AgentOS usa a primeira mensagem como título, e o Agno junta a ela o bloco
   `<additional context>{...}` (CPF, nome...). O console, a CLI (`kuro sessions list`) e o MCP

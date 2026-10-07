@@ -28,6 +28,7 @@ def build_agent(
     name: str,
     instructions: list[str],
     tools: list[Any] | None = None,  # Toolkit/Function/callable já resolvidos, ver tools/registry.py
+    tool_hooks: list[Any] | None = None,  # a trava do dry-run (tools/dry_run.py), se alguma tool precisa
     model_provider: str | None = None,
     model_id: str | None = None,
     model_credential_id: str | None = None,
@@ -96,6 +97,7 @@ def build_agent(
         search_knowledge=knowledge is not None,
         instructions=instructions,
         tools=tools or [],
+        tool_hooks=tool_hooks,
         add_history_to_context=not is_analysis,
         num_history_runs=num_history_runs,
         pre_hooks=pre_hooks or None,

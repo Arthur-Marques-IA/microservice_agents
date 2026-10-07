@@ -144,6 +144,9 @@ kuro --json tools get cep --editable > cep.json # só os campos editáveis
 kuro --json tools apply -f cep.json             # cria (precisa de tool_name e kind) ou atualiza
 kuro --json tools set cep enabled=false         # altera só esses campos (kind não muda)
 kuro --json tools delete cep --yes              # trava se algum agente usa a tool
+kuro --json tools set cep side_effect=false     # só lê: roda nos testes (dry_run)
+kuro --json secrets list                        # segredos das tools ({{secret:NOME}}): nomes e quem usa
+TOKEN=... kuro --json secrets set CEP_TOKEN --value-env TOKEN   # o valor nunca vai como argumento
 kuro --json tools invoke calculator --fn add -a a=2 -a b=3
 kuro --json tools invoke ficha -a assunto=fatura -d cpf=12345678900   # -d simula o `dependencies` do /chat
 
@@ -233,6 +236,16 @@ o mesmo vocabulário do `response_schema` de um agente analista:
 Sem eles o schema declarado ao modelo sai como `{"type":"array"}` pelado, que o provedor recusa —
 então isso é 422 no cadastro. Em `source="dependency"`/`"const"` não se aplica: esses parâmetros
 não entram no schema do modelo.
+
+**Segredo nunca na config.** Token, senha ou chave vão como `{{secret:NOME}}` (header, `auth` ou
+parâmetro `const`; numa tool python, `secret("NOME")`), e a pessoa cadastra o valor com
+`kuro secrets set NOME --value-env VAR`. Não peça nem escreva o valor. Leituras mascaram
+(`••••••••`) todo valor com nome de segredo; devolver a máscara num `apply` mantém o guardado.
+
+**Testes não gravam.** Num `dry_run`, só rodam as tools com `side_effect=false` (só leem) ou
+`dry_run_support=true` (a API trata o `X-Kuro-Dry-Run`); as outras devolvem
+"[teste] Não executada: ..." e nada é gravado. Classifique tool nova:
+`kuro tools set X side_effect=false`, ou `side_effect=true dry_run_support=true` se a API simula.
 
 Toda tool só alcança endereços **públicos**: o destino é resolvido e conferido antes de cada
 chamada (com a URL já montada, porque um parâmetro `location="path"` pode compor o host). Salvar

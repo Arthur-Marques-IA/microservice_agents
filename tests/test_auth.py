@@ -163,3 +163,13 @@ def test_health_continua_aberta_por_necessidade(app_com_auth):
 def test_panorama_dos_logs_exige_admin():
     """Expõe custo e falhas de todos os agentes: nada de rota aberta por esquecimento."""
     assert auth.required_scope("/observability/overview") == "admin"
+
+
+def test_health_diz_o_nome_do_ambiente(monkeypatch):
+    """Com mais de um Kuro, é por ele que a CLI, o MCP e o painel dizem em qual se está."""
+    from agent_service.api.routes import health
+
+    monkeypatch.setattr(get_settings(), "kuro_env_name", "prod")
+    assert health()["environment"] == "prod"
+    monkeypatch.setattr(get_settings(), "kuro_env_name", None)
+    assert "environment" not in health()

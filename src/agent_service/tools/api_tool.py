@@ -43,9 +43,11 @@ import httpx
 from agno.tools.function import Function
 
 from agent_service.field_schema import FieldSchemaError, object_schema, validate_composite
-from agent_service.tools import failures
+from agent_service.models.crypto import EncryptionNotConfiguredError
+from agent_service.tools import failures, secrets
 from agent_service.tools.context import DRY_RUN_DEPENDENCY, DRY_RUN_HEADER, get_dependencies, is_dry_run
 from agent_service.tools.egress import EgressBlockedError, acheck_url, check_url_template
+from agent_service.tools.sensitive import AUTH_SECRET_FIELDS, is_sensitive
 
 Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 ParamLocation = Literal["query", "path", "header", "body"]
@@ -303,9 +305,14 @@ def _apply_auth(headers: dict[str, str], auth: dict[str, Any]) -> None:
 
 
 async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any], tool_name: str = "") -> str:
+    # Valores de segredo enviados nesta chamada: saem de tudo que volta ao modelo e ao
+    # trace (muita API devolve os headers recebidos; um erro do httpx traz a URL).
+    sent_secrets: list[str] = []
+
     def failed(output: str, kind: failures.FailureKind, http_status: int | None = None) -> str:
         # O texto vai para o modelo como sempre; o registro é o que o trace lê
         # para marcar a span como falha (ver `tools/failures.py`).
+        output = secrets.redact(output, sent_secrets)
         failures.record_failure(tool_name, output, kind, http_status)
         return output
 
@@ -315,9 +322,24 @@ async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any], too
     if error is not None:
         return failed(error, "config" if error.startswith("Erro de configuração") else "invalid_arguments")
 
+    # `{{secret:NOME}}` resolvido a cada chamada, não na montagem da tool: trocar o valor
+    # vale na próxima chamada, sem editar a tool (o cache é pelo `updated_at` dela).
+    found: dict[str, str] = {}
+    const_names = {p["name"] for p in config["parameters"] if p.get("source") == "const"}
+    try:
+        for name in const_names & arguments.keys():
+            arguments[name] = secrets.resolve(arguments[name], found)
+        headers = {k: secrets.resolve(v, found) for k, v in (config.get("headers") or {}).items()}
+        auth = secrets.resolve(config.get("auth") or {"type": "none"}, found)
+    except (secrets.SecretError, EncryptionNotConfiguredError) as exc:
+        return failed(f"Erro de configuração: {exc}", "config")
+    sent_secrets.extend(found.values())
+    sent_secrets.extend(str(auth[f]) for f in AUTH_SECRET_FIELDS if auth.get(f))
+    sent_secrets.extend(v for k, v in headers.items() if is_sensitive(k))
+    sent_secrets.extend(str(arguments[n]) for n in const_names & arguments.keys() if is_sensitive(n))
+
     method = config["method"]
     url = config["url"]
-    headers = dict(config.get("headers") or {})
     query: dict[str, Any] = {}
     path_values: dict[str, Any] = {}
     body: dict[str, Any] = {}
@@ -354,7 +376,6 @@ async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any], too
     if is_dry_run():
         headers[DRY_RUN_HEADER] = "true"
 
-    auth = config.get("auth") or {"type": "none"}
     _apply_auth(headers, auth)
     basic_auth = httpx.BasicAuth(auth["username"], auth["password"]) if auth.get("type") == "basic" else None
 
@@ -382,7 +403,7 @@ async def _call_api(config: dict[str, Any], model_arguments: dict[str, Any], too
         pass
     if len(text) > _MAX_RESPONSE_CHARS:
         text = text[:_MAX_RESPONSE_CHARS] + f"... (truncado, {len(response.text)} chars no total)"
-    output = f"HTTP {response.status_code}: {text}"
+    output = secrets.redact(f"HTTP {response.status_code}: {text}", sent_secrets)
     kind = failures.classify_http(response.status_code)
     return failed(output, kind, response.status_code) if kind else output
 

@@ -228,6 +228,14 @@ O Playground do console manda `dry_run` ligado por padrão. Na CLI, use `--dry-r
 `kuro analyze`, `kuro eval` e `kuro tools invoke`. Tool com efeito colateral (cobrança, acordo,
 mensagem) deve tratar o header e, nesse caso, só registrar a intenção.
 
+**Num teste, só roda a tool que pode rodar nele.** Uma API que ignora o header gravaria de verdade,
+então o Kuro não confia: num `dry_run`, tool com `side_effect=true` ou ainda não classificada **não é
+chamada**, a menos que declare `dry_run_support=true` (a API dela trata o header). No lugar da
+resposta, o modelo recebe "[teste] Não executada: ...", com os argumentos que mandaria. Marque
+`side_effect=false` nas que só leem e `dry_run_support=true` nas que gravam e simulam no teste;
+`kuro tools list` mostra o que roda num teste. Uma builtin com efeito colateral (o `email`) nunca
+roda em teste.
+
 ### Provisionar tools e agentes
 
 Não faça "GET para ver se existe, POST se der 404". Use o `apply`, que cria ou atualiza:
@@ -371,6 +379,8 @@ final class KuroClient
 - [ ] `MAX_CONCURRENT_RUNS` está dimensionado para o pico de conversas simultâneas.
 - [ ] `kuro health` mostra o cadastro de chaves de modelo ligado e o provedor do agente com credencial.
 - [ ] O modelo do agente é estável (nem `preview` nem `alias` em `kuro providers models`).
-- [ ] Tools com efeito colateral tratam `X-Kuro-Dry-Run`, e os testes usam `dry_run`.
+- [ ] Tools com efeito colateral tratam `X-Kuro-Dry-Run` e estão com `dry_run_support=true`; as que
+      só leem, com `side_effect=false`; e os testes usam `dry_run`.
+- [ ] Nenhum token escrito na config de uma tool: `{{secret:NOME}}` e `kuro secrets set NOME`.
 - [ ] Se as tools chamam o seu sistema pela rede Docker, a rede está no
       `docker-compose.override.yml` e o host em `TOOL_EGRESS_ALLOWLIST`.

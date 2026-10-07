@@ -349,15 +349,20 @@ function SessionItem({
 
 type HealthStatus = "checking" | "online" | "offline";
 
-function useBackendHealth(): HealthStatus {
+function useBackendHealth(): { status: HealthStatus; environment: string | null } {
   const [status, setStatus] = useState<HealthStatus>("checking");
+  const [environment, setEnvironment] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     async function check() {
       try {
         const res = await fetch(apiUrl("/api/health"), { cache: "no-store" });
-        if (!cancelled) setStatus(res.ok ? "online" : "offline");
+        const body = (await res.json().catch(() => ({}))) as { environment?: string | null };
+        if (!cancelled) {
+          setStatus(res.ok ? "online" : "offline");
+          if (res.ok) setEnvironment(body.environment ?? null);
+        }
       } catch {
         if (!cancelled) setStatus("offline");
       }
@@ -370,7 +375,7 @@ function useBackendHealth(): HealthStatus {
     };
   }, []);
 
-  return status;
+  return { status, environment };
 }
 
 const HEALTH_LABELS: Record<HealthStatus, string> = {
@@ -380,7 +385,7 @@ const HEALTH_LABELS: Record<HealthStatus, string> = {
 };
 
 function SidebarFooter({ collapsed }: { collapsed: boolean }) {
-  const health = useBackendHealth();
+  const { status: health, environment } = useBackendHealth();
   const [theme, setTheme] = useTheme();
   const { userId, publicApiUrl } = useWorkspace();
   const toast = useToast();
@@ -403,7 +408,7 @@ function SidebarFooter({ collapsed }: { collapsed: boolean }) {
           "flex min-w-0 flex-1 items-center gap-2 px-2 text-xs text-muted-foreground",
           collapsed && "justify-center px-0"
         )}
-        title={`${HEALTH_LABELS[health]} · ${publicApiUrl}`}
+        title={`${HEALTH_LABELS[health]}${environment ? ` · ${environment}` : ""} · ${publicApiUrl}`}
         role="status"
       >
         <span
@@ -415,6 +420,12 @@ function SidebarFooter({ collapsed }: { collapsed: boolean }) {
           )}
         />
         {!collapsed && <span className="truncate">{HEALTH_LABELS[health]}</span>}
+        {/* KURO_ENV_NAME: com mais de um Kuro, diz em qual se está mexendo. */}
+        {!collapsed && environment && (
+          <span className="shrink-0 rounded border border-primary/40 px-1.5 font-mono text-[10px] font-medium text-primary">
+            {environment}
+          </span>
+        )}
       </div>
 
       <DropdownMenu

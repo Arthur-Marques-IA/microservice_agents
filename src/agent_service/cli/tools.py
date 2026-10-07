@@ -26,17 +26,21 @@ from agent_service.cli.common import (
 app = typer.Typer(help="Tools: listar, ver, criar/editar (apply), invocar, remover.")
 
 # `kind` fica de fora: mudar o tipo de uma tool existente é criar outra tool.
-EDITABLE_FIELDS = ("label", "description", "config", "enabled", "side_effect")
+EDITABLE_FIELDS = ("label", "description", "config", "enabled", "side_effect", "dry_run_support")
 
 
 def _render_list(tools: list[dict[str, Any]]) -> None:
     table = Table(show_edge=False, header_style="bold")
-    for column in ("tool_name", "kind", "label", "ativa", "efeito colateral"):
+    for column in ("tool_name", "kind", "label", "ativa", "efeito colateral", "no teste"):
         table.add_column(column)
     for t in tools:
         seed = " [dim](seed)[/]" if t["is_seed"] else ""
         efeito = {True: "sim", False: "não"}.get(t.get("side_effect"), "[yellow]não classificada[/]")
-        table.add_row(f"[cyan]{t['tool_name']}[/]{seed}", t["kind"], t["label"], "sim" if t["enabled"] else "[red]não[/]", efeito)
+        # Num dry_run, roda só o que não grava ou o que declara tratar o teste (tools/dry_run.py).
+        no_teste = "roda" if t.get("side_effect") is False or t.get("dry_run_support") else "[yellow]não roda[/]"
+        table.add_row(
+            f"[cyan]{t['tool_name']}[/]{seed}", t["kind"], t["label"], "sim" if t["enabled"] else "[red]não[/]", efeito, no_teste
+        )
     console.print(table)
 
 

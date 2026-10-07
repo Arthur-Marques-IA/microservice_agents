@@ -56,6 +56,8 @@ services:
       # nenhum — é por onde se dá manutenção quando o console está desligado.
       KURO_API_URL: http://localhost:8000
       KURO_API_KEY: ${ADMIN_API_KEY:-}
+      # Nome deste ambiente (prod, homolog...): no /health, no MCP, no kuro dash e no console.
+      KURO_ENV_NAME: ${KURO_ENV_NAME:-}
     volumes:
       # A URL e a CA raiz que o profile `ip` publica (só o público). É daqui que o
       # `kuro mcp-config` monta a conexão por IP; sem o profile, fica vazio.

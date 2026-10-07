@@ -48,6 +48,9 @@ tool_definitions = SATable(
     # hash da configuração do agente de propósito: classificar não cria versão nova.
     # `None` = ainda não classificada (o console avisa). Ver a fila de revisão nos Logs.
     Column("side_effect", Boolean, nullable=True),
+    # A API da tool trata o `X-Kuro-Dry-Run`? Num teste, tool com efeito colateral (ou não
+    # classificada) só é chamada com isto `True` (`tools/dry_run.py`). `None` = não declarado.
+    Column("dry_run_support", Boolean, nullable=True),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column(
         "updated_at",
@@ -92,6 +95,7 @@ def create_tool(
     enabled: bool = True,
     is_seed: bool = False,
     side_effect: bool | None = None,
+    dry_run_support: bool | None = None,
 ) -> dict[str, Any]:
     engine = get_db().db_engine
     with engine.begin() as conn:
@@ -105,6 +109,7 @@ def create_tool(
                 enabled=enabled,
                 is_seed=is_seed,
                 side_effect=side_effect,
+                dry_run_support=dry_run_support,
             )
         )
     tool = get_tool(tool_name)
@@ -127,8 +132,9 @@ def update_tool(
     config: dict[str, Any] | None = None,
     enabled: bool | None = None,
     side_effect: Any = _UNSET,
+    dry_run_support: Any = _UNSET,
 ) -> dict[str, Any]:
-    """`side_effect`: omitido = não mexe; `None` volta para "não classificada"."""
+    """`side_effect` e `dry_run_support`: omitido = não mexe; `None` volta para "não declarado"."""
     current = get_tool(tool_name)
     if current is None:
         raise ToolNotFoundError(tool_name)
@@ -144,6 +150,8 @@ def update_tool(
         values["enabled"] = enabled
     if side_effect is not _UNSET:
         values["side_effect"] = side_effect
+    if dry_run_support is not _UNSET:
+        values["dry_run_support"] = dry_run_support
 
     if values:
         engine = get_db().db_engine

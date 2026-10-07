@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     app_name: str = "agent-service"
     app_host: str = "0.0.0.0"
     app_port: int = 8000
+    kuro_env_name: str | None = None
+    """`KURO_ENV_NAME`: o nome deste ambiente (`prod`, `homolog`, `local`). Aparece no `/health`,
+    nas instruções do MCP, no `kuro dash` e no console — com mais de um Kuro, é o que diz em
+    qual se está mexendo. Vazio = não mostra nada."""
 
     # Banco de dados (memória comum, sessões, tracing, knowledge)
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/agent_service"

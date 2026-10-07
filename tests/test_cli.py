@@ -892,3 +892,28 @@ def test_sem_insecure_nao_ha_aviso(api):
     routes[("GET", "/agents")] = httpx.Response(200, json=[AGENT])
     result = _run("--json", "agents", "list")
     assert "--insecure" not in (result.stderr or "")
+
+
+# -- segredos das tools: o valor entra, nunca sai, e nunca vai na linha de comando ----
+
+
+def test_secrets_set_le_o_valor_do_ambiente_e_nao_de_argumento(api, monkeypatch):
+    routes, calls = api
+    routes[("PUT", "/secrets/REGENTE_TOKEN")] = httpx.Response(200, json={"name": "REGENTE_TOKEN", "created": True, "hint": "····9f8e"})
+    monkeypatch.setenv("TOKEN_REGENTE", "tok-123-9f8e")
+    result = _run("--json", "secrets", "set", "REGENTE_TOKEN", "--value-env", "TOKEN_REGENTE", "--description", "Regente")
+    assert result.exit_code == 0, result.output
+    assert json.loads(calls[-1].content) == {"value": "tok-123-9f8e", "description": "Regente"}
+    assert "tok-123" not in result.stdout
+
+
+def test_secrets_set_sem_valor_e_sem_terminal_falha_sem_esperar(api):
+    result = _run("--json", "secrets", "set", "REGENTE_TOKEN", input="")
+    assert result.exit_code == 2 and "--value-env" in json.loads(result.stderr)["error"]
+
+
+def test_secrets_delete_pede_yes_sem_terminal(api):
+    routes, calls = api
+    assert _run("--json", "secrets", "delete", "X").exit_code == 2
+    routes[("DELETE", "/secrets/X")] = httpx.Response(204)
+    assert _run("--json", "secrets", "delete", "X", "--yes").exit_code == 0

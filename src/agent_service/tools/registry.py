@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Any
 
 from agent_service.config import get_settings
-from agent_service.tools import store
+from agent_service.tools import dry_run, store
 from agent_service.tools.api_tool import ApiToolConfigError, build_api_function
 from agent_service.tools.catalog import get_builtin_spec
 from agent_service.tools.python_tool import PythonToolConfigError, PythonToolDisabledError, compile_python_tool
@@ -59,7 +59,7 @@ def _build(row: dict[str, Any]) -> Any:
     raise ToolBuildError(f"Tool {row['tool_name']!r}: kind desconhecido {kind!r}")
 
 
-def _resolve_one(name: str) -> tuple[Any, datetime]:
+def _resolve_row(name: str) -> tuple[Any, dict[str, Any]]:
     row = store.get_tool(name)
     if row is None:
         raise UnknownToolError(f"Tool desconhecida: {name!r}")
@@ -68,10 +68,15 @@ def _resolve_one(name: str) -> tuple[Any, datetime]:
 
     cached = _cache.get(name)
     if cached is not None and cached[1] == row["updated_at"]:
-        return cached[0], row["updated_at"]
+        return cached[0], row
 
     built = _build(row)
     _cache[name] = (built, row["updated_at"])
+    return built, row
+
+
+def _resolve_one(name: str) -> tuple[Any, datetime]:
+    built, row = _resolve_row(name)
     return built, row["updated_at"]
 
 
@@ -85,6 +90,21 @@ def resolve_tools_with_stamp(names: list[str]) -> tuple[list[Any], tuple[datetim
     modelo vê vive dentro do `Function`, que ficou preso no `Agent` construído)."""
     resolved = [_resolve_one(name) for name in names]
     return [built for built, _ in resolved], tuple(stamp for _, stamp in resolved)
+
+
+def resolve_for_agent(names: list[str]) -> tuple[list[Any], tuple[datetime, ...], Any]:
+    """Como `resolve_tools_with_stamp`, mais o `tool_hook` que barra, num teste, as tools
+    que não podem rodar nele (`tools/dry_run.py`); `None` se todas podem. Mudar
+    `side_effect` ou `dry_run_support` muda o `updated_at`, então o agente é refeito."""
+    resolved = [_resolve_row(name) for name in names]
+    blocked: dict[str, tuple[str, str]] = {}
+    for built, row in resolved:
+        reason = dry_run.block_reason(row)
+        if reason is not None:
+            for function_name in dry_run.function_names(row, built):
+                blocked[function_name] = (row["tool_name"], reason)
+    hook = dry_run.guard_hook(blocked) if blocked else None
+    return [built for built, _ in resolved], tuple(row["updated_at"] for _, row in resolved), hook
 
 
 def tool_exists(name: str) -> bool:

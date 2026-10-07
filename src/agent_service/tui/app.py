@@ -272,7 +272,11 @@ class Masthead(Horizontal):
     def sync(self) -> None:
         app: KuroDash = self.app  # type: ignore[assignment]
         version = f" · v{app.version}" if app.version else ""
-        self.query_one(".where", Static).update(Text(f"{app.client.base_url}{version}", style=MUTED))
+        where = Text()
+        if app.environment:
+            where.append(f"{app.environment} ", style=f"bold {BRAND}")
+        where.append(f"{app.client.base_url}{version}", style=MUTED)
+        self.query_one(".where", Static).update(where)
         self.query_one(".conn", Static).update(app.connection())
         on_ = app.animate
         self.query_one(AnimToggle).update(
@@ -781,6 +785,7 @@ class KuroDash(App):
         self.interval = interval
         self.agent = agent
         self.version: str | None = None
+        self.environment: str | None = None  # o `KURO_ENV_NAME` do serviço, no cabeçalho
         self.paused = False
         # `TEXTUAL_ANIMATIONS=none` já abre com o corvo parado.
         self.animate = self.animation_level != "none"
@@ -809,14 +814,15 @@ class KuroDash(App):
     @work(thread=True)
     def check_service(self) -> None:
         try:
-            version = self.client.health().get("version")
+            health = self.client.health()
         except (ApiError, ServiceUnavailable) as exc:
             self.call_from_thread(self.feed_failed, exc)
             return
-        self.call_from_thread(self.service_up, version)
+        self.call_from_thread(self.service_up, health.get("version"), health.get("environment"))
 
-    def service_up(self, version: str | None) -> None:
+    def service_up(self, version: str | None, environment: str | None = None) -> None:
         self.version = version
+        self.environment = environment
         self.sync_masthead()
 
     # -- estado do painel (o que o corvo e o cabeçalho mostram) ---------------------

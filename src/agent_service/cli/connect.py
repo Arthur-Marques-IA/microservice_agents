@@ -81,7 +81,12 @@ def mcp_command(ssh: Ssh, container: str) -> list[str]:
     `KURO_MCP_TARGET`: a máquina, para a `health` e as instruções dizerem qual Kuro é este
     (com vários registrados, o modelo precisa saber em qual está mexendo)."""
     target = f"KURO_MCP_TARGET={ssh.destination}" + (f":{ssh.port}" if ssh.port else "")
-    return [*ssh.base(), "docker", "exec", "-i", "-e", "KURO_MCP_LOCAL_FILES=0", "-e", target, container, "kuro-mcp"]
+    # Keepalive: sem tráfego, um NAT ou firewall no caminho derruba a conexão parada, e o
+    # cliente MCP vê "Connection closed" na próxima chamada.
+    ssh_cmd = ssh.base()
+    keepalive = ["-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"]
+    ssh_cmd = [*ssh_cmd[:-1], *keepalive, ssh_cmd[-1]]
+    return [*ssh_cmd, "docker", "exec", "-i", "-e", "KURO_MCP_LOCAL_FILES=0", "-e", target, container, "kuro-mcp"]
 
 
 def mcp_env() -> dict[str, str]:

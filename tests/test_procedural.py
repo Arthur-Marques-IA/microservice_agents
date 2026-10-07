@@ -191,6 +191,7 @@ def tool_de_acao():
         label="Abrir chamado",
         description=None,
         side_effect=True,
+        dry_run_support=True,  # a API trata o teste; sem isto a ação nem rodaria num dry_run
         config={
             "method": "POST",
             "url": "https://exemplo.test/chamados",
@@ -422,6 +423,19 @@ def test_dry_run_chega_na_acao_e_fica_fora_do_funil(agente, monkeypatch, chamada
     assert chamadas_http[0].headers["X-Kuro-Dry-Run"] == "true"
     assert get_procedure_funnel(agente)["total"] == 0
     assert get_procedure_funnel(agente, include_dry_run=True)["total"] == 1
+
+
+def test_dry_run_nao_chama_acao_que_nao_trata_o_teste(agente, monkeypatch, chamadas_http):
+    """A API que ignora o `X-Kuro-Dry-Run` gravaria de verdade num teste: sem
+    `dry_run_support`, a ação nem é chamada, e o resultado diz que foi só simulada."""
+    tool_store.update_tool("abrir_chamado_teste", dry_run_support=None)
+    modelo = Modelo(monkeypatch)
+    modelo.responde(cpf="12345678901", nome="Ana", categoria="tv")
+    _chat(agente, "dados", sessao="s-sem-suporte", dry_run=True)
+    modelo.responde(confirmacao="sim")
+    r = _chat(agente, "sim", sessao="s-sem-suporte", dry_run=True)
+    assert chamadas_http == []
+    assert "Não executada" in str(r.state["result"]["actions"]["abrir"])
 
 
 def test_stream_manda_o_estado_antes_do_done(agente, monkeypatch):

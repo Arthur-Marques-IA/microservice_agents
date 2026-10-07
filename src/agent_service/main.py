@@ -20,6 +20,7 @@ from agent_service.api.model_credentials_routes import router as model_credentia
 from agent_service.api.model_providers_routes import router as model_providers_router
 from agent_service.api.observability_routes import router as observability_router
 from agent_service.api.routes import router
+from agent_service.api.secrets_routes import router as secrets_router
 from agent_service.api.tools_routes import router as tools_router
 from agent_service.config import get_settings
 from agent_service.db import get_db
@@ -51,6 +52,7 @@ base_app.include_router(agents_router)
 base_app.include_router(collections_router)
 base_app.include_router(integration_router)
 base_app.include_router(tools_router)
+base_app.include_router(secrets_router)
 base_app.include_router(observability_router)
 base_app.include_router(model_providers_router)
 base_app.include_router(model_credentials_router)

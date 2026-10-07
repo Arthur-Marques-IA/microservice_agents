@@ -233,16 +233,23 @@ def health() -> dict[str, str]:
 
     `model_credentials` diz se dá para cadastrar chaves de provedor: sem
     `CREDENTIALS_ENCRYPTION_KEY`, o `/model-credentials` responde 503. O serviço
-    sobe mesmo assim — o google ainda funciona pela `GOOGLE_API_KEY` do ambiente."""
+    sobe mesmo assim — o google ainda funciona pela `GOOGLE_API_KEY` do ambiente.
+
+    `environment` é o `KURO_ENV_NAME`, quando definido: com mais de um Kuro, é por ele que
+    quem chama (a CLI, o MCP, o painel) diz em qual está."""
     from agent_service.api.auth import auth_enabled
+    from agent_service.config import get_settings
     from agent_service.models.crypto import encryption_status
 
-    return {
+    report = {
         "status": "ok",
         "version": service_version(),
         "auth": "enabled" if auth_enabled() else "disabled",
         "model_credentials": encryption_status(),
     }
+    if environment := (get_settings().kuro_env_name or "").strip():
+        report["environment"] = environment
+    return report
 
 
 def service_version() -> str:

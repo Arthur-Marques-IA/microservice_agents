@@ -15,7 +15,10 @@ Três regras de projeto:
   levaria a chave pelo contexto do modelo; isso fica na CLI e no console.
 - **Testes são `dry_run` por padrão** (`chat`, `analyze`, `tool_invoke`, `eval`):
   um agente testando outro não deveria fechar um acordo de verdade por engano.
-  As tools recebem `X-Kuro-Dry-Run: true` e decidem o que simular.
+  Num teste, tool com efeito colateral só é chamada se declara que trata o
+  `X-Kuro-Dry-Run` (`dry_run_support`); as outras não rodam (`tools/dry_run.py`).
+- **Segredo não passa por aqui.** Uma tool referencia `{{secret:NOME}}`, e o valor é
+  cadastrado por quem opera (`kuro secrets set`); o MCP só lista os nomes.
 
 As sessões de chat abertas por aqui não usam `~/.kuro/sessions.json` (o arquivo
 da CLI): `chat` devolve o `session_id`, e quem chama o repassa para continuar.
@@ -63,7 +66,10 @@ Opera o Kuro (agent-service): agentes de IA, tools, execuções, bases de conhec
 Fluxo seguro para mudar um agente em produção: agent_promote(origem=prod, destino=<prod>-draft)
 → agent_set/agent_apply no draft → eval(draft, compare_with=prod) → agent_promote(draft → prod).
 Antes de editar, agent_get(editable=true) devolve exatamente os campos aceitos.
-chat/analyze/tool_invoke/eval rodam em dry_run por padrão (as tools sabem que é teste).
+chat/analyze/tool_invoke/eval rodam em dry_run por padrão. Nele, tool com efeito colateral só roda se
+declara dry_run_support=true; as outras devolvem "[teste] Não executada" — nada foi gravado.
+Token ou senha numa tool: use {{secret:NOME}} na config e peça à pessoa `kuro secrets set NOME`;
+nunca escreva o valor no tool_apply. secrets_list mostra os nomes que já existem.
 Para continuar uma conversa, repasse o session_id que o chat devolveu.
 Remover, restaurar e promover pedem confirmação ao usuário — não tente contornar.
 Para investigar uma resposta ruim: runs_list(agent_type=...) → run_show(run_id).
@@ -190,16 +196,20 @@ def _files(local_files: bool) -> tuple[Callable[[str, str], str], Callable[[str,
 # -- servidor --------------------------------------------------------------------
 
 
-def build_server(client: Client, local_files: bool = True, target: str | None = None) -> MCPServer:
+def build_server(
+    client: Client, local_files: bool = True, target: str | None = None, environment: str | None = None
+) -> MCPServer:
     """`local_files=False` quando o servidor MCP roda junto do serviço, e não na máquina
     de quem usa: os parâmetros que recebem um caminho de arquivo passam a ser recusados.
 
     `target` é a máquina que este servidor opera, como quem conectou a chama (`root@vps`):
     de dentro do container a URL é sempre `localhost:8000`, igual em toda máquina, e com
-    vários Kuros registrados o modelo precisa saber em qual está mexendo."""
+    vários Kuros registrados o modelo precisa saber em qual está mexendo. `environment` é o
+    `KURO_ENV_NAME` do serviço (`prod`, `local`), quando definido."""
     instructions = INSTRUCTIONS
-    if target:
-        instructions += f"Este servidor MCP opera o Kuro em {target}.\n"
+    if target or environment:
+        where = " ".join(p for p in (f"o Kuro de {environment}" if environment else "o Kuro", f"em {target}" if target else "") if p)
+        instructions += f"Este servidor MCP opera {where}. Confira antes de mudar algo.\n"
     if not local_files:
         instructions += NO_LOCAL_FILES.format(inline="document, cases, rules, text") + "\n"
     server = MCPServer(name="kuro", title="Kuro", instructions=instructions, version=_version())
@@ -213,6 +223,8 @@ def build_server(client: Client, local_files: bool = True, target: str | None = 
         report: dict[str, Any] = {"url": client.base_url, "service": _call(client.health)}
         if target:
             report = {"target": target, **report}
+        if environment or (report["service"] or {}).get("environment"):
+            report = {"environment": environment or report["service"]["environment"], **report}
         for key, fn in (("observability", client.observability_config), ("credentials", client.list_credentials)):
             try:
                 report[key] = fn()
@@ -537,7 +549,7 @@ def build_server(client: Client, local_files: bool = True, target: str | None = 
     @server.tool(annotations=READ)
     def tools_list() -> dict[str, Any]:
         """Tools cadastradas (as que um agente pode usar em `tools`)."""
-        keys = ("tool_name", "kind", "label", "enabled", "side_effect", "is_seed")
+        keys = ("tool_name", "kind", "label", "enabled", "side_effect", "dry_run_support", "is_seed")
         return {"items": [{k: t.get(k) for k in keys} for t in _call(client.list_tools)]}
 
     @server.tool(annotations=READ)
@@ -550,6 +562,12 @@ def build_server(client: Client, local_files: bool = True, target: str | None = 
         return detail
 
     @server.tool(annotations=READ)
+    def secrets_list() -> dict[str, Any]:
+        """Nomes dos segredos que as tools podem referenciar ({{secret:NOME}}) e quem usa cada um.
+        O valor não sai do serviço; cadastrar ou trocar é com a pessoa: `kuro secrets set NOME`."""
+        return {"items": _call(client.list_secrets)}
+
+    @server.tool(annotations=READ)
     def tool_catalog() -> dict[str, Any]:
         """Toolkits builtin disponíveis para criar uma tool kind=builtin."""
         return {"items": _call(client.tool_catalog)}
@@ -558,7 +576,12 @@ def build_server(client: Client, local_files: bool = True, target: str | None = 
     def tool_apply(definition: dict[str, Any]) -> dict[str, Any]:
         """Cria a tool (precisa de tool_name e kind: builtin | api | python) ou atualiza
         os campos informados. O kind de uma tool existente não muda. Ver AGENTS.md,
-        "Tools: de onde vem cada parâmetro" (source model | dependency | const)."""
+        "Tools: de onde vem cada parâmetro" (source model | dependency | const).
+        Token, senha ou chave: `{{secret:NOME}}` no header, no auth ou no parâmetro const —
+        nunca o valor (a pessoa cadastra com `kuro secrets set NOME`). Valores que a leitura
+        devolveu mascarados (••••••••) podem voltar como estão: o servidor mantém o guardado.
+        `side_effect` (grava algo?) e `dry_run_support` (a API trata o X-Kuro-Dry-Run?) decidem
+        se a tool roda num teste."""
         tool_name = definition.get("tool_name")
         if not isinstance(tool_name, str) or not tool_name:
             raise ToolError("a definição precisa do campo tool_name")
@@ -750,10 +773,13 @@ def main() -> None:
     # `docker exec`), então um caminho de arquivo seria do servidor, não de quem pediu.
     local_files = os.environ.get("KURO_MCP_LOCAL_FILES", "1").strip().lower() not in ("0", "false", "no")
     target = os.environ.get("KURO_MCP_TARGET", "").strip() or None
+    # Pelo `kuro connect` o processo roda no container, que recebe o `.env` inteiro: o nome
+    # vem dele, sem chamar a API na subida (o cliente MCP dá uns 30 s para conectar).
+    environment = os.environ.get("KURO_ENV_NAME", "").strip() or None
     # Uma linha INFO no stderr por chamada à API: vira ruído no log do cliente MCP e, pelo
     # `kuro connect`, no terminal de quem conecta. Erro de conexão já volta na tool.
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    build_server(client_from_env(timeout=timeout), local_files=local_files, target=target).run("stdio")
+    build_server(client_from_env(timeout=timeout), local_files=local_files, target=target, environment=environment).run("stdio")
 
 
 if __name__ == "__main__":

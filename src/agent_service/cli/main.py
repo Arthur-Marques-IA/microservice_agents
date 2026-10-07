@@ -16,6 +16,7 @@ import typer
 from rich.table import Table
 
 from agent_service.cli import agents, collections, runs, sessions, tools
+from agent_service.cli import secrets as secrets_cli
 from agent_service.cli.analyze import analyze
 from agent_service.cli.chat import chat
 from agent_service.cli.connect import connect
@@ -48,6 +49,7 @@ app.add_typer(tools.app, name="tools")
 app.add_typer(runs.app, name="runs")
 app.add_typer(collections.app, name="collections")
 app.add_typer(sessions.app, name="sessions")
+app.add_typer(secrets_cli.app, name="secrets")
 app.command("chat")(chat)
 app.command("analyze")(analyze)
 app.command("eval")(eval_command)

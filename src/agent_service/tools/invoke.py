@@ -12,6 +12,7 @@ import inspect
 from typing import Any
 
 from agent_service.config import get_settings
+from agent_service.tools import dry_run as dry_run_policy
 from agent_service.tools import failures, registry, store
 from agent_service.tools.context import dependencies_scope
 from agent_service.tools.registry import ToolBuildError
@@ -59,6 +60,12 @@ async def invoke_tool(
         raise ToolUnavailableError(f"Tool {tool_name!r} está desativada", 409)
     if row["kind"] == "python" and not get_settings().custom_python_tools_enabled:
         raise ToolUnavailableError("Tools Python estão desligadas (CUSTOM_PYTHON_TOOLS_ENABLED=false)", 403)
+
+    # Num teste, a tool que não pode rodar nele nem é construída (`tools/dry_run.py`).
+    reason = dry_run_policy.block_reason(row) if dry_run else None
+    if reason is not None:
+        result = dry_run_policy.skipped_message(tool_name, reason, arguments)
+        return {"ok": True, "result": result, "error": None, "failure": None, "http_status": None, "dry_run_skipped": True}
 
     try:
         built = registry.build_fresh(row)

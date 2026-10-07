@@ -120,6 +120,9 @@ export function ToolEditorDialog({
     tool?.side_effect === true ? "yes" : tool?.side_effect === false ? "no" : ""
   );
   const sideEffectValue = sideEffect === "" ? null : sideEffect === "yes";
+  const [dryRunSupport, setDryRunSupport] = useState<boolean>(tool?.dry_run_support === true);
+  // Uma toolkit (builtin) não recebe o X-Kuro-Dry-Run: não tem como simular.
+  const dryRunSupportValue = kind === "builtin" ? null : dryRunSupport || null;
 
   const [catalog, setCatalog] = useState<BuiltinCatalogEntry[] | null>(null);
   const [pythonEnabled, setPythonEnabled] = useState<boolean | null>(null);
@@ -207,6 +210,7 @@ export function ToolEditorDialog({
           description: description.trim() || null,
           enabled,
           side_effect: sideEffectValue,
+          dry_run_support: dryRunSupportValue,
           config: buildConfig(),
         };
         await requestJson(`/api/tools/${encodeURIComponent(tool.tool_name)}`, {
@@ -222,6 +226,7 @@ export function ToolEditorDialog({
           description: description.trim() || null,
           enabled,
           side_effect: sideEffectValue,
+          dry_run_support: dryRunSupportValue,
           config: buildConfig(),
         };
         await requestJson("/api/tools", { method: "POST", json: payload, fallbackError: "Falha ao criar a tool" });
@@ -307,8 +312,9 @@ export function ToolEditorDialog({
           hint={
             sideEffect === "" ? (
               <span className="text-warning">
-                Não classificada. Pode salvar assim, mas defina depois: a fila de revisão dos Logs usa isto para
-                destacar as execuções que gravaram, cobraram ou enviaram algo.
+                Não classificada. Pode salvar assim, mas defina depois: até lá ela não roda nos testes
+                (Playground, dry_run), e a fila de revisão dos Logs usa isto para destacar as execuções que
+                gravaram, cobraram ou enviaram algo.
               </span>
             ) : (
               "Usado na fila de revisão dos Logs para destacar as execuções que mudaram algo no sistema chamado."
@@ -321,6 +327,25 @@ export function ToolEditorDialog({
             <option value="no">Não — só consulta</option>
           </Select>
         </Field>
+
+        {kind !== "builtin" && sideEffect !== "no" && (
+          <label className="flex w-fit cursor-pointer items-start gap-2 text-[13px]">
+            <input
+              type="checkbox"
+              checked={dryRunSupport}
+              onChange={(e) => setDryRunSupport(e.target.checked)}
+              className="mt-0.5 accent-primary"
+            />
+            <span>
+              A API trata o teste (header <code className="font-mono text-xs">X-Kuro-Dry-Run</code>): simula em vez de
+              gravar
+              <span className="block text-xs text-muted-foreground">
+                Desmarcada, a tool não é chamada nos testes (Playground, dry_run): o agente recebe um aviso no lugar da
+                resposta. Marque só depois de conferir que a API respeita o header.
+              </span>
+            </span>
+          </label>
+        )}
 
         <div className="border-t border-border pt-4">
           {kind === "builtin" && (
