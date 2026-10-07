@@ -5,7 +5,6 @@
 é opcional), então tudo que funciona no shell funciona em um script.
 """
 
-import json
 import os
 import shlex
 import sys
@@ -178,15 +177,26 @@ def mcp_config(
     ),
     show_key: bool = typer.Option(False, "--show-key", help="Mostra a chave inteira (senão ela sai mascarada)."),
     source: str = typer.Option(MCP_SOURCE, "--source", envvar="KURO_MCP_SOURCE", help="De onde o uvx instala o kuro-mcp."),
+    mode: str | None = typer.Option(
+        None, "--mode", "-m", help="1 ou ssh: pelo SSH (recomendado). 2 ou url: pela URL, com a chave de API. Sem isto, pergunta."
+    ),
+    target_os: str | None = typer.Option(
+        None, "--os", help="No modo URL com o profile `ip`: windows ou unix (Linux, macOS). Sem isto, pergunta."
+    ),
 ) -> None:
-    """Como conectar o servidor MCP do Kuro a este serviço, pronto para copiar. Rode no servidor:
-    `docker compose exec agent-service kuro mcp-config --show-key`.
+    """Como conectar o servidor MCP do Kuro a este serviço. Rode no servidor:
+    `docker compose exec agent-service kuro mcp-config`.
 
-    Primeiro o caminho pelo SSH (`kuro connect`), que não precisa de porta aberta; com um
-    domínio (`KURO_API_DOMAIN`, profile `tls`), o MCP por URL em `/mcp`; e o `kuro-mcp` local
-    apontado para a URL (o domínio ou, sem domínio, o HTTPS por IP do profile `ip`, com o
-    certificado da CA para salvar). `--url` sobrepõe o endereço."""
+    Pergunta o modo e mostra só as instruções dele:
+    1. pelo SSH (`kuro connect`, na sua máquina): sem porta aberta e sem a chave de API fora do
+       servidor — o recomendado;
+    2. pela URL, com a chave de API: com domínio (`KURO_API_DOMAIN`, profile `tls`), o MCP em
+       `/mcp`; sem domínio, o HTTPS por IP do profile `ip`, com o certificado da CA para salvar.
+    Sem terminal, mostra o modo 1, ou o que `--mode` pedir; com --json, tudo."""
     st = state(ctx)
+    chosen = None if st.json_mode else _choose(st, mode, {"1": "ssh", "ssh": "ssh", "2": "url", "url": "url"}, MCP_MODES, "--mode")
+    # No modo da chave, ela vai inteira: mascarada, o comando não funcionaria.
+    show_key = show_key or chosen == "url"
     key = ctx.find_root().params.get("api_key") or ""
     url, url_source = _public_url(public_url, st.client.base_url)
     ip = _ip_https() if url_source == "ip" else None
@@ -231,9 +241,10 @@ def mcp_config(
     else:
         claude_cmd = claude_ps = f"claude mcp add kuro -s user --env KURO_API_URL={url}{tail}"
 
-    # Pelo SSH: o host público, quando se sabe qual é; o usuário do SSH, não (o do container não é).
+    # Pelo SSH: o host público, quando se sabe qual é. O usuário do SSH não (o do container não é o
+    # de quem entra na VPS): `root`, o mais comum numa VPS, com o aviso para trocar.
     host = url.split("://", 1)[-1].split("/", 1)[0].rsplit(":", 1)[0] if url_source in ("domain", "ip", "explicit") else ""
-    ssh_cmd = f'uvx --from "{package}" kuro connect usuario@{host or "servidor"}'
+    ssh_cmd = f'uvx --from "{package}" kuro connect root@{host or "seu-servidor"}'
     # Por URL só com certificado público: o Claude Code (Node) não confia na CA própria do
     # profile `ip`, e HTTP puro levaria a chave em texto claro.
     http_cmd = None
@@ -257,54 +268,99 @@ def mcp_config(
         "requires": "uv na máquina de quem opera (https://docs.astral.sh/uv/) e acesso de leitura ao repositório",
         "warnings": warnings,
     }
+    if st.json_mode:
+        emit(st, report)
+        return
 
-    def render(r: dict[str, Any]) -> None:
-        for w in r["warnings"]:
-            err_console.print(f"[yellow]aviso:[/] {w}", highlight=False)
-        # markup=False em tudo que é comando: o Rich leria `[mcp]` (de `agent-service[mcp]`)
-        # como marcação e o apagaria.
-        console.print("[bold]Servidor MCP do Kuro[/] — rode na sua máquina.\n")
-        console.print(
-            "[bold]Pelo SSH[/] (recomendado: não precisa de porta aberta, de certificado nem da chave na sua "
-            "máquina; precisa do uv). Troque `usuario` pelo seu usuário do SSH:"
-        )
-        console.print(r["ssh_command"], markup=False, highlight=False, soft_wrap=True)
-        if r["http_command"]:
-            console.print("\n[bold]Ou pela URL[/] (sem instalar nada; o serviço atende o MCP em /mcp):")
-            console.print(r["http_command"], markup=False, highlight=False, soft_wrap=True)
-        console.print(
-            "\n[bold]Ou com o kuro-mcp na sua máquina[/], falando com a URL"
-            + (" (a porta precisa estar aberta no firewall do provedor):" if r["setup"] else ":")
-        )
-        step = 1
-        if r["setup"]:
-            console.print(
-                f"[bold]{step}. Salve o certificado da CA deste servidor[/] (uma vez; é o que faz o HTTPS pelo IP "
-                "ser confiável). Ele veio pela sua sessão no servidor, então é o autêntico."
-            )
-            console.print("\n[dim]bash / zsh (Linux, macOS):[/]")
-            console.print(r["setup"]["bash"], markup=False, highlight=False, soft_wrap=True)
-            console.print("\n[dim]PowerShell (Windows):[/]")
-            console.print(r["setup"]["powershell"], markup=False, highlight=False, soft_wrap=True)
-            step += 1
-            console.print(f"\n[bold]{step}. Registre no Claude Code[/]:")
-            console.print("\n[dim]bash / zsh (Linux, macOS):[/]")
-            console.print(r["claude_command"], markup=False, highlight=False, soft_wrap=True)
-            console.print("\n[dim]PowerShell (Windows):[/]")
-            console.print(r["claude_command_powershell"], markup=False, highlight=False, soft_wrap=True)
-        else:
-            console.print(f"[bold]{step}. Claude Code[/] (um comando, no terminal):")
-            console.print(r["claude_command"], markup=False, highlight=False, soft_wrap=True)
-        if r["api_key_masked"]:
-            console.print("[dim]A chave está mascarada: rode de novo com --show-key para copiá-la.[/]")
-        extra = " e KURO_CA_BUNDLE (o caminho do certificado salvo)" if r["setup"] else ""
-        console.print(
-            f"\n[bold]Ou um .mcp.json[/] no projeto (a chave fica fora do arquivo; defina KURO_API_KEY{extra} no ambiente):"
-        )
-        console.print_json(json.dumps(r["mcp_json"]))
-        console.print("\n[dim]Confira no Claude Code com /mcp, e peça \"use a tool health do kuro\". Guia: docs/mcp.md[/]")
+    if chosen == "ssh":
+        _render_ssh(report)
+        return
+    shell = None
+    if ip and not http_cmd:
+        shell = _choose(st, target_os, {"1": "windows", "windows": "windows", "2": "unix", "unix": "unix"}, OS_CHOICES, "--os")
+    _render_url(report, shell)
 
-    emit(st, report, render)
+
+MCP_MODES = (
+    ("1", "Pelo SSH (recomendado)", "usa o seu acesso SSH a este servidor: sem porta aberta e sem a chave de API na sua máquina"),
+    ("2", "Pela URL, com a chave de API", "para quem não entra no servidor por SSH: precisa de domínio com HTTPS ou da porta aberta"),
+)
+OS_CHOICES = (
+    ("1", "Windows", "PowerShell"),
+    ("2", "Linux ou macOS", "bash ou zsh"),
+)
+
+
+def _choose(st: State, given: str | None, valid: dict[str, str], options: tuple, flag: str) -> str:
+    """O valor de `flag`, ou a pergunta numerada; sem terminal, a primeira opção."""
+    if given is not None:
+        value = valid.get(given.strip().lower())
+        if value is None:
+            fail(st, f"{flag} {given!r}: use {' ou '.join(sorted(valid))}", EXIT_USAGE)
+        return value
+    if not st.interactive:
+        return valid[options[0][0]]
+    console.print()
+    for number, label, hint in options:
+        console.print(f"  [bold]{number}[/]) {label} [dim]— {hint}[/]", highlight=False)
+    while True:
+        answer = typer.prompt("Escolha", default=options[0][0]).strip().lower()
+        if answer in valid:
+            console.print()
+            return valid[answer]
+        err_console.print(f"Responda {' ou '.join(n for n, _, _ in options)}.", highlight=False)
+
+
+def _print_command(command: str) -> None:
+    # markup=False: o Rich leria `[mcp]` (de `agent-service[mcp]`) como marcação e o apagaria.
+    console.print(f"  {command}", markup=False, highlight=False, soft_wrap=True)
+
+
+def _render_ssh(r: dict[str, Any]) -> None:
+    console.print("[bold]Na sua máquina[/] (PowerShell, bash ou zsh; precisa do uv):\n")
+    _print_command(r["ssh_command"])
+    console.print(
+        "\nTroque [bold]root[/] se você entra no servidor com outro usuário. O comando testa a conexão e "
+        "registra o MCP no Claude Code; se o SSH pedir senha, ele oferece instalar uma chave SSH.",
+        highlight=False,
+    )
+    console.print('Depois, numa sessão nova do Claude Code: "use a tool health do kuro".', highlight=False)
+
+
+def _render_url(r: dict[str, Any], shell: str | None) -> None:
+    for w in r["warnings"]:
+        err_console.print(f"[yellow]aviso:[/] {w}", highlight=False)
+    if r["http_command"]:
+        console.print("[bold]Na sua máquina[/] (o serviço atende o MCP em /mcp; não precisa instalar nada):\n")
+        _print_command(r["http_command"])
+    elif r["setup"] and shell:
+        windows = shell == "windows"
+        console.print("[bold]1. Salve o certificado da CA deste servidor[/] (uma vez; cole o bloco inteiro):\n")
+        for line in r["setup"]["powershell" if windows else "bash"].splitlines():
+            # Sem recuo: o `'@` do PowerShell e o `EOF` do bash só fecham no começo da linha.
+            console.print(line, markup=False, highlight=False, soft_wrap=True)
+        console.print("\n[bold]2. Registre no Claude Code[/] (precisa do uv):\n")
+        _print_command(r["claude_command_powershell" if windows else "claude_command"])
+        port = r["url"].rsplit(":", 1)[-1]
+        console.print(
+            f"\nA porta {port} precisa estar liberada no firewall do painel do provedor. Se a conexão não "
+            "responder, é ele: libere a porta lá, ou use o modo 1 (SSH).",
+            highlight=False,
+        )
+    elif r["url_source"] == "local":
+        console.print(
+            "Este servidor não tem endereço público: defina KURO_API_DOMAIN no .env (profile `tls`) ou suba o "
+            "HTTPS pelo IP (`docker compose --profile ip up -d`) e rode de novo. Ou use o modo 1 (SSH), que "
+            "não precisa de nada disso.",
+            highlight=False,
+        )
+        return
+    else:
+        console.print("[bold]Na sua máquina[/] (precisa do uv):\n")
+        _print_command(r["claude_command"])
+    if r["api_key"] and not r["api_key_masked"]:
+        console.print("\n[dim]O comando leva a chave admin inteira: não compartilhe a tela nem o histórico.[/]")
+    console.print('Depois, numa sessão nova do Claude Code: "use a tool health do kuro".', highlight=False)
 
 
 @app.command("health")

@@ -316,3 +316,19 @@ async def test_eval_with_inline_cases_returns_only_failures(api):
     assert data["verdict"]["ok"] is True
     assert [r["id"] for r in data["results"]] == ["b"]
     assert all(json.loads(r.content).get("dry_run") for r in calls if r.url.path == "/analyze")
+
+
+async def test_target_diz_em_qual_kuro_o_servidor_mexe():
+    """Pelo SSH a URL é sempre a de dentro do container (`localhost:8000`), igual em toda
+    máquina: com vários Kuros registrados, o modelo só distingue pelo `target`."""
+    def handler(request):
+        return httpx.Response(200, json={"status": "ok"} if request.url.path == "/health" else [])
+
+    client = Client("http://localhost:8000", transport=httpx.MockTransport(handler))
+    async with McpClient(build_server(client, target="root@69.62.89.141")) as mcp:
+        health = _data(await mcp.call_tool("health", {}))
+        instructions = mcp.instructions or ""
+    assert health["target"] == "root@69.62.89.141"
+    assert "root@69.62.89.141" in instructions
+    async with McpClient(build_server(client)) as mcp:
+        assert "target" not in _data(await mcp.call_tool("health", {}))

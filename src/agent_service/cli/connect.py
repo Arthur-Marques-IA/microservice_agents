@@ -77,8 +77,11 @@ def mcp_command(ssh: Ssh, container: str) -> list[str]:
     `claude` costuma ser um `.cmd`, e os argumentos passam pelo cmd.exe.
 
     `KURO_MCP_LOCAL_FILES=0`: o processo roda no container, então um caminho de arquivo
-    seria do servidor, não de quem pediu — as tools pedem o conteúdo inline."""
-    return [*ssh.base(), "docker", "exec", "-i", "-e", "KURO_MCP_LOCAL_FILES=0", container, "kuro-mcp"]
+    seria do servidor, não de quem pediu — as tools pedem o conteúdo inline.
+    `KURO_MCP_TARGET`: a máquina, para a `health` e as instruções dizerem qual Kuro é este
+    (com vários registrados, o modelo precisa saber em qual está mexendo)."""
+    target = f"KURO_MCP_TARGET={ssh.destination}" + (f":{ssh.port}" if ssh.port else "")
+    return [*ssh.base(), "docker", "exec", "-i", "-e", "KURO_MCP_LOCAL_FILES=0", "-e", target, container, "kuro-mcp"]
 
 
 def mcp_env() -> dict[str, str]:

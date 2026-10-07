@@ -74,8 +74,7 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
     `dry_run`; exige `admin`).
   - Num agente procedural, um 502 ou 504 pode chegar depois de a ação ter rodado: leia o estado da
     sessão antes de cair no fallback.
-- `kuro mcp-config`: rodado no servidor (`docker compose exec agent-service kuro mcp-config
-  --show-key`), imprime o `claude mcp add ...` e o `.mcp.json` prontos para conectar o
+- `kuro mcp-config`: rodado no servidor (`docker compose exec agent-service kuro mcp-config`), imprime o `claude mcp add ...` e o `.mcp.json` prontos para conectar o
   servidor MCP. Eles instalam o `kuro-mcp` com `uvx` direto do GitHub, sem clone na máquina de quem opera.
   O endereço sai sozinho: `KURO_PUBLIC_URL`, ou `https://` + `KURO_API_DOMAIN`, ou o HTTPS pelo IP
   do profile `ip`, com o certificado da CA para salvar (comandos em bash e PowerShell). `--url` sobrepõe.
@@ -92,8 +91,15 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
   [MCP](mcp.md#pelo-ssh-kuro-connect).
 - **MCP pela URL em `/mcp`** (Streamable HTTP), com a chave admin: com domínio e o profile `tls`,
   `claude mcp add --transport http kuro https://<domínio>/mcp --header "Authorization: Bearer ..."`,
-  sem instalar nada. O `kuro mcp-config` imprime o comando pronto quando há domínio e, em qualquer
-  caso, começa pelo `kuro connect`.
+  sem instalar nada.
+- **`kuro mcp-config` pergunta o modo** (1: pelo SSH, recomendado; 2: pela URL, com a chave de API) e
+  mostra só as instruções dele; no modo 2 com o profile `ip`, pergunta também Windows ou Linux/macOS.
+  A chave só aparece no modo 2, já inteira (o `--show-key` deixou de ser necessário). Sem terminal,
+  mostra o modo 1; `--mode` e `--os` escolhem sem perguntar, e `--json` devolve tudo, como antes.
+- Pelo SSH, a tool `health` e as instruções do servidor MCP dizem em qual máquina ele está
+  (`target`, ex.: `root@69.62.89.141`): de dentro do container a URL é sempre `localhost:8000`, e com
+  vários Kuros registrados o modelo não tinha como saber qual era. Quem já conectou ganha isso
+  rodando o `kuro connect` de novo (com `--yes`).
 - Pelo SSH e pela URL o MCP roda no servidor, então os parâmetros que recebem caminho de arquivo
   (`document_file`, `cases_file`, `rules_file`, o `file` de `collection_add`) são recusados: o caminho
   seria do container. Mande o conteúdo inline. Com o `kuro-mcp` na sua máquina, nada muda.

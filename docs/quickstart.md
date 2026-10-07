@@ -153,7 +153,7 @@ pedir senha, ele oferece instalar uma chave SSH, porque o Claude Code não tem c
 
 Com um domínio e o HTTPS do profile `tls`, dá também para conectar pela URL, sem instalar nada: o
 serviço atende o MCP em `/mcp`. O comando pronto sai no servidor, com
-`docker compose exec agent-service kuro mcp-config --show-key`. Os jeitos e as opções estão em
+`docker compose exec agent-service kuro mcp-config` (opção 2). Os jeitos e as opções estão em
 [MCP](mcp.md#conectar).
 
 ### Serviço local, a partir do clone

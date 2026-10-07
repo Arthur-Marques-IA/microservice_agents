@@ -478,15 +478,48 @@ def test_sessions_list_scopes_by_user_and_agent(api):
     assert (params["user_id"], params["component_id"], params["type"]) == ("cli", "suporte", "agent")
 
 
-def test_mcp_config_prints_a_ready_command_with_the_key_masked(api, monkeypatch):
+def test_mcp_config_sem_terminal_mostra_so_o_ssh_e_nenhuma_chave(api, monkeypatch):
     monkeypatch.setenv("KURO_API_KEY", "chave-admin-1234567890abcdef")
     result = _run("mcp-config", "--url", "https://kuro.empresa.com/")
     assert result.exit_code == 0
     # `[mcp]` não pode sumir (o Rich o leria como marcação)
     assert 'uvx --from "agent-service[mcp] @ git+https://github.com/' in result.stdout
-    assert "KURO_API_URL=https://kuro.empresa.com " in result.stdout
-    assert "chave-admin-1234567890abcdef" not in result.stdout
-    assert "--show-key" in result.stdout
+    assert "kuro connect root@kuro.empresa.com" in result.stdout
+    assert "chave-admin" not in result.stdout and "…cdef" not in result.stdout  # nem mascarada
+    assert "claude mcp add" not in result.stdout  # o modo 2 só aparece se pedido
+
+
+def test_mcp_config_modo_url_mostra_a_chave_inteira_so_dele(api, monkeypatch):
+    monkeypatch.setenv("KURO_API_KEY", "chave-admin-1234567890abcdef")
+    texto = _run("mcp-config", "--url", "https://kuro.empresa.com/", "--mode", "2").stdout
+    assert (
+        'claude mcp add --transport http kuro https://kuro.empresa.com/mcp -s user '
+        '--header "Authorization: Bearer chave-admin-1234567890abcdef"'
+    ) in texto
+    assert "kuro connect" not in texto
+    assert _run("mcp-config", "--mode", "3").exit_code == 2
+
+
+def test_mcp_config_pergunta_o_modo_e_o_sistema_no_terminal(api, monkeypatch, tmp_path):
+    """Com terminal, pergunta 1/2 e, no modo 2 com o profile `ip`, Windows ou Linux/macOS —
+    e mostra só o bloco daquele shell."""
+    from agent_service.cli import common
+
+    monkeypatch.setattr(common.State, "interactive", property(lambda self: True))
+    monkeypatch.setenv("KURO_API_KEY", "chave-admin-1234567890abcdef")
+    monkeypatch.setenv("KURO_API_DOMAIN", "localhost")
+    monkeypatch.setenv("KURO_PUBLIC_DIR", str(_ip_profile(tmp_path)))
+    result = _run("--url", "http://localhost:8000", "mcp-config", input="9\n2\n1\n")
+    assert result.exit_code == 0, result.output
+    assert "Pelo SSH (recomendado)" in result.stdout and "Responda 1 ou 2" in result.output
+    assert "\n'@ | Set-Content" in result.stdout  # o `'@` começa a linha, sem recuo
+    assert "mkdir -p ~/.kuro" not in result.stdout  # nada do bash
+    assert 'KURO_CA_BUNDLE="$HOME\\.kuro\\kuro-ca-69-62-89-141.pem"' in result.stdout
+    assert "KURO_API_KEY=chave-admin-1234567890abcdef" in result.stdout
+    assert "58443" in result.stdout  # o aviso do firewall
+
+    padrao = _run("--url", "http://localhost:8000", "mcp-config", input="\n")
+    assert "kuro connect root@69.62.89.141" in padrao.stdout and "Set-Content" not in padrao.stdout
 
     data = json.loads(_run("--json", "mcp-config", "--url", "https://kuro.empresa.com", "--show-key").stdout)
     assert "KURO_API_KEY=chave-admin-1234567890abcdef" in data["claude_command"]
@@ -509,7 +542,7 @@ def test_mcp_config_without_domain_or_ip_profile_says_how_to_expose(api, monkeyp
     assert "--profile ip" in data["warnings"][0] and "401" in data["warnings"][1]
     # Sem endereço público, o caminho é o SSH, e não há URL para o MCP por HTTP.
     assert "kuro connect" in data["warnings"][0]
-    assert data["ssh_command"].endswith("kuro connect usuario@servidor") and data["http_command"] is None
+    assert data["ssh_command"].endswith("kuro connect root@seu-servidor") and data["http_command"] is None
     assert "KURO_API_KEY" not in data["mcp_json"]["mcpServers"]["kuro"]["env"]
     assert data["setup"] is None
 
@@ -539,11 +572,12 @@ def test_mcp_config_with_ip_profile_hands_over_the_ca(api, monkeypatch, tmp_path
     assert '--env KURO_CA_BUNDLE="$HOME/.kuro/kuro-ca-69-62-89-141.pem"' in data["claude_command"]
     assert '--env KURO_CA_BUNDLE="$HOME\\.kuro\\kuro-ca-69-62-89-141.pem"' in data["claude_command_powershell"]
     assert data["mcp_json"]["mcpServers"]["kuro"]["env"]["KURO_CA_BUNDLE"] == "${KURO_CA_BUNDLE}"
-    assert data["ssh_command"].endswith("kuro connect usuario@69.62.89.141")
+    assert data["ssh_command"].endswith("kuro connect root@69.62.89.141")
     # O Claude Code (Node) não confia na CA própria: sem MCP por URL no profile `ip`.
     assert data["http_command"] is None
-    texto = _run("--url", "http://localhost:8000", "mcp-config").stdout
-    assert "PowerShell" in texto and 'agent-service[mcp] @ git+' in texto
+    texto = _run("--url", "http://localhost:8000", "mcp-config", "-m", "url", "--os", "unix").stdout
+    assert "\nEOF" in texto and "Set-Content" not in texto  # só o bloco do bash, com o EOF no começo da linha
+    assert 'KURO_CA_BUNDLE="$HOME/.kuro/kuro-ca-69-62-89-141.pem"' in texto and 'agent-service[mcp] @ git+' in texto
 
 
 def test_mcp_config_domain_wins_over_ip_profile(api, monkeypatch, tmp_path):
@@ -562,7 +596,7 @@ def test_mcp_config_uses_the_tls_domain_from_env(api, monkeypatch):
     assert data["http_command"] == (
         'claude mcp add --transport http kuro https://kuro.empresa.com/mcp -s user --header "Authorization: Bearer chav…cdef"'
     )
-    assert 'agent-service[mcp] @ git+' in data["ssh_command"] and data["ssh_command"].endswith("usuario@kuro.empresa.com")
+    assert 'agent-service[mcp] @ git+' in data["ssh_command"] and data["ssh_command"].endswith("root@kuro.empresa.com")
     # --url continua mandando
     data = json.loads(_run("--json", "mcp-config", "--url", "https://outro.example.com").stdout)
     assert data["url"] == "https://outro.example.com" and data["url_source"] == "explicit"

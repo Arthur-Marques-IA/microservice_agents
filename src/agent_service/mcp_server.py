@@ -190,10 +190,16 @@ def _files(local_files: bool) -> tuple[Callable[[str, str], str], Callable[[str,
 # -- servidor --------------------------------------------------------------------
 
 
-def build_server(client: Client, local_files: bool = True) -> MCPServer:
+def build_server(client: Client, local_files: bool = True, target: str | None = None) -> MCPServer:
     """`local_files=False` quando o servidor MCP roda junto do serviço, e não na máquina
-    de quem usa: os parâmetros que recebem um caminho de arquivo passam a ser recusados."""
+    de quem usa: os parâmetros que recebem um caminho de arquivo passam a ser recusados.
+
+    `target` é a máquina que este servidor opera, como quem conectou a chama (`root@vps`):
+    de dentro do container a URL é sempre `localhost:8000`, igual em toda máquina, e com
+    vários Kuros registrados o modelo precisa saber em qual está mexendo."""
     instructions = INSTRUCTIONS
+    if target:
+        instructions += f"Este servidor MCP opera o Kuro em {target}.\n"
     if not local_files:
         instructions += NO_LOCAL_FILES.format(inline="document, cases, rules, text") + "\n"
     server = MCPServer(name="kuro", title="Kuro", instructions=instructions, version=_version())
@@ -205,6 +211,8 @@ def build_server(client: Client, local_files: bool = True) -> MCPServer:
     def health() -> dict[str, Any]:
         """Diagnóstico do serviço: versão, autenticação, gravação de execuções e provedores com chave."""
         report: dict[str, Any] = {"url": client.base_url, "service": _call(client.health)}
+        if target:
+            report = {"target": target, **report}
         for key, fn in (("observability", client.observability_config), ("credentials", client.list_credentials)):
             try:
                 report[key] = fn()
@@ -741,10 +749,11 @@ def main() -> None:
     # `KURO_MCP_LOCAL_FILES=0`: o processo roda no container (o `kuro connect` o chama por
     # `docker exec`), então um caminho de arquivo seria do servidor, não de quem pediu.
     local_files = os.environ.get("KURO_MCP_LOCAL_FILES", "1").strip().lower() not in ("0", "false", "no")
+    target = os.environ.get("KURO_MCP_TARGET", "").strip() or None
     # Uma linha INFO no stderr por chamada à API: vira ruído no log do cliente MCP e, pelo
     # `kuro connect`, no terminal de quem conecta. Erro de conexão já volta na tool.
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    build_server(client_from_env(timeout=timeout), local_files=local_files).run("stdio")
+    build_server(client_from_env(timeout=timeout), local_files=local_files, target=target).run("stdio")
 
 
 if __name__ == "__main__":

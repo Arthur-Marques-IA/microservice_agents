@@ -7,7 +7,20 @@ o serviço pela API, o mesmo caminho da CLI e do console, e não acessa o banco.
 
 ## Conectar
 
-Três jeitos, do mais simples ao que exige mais do servidor:
+O jeito mais fácil é perguntar ao servidor. Na pasta do projeto, no servidor:
+
+```bash
+docker compose exec agent-service kuro mcp-config
+```
+
+Ele pergunta o modo e mostra só o comando daquele modo, para rodar na sua máquina:
+
+- **1, pelo SSH** (recomendado): o comando do `kuro connect`, abaixo;
+- **2, pela URL, com a chave de API**: o `claude mcp add` com a URL e a chave. Com o profile `ip`,
+  pergunta também se a sua máquina é Windows ou Linux/macOS, para mostrar o bloco certo.
+
+Sem terminal, ele mostra o modo 1; `--mode 2` (e `--os windows|unix`) escolhe sem perguntar, e
+`--json` devolve tudo. Os três jeitos de conectar, em detalhe:
 
 | Jeito | Quando | Precisa de |
 |---|---|---|
@@ -52,6 +65,21 @@ passo antes do próximo:
 
 O usuário do SSH precisa poder usar o Docker: `root`, ou alguém no grupo `docker`.
 
+### Vários Kuros
+
+Com o serviço em mais de uma máquina, registre cada um com um nome: as tools ganham o nome como
+prefixo (`mcp__kuro-prod__agents_list`), e o modelo sabe em qual está mexendo. Pelo SSH, a tool
+`health` e as instruções do servidor também dizem a máquina (`target: root@69.62.89.141`).
+
+```bash
+uvx --from "agent-service[mcp] @ git+https://github.com/Arthur-Marques-IA/microservice_agents" kuro connect root@prod --name kuro-prod
+uvx --from "agent-service[mcp] @ git+https://github.com/Arthur-Marques-IA/microservice_agents" kuro connect root@staging --name kuro-staging
+```
+
+Para cada projeto enxergar só o seu, rode o `connect` dentro da pasta do projeto com
+`--scope project`: ele grava um `.mcp.json` ali (sem chave nenhuma, só o comando `ssh`), que pode ir
+para o git. Numa sessão aberta, `/mcp` liga e desliga cada servidor.
+
 ### Pela URL: `/mcp`
 
 O próprio serviço atende o MCP em `/mcp` (Streamable HTTP), exigindo a chave **admin**. Com um
@@ -61,7 +89,7 @@ domínio e o HTTPS do profile `tls` (certificado do Let's Encrypt), não precisa
 claude mcp add --transport http kuro https://kuro.suaempresa.com/mcp -s user --header "Authorization: Bearer sua-chave-admin"
 ```
 
-`kuro mcp-config --show-key`, no servidor, imprime esse comando pronto quando há domínio no `.env`.
+`kuro mcp-config`, no servidor, imprime esse comando pronto (opção 2) quando há domínio no `.env`.
 
 Só com certificado público: o Claude Code não confia na CA própria do profile `ip`, e por HTTP puro
 a chave iria em texto claro. O serviço precisa rodar com **um worker** só (o padrão do compose),
@@ -75,13 +103,7 @@ O `kuro-mcp` roda na sua máquina, por stdio, e fala com a URL do serviço:
 Claude Code  ──stdio──▶  kuro-mcp (sua máquina)  ──HTTPS──▶  agent-service
 ```
 
-No servidor, `kuro mcp-config` imprime o comando pronto, em bash e PowerShell:
-
-```bash
-docker compose exec agent-service kuro mcp-config --show-key
-```
-
-O endereço sai sozinho, nesta ordem:
+No servidor, `kuro mcp-config` imprime o comando pronto (opção 2). O endereço sai sozinho, nesta ordem:
 
 | No servidor | Endereço que o MCP usa |
 |---|---|

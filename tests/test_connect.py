@@ -81,7 +81,9 @@ def test_testa_antes_e_registra_o_ssh_no_claude_code(fake):
     assert out["registered"] and not out["replaced"] and out["container"] == CONTAINER
     command = out["command"]
     assert command[:4] == ["ssh", "-T", "-o", "BatchMode=yes"]
-    assert command[-7:] == ["docker", "exec", "-i", "-e", "KURO_MCP_LOCAL_FILES=0", CONTAINER, "kuro-mcp"]
+    assert command[-9:] == [
+        "docker", "exec", "-i", "-e", "KURO_MCP_LOCAL_FILES=0", "-e", "KURO_MCP_TARGET=root@69.62.89.141", CONTAINER, "kuro-mcp",
+    ]
     # O teste usa exatamente o comando que vai para o Claude Code, e vem antes do registro.
     assert fake.probed == [command]
     assert fake.claude("add") == [["claude", "mcp", "add", "kuro", "-s", "user", "--", *command]]
