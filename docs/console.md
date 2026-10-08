@@ -8,8 +8,34 @@
 | **Tools** `/tools` | criação e edição dos três tipos, com formulário próprio por tipo, campos de dentro de parâmetros `object`/`array`, botão **Testar** (com `dependencies`) e origem de cada parâmetro |
 | **Conhecimento** `/knowledge` | documentos com status, escolha do embedder na criação, upload por texto ou arquivo em qualquer coleção (URL só na padrão), teste de busca semântica |
 | **Modelos** `/models` | credenciais por provedor, teste de chave |
-| **Logs** `/logs` | sessões e execuções de todos os agentes, KPIs, gráfico diário; cada sessão e cada run abrem em detalhe |
+| **Logs** `/logs` | sessões e execuções de todos os agentes; o panorama do período (KPIs contra o período anterior, a série no tempo, tools falhando, custo e versões por agente); cada sessão e cada run abrem em detalhe |
 | **Trace** `/runs/[id]` | cascata de spans (agente → modelo → tools), versão da configuração, tokens, custo, avaliações, metadata de quem chamou e a referência do shadow |
+
+## O gráfico do panorama (Logs)
+
+A série no tempo tem três medidas, nas abas acima do gráfico:
+
+- **Volume** responde duas perguntas, em dois gráficos alinhados pelo mesmo período:
+  - **Execuções por resultado**: barras empilhadas com as falhas **na base**, junto ao eixo
+    (erro ou interrompida, depois tool falhando, sucesso no topo). Num dia de 640 execuções e 42
+    erros, os erros ficam onde o olho os acha, e não como um fio no topo da barra;
+  - **Taxa de falha**: das execuções de cada período, quantas falharam e quantas responderam com
+    tool falhando, em %, com uma linha fina na média do período. Ela não depende do volume: um dia
+    calmo com 10% de erro aparece tão alto quanto um dia cheio com 10%. São dois gráficos, e não
+    um com dois eixos, de propósito.
+- **Custo**, em barras.
+- **Latência p95**, em linha.
+
+Passar o mouse (ou focar pelo teclado) num período mostra o detalhe dele, e nos dois gráficos do
+volume marca o mesmo período nos dois. Um período com **menos de 5 execuções** sai com o ponto
+vazado, e o detalhe avisa que é um valor só, não uma tendência: 1 falha em 4 execuções dá 25% e
+não diz nada. Esses períodos também não definem a escala da taxa. Se um deles passar do teto, fica
+na borda de cima como um triângulo vazado, e o valor real está no detalhe e na tabela. O botão
+**Tabela** mostra os mesmos números, com as taxas de cada período.
+
+As cores de status são as mesmas nos dois temas e foram conferidas contra daltonismo
+(`frontend/src/app/globals.css`, `--viz-*`). A linha de "tool falhando" usa um âmbar mais escuro
+que o das barras, porque uma linha fina precisa de mais contraste no fundo claro.
 
 Atalhos: `Ctrl/⌘+K` (paleta de comandos) e `Ctrl/⌘+B` (recolher a sidebar).
 Tema claro, escuro ou do sistema.

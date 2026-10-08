@@ -5,6 +5,7 @@ import { AlertTriangle, ArrowDownRight, ArrowUpRight, ChevronDown, ChevronRight,
 import { errorMessage, requestJson } from "@/lib/http";
 import { formatCost, formatMs, formatNumber, formatRelativeTime } from "@/lib/format";
 import { TOOL_FAILURE_META } from "@/lib/tool-failures";
+import { FEW_RUNS, STACK_KEYS, bucketRate, niceMax, periodFailureRate, rateScale } from "@/lib/trend";
 import type { Overview, OverviewAgent, OverviewBucket, OverviewTotals } from "@/lib/types";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { Badge } from "@/components/ui/badge";
@@ -215,6 +216,19 @@ const STATUS_SERIES = [
   { key: "errors", label: "Erro ou interrompida", color: "var(--viz-critical)" },
 ] as const;
 
+/** Empilhadas a partir da base (`STACK_KEYS`): as falhas ficam junto ao eixo, onde poucas ainda se
+ * veem. No topo da barra, 42 erros num dia de 640 execuções viravam um fio vermelho que ninguém lia. */
+const STACK_ORDER = STACK_KEYS.map((key) => STATUS_SERIES.find((s) => s.key === key)!);
+
+/** A taxa de falha separada do volume: com o volume variando 10× entre um dia e outro, a
+ * proporção de falhas não aparece numa pilha absoluta. Duas medidas, dois gráficos — nunca
+ * dois eixos no mesmo. O âmbar da linha é mais escuro que o das barras (ver globals.css). */
+const RATE_SERIES = [
+  { key: "failed", label: "Falharam (erro ou interrompida)", color: "var(--viz-critical)" },
+  { key: "tool", label: "Responderam com tool falhando", color: "var(--viz-warning-line)" },
+] as const;
+// Com menos de FEW_RUNS execuções o ponto sai vazado e o tooltip avisa — na taxa e na latência.
+
 function bucketLabel(start: string, granularity: Overview["granularity"], long = false): string {
   const date = new Date(start);
   const opts: Intl.DateTimeFormatOptions = { timeZone: TIMEZONE };
@@ -242,14 +256,6 @@ function formatMetric(value: number | null, metric: Metric): string {
   return formatMs(value);
 }
 
-/** Teto "redondo" para o eixo (1, 1,5, 2, 3, 4, 5, 6, 8 × 10ⁿ): perto do dado, sem sobrar meio gráfico vazio. */
-function niceMax(value: number): number {
-  if (value <= 0) return 1;
-  const exp = Math.pow(10, Math.floor(Math.log10(value)));
-  const step = [1, 1.5, 2, 3, 4, 5, 6, 8, 10].find((m) => m * exp >= value) ?? 10;
-  return step * exp;
-}
-
 function useWidth<T extends HTMLElement>() {
   const ref = useRef<T>(null);
   const [width, setWidth] = useState(0);
@@ -272,6 +278,8 @@ function topRounded(x: number, y: number, w: number, h: number, r: number): stri
 function TrendCard({ overview }: { overview: Overview }) {
   const [metric, setMetric] = useState<Metric>("runs");
   const [asTable, setAsTable] = useState(false);
+  // Um período em foco para os dois gráficos do volume: passar o mouse num marca o outro.
+  const [hovered, setHovered] = useState<number | null>(null);
   const current = METRICS.find((m) => m.value === metric)!;
 
   return (
@@ -291,7 +299,10 @@ function TrendCard({ overview }: { overview: Overview }) {
                 role="tab"
                 type="button"
                 aria-selected={metric === m.value}
-                onClick={() => setMetric(m.value)}
+                onClick={() => {
+                  setMetric(m.value);
+                  setHovered(null);
+                }}
                 className={cn(
                   "rounded-md px-2.5 py-1 text-xs transition-colors",
                   metric === m.value ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:text-foreground"
@@ -316,7 +327,14 @@ function TrendCard({ overview }: { overview: Overview }) {
           ))}
         </ul>
       )}
-      {asTable ? <TrendTable overview={overview} metric={metric} /> : <TrendChart overview={overview} metric={metric} />}
+      {asTable ? (
+        <TrendTable overview={overview} metric={metric} />
+      ) : (
+        <>
+          <TrendChart overview={overview} metric={metric} hovered={hovered} onHover={setHovered} />
+          {metric === "runs" && <RateChart overview={overview} hovered={hovered} onHover={setHovered} />}
+        </>
+      )}
     </Card>
   );
 }
@@ -325,9 +343,18 @@ const PLOT_HEIGHT = 168;
 const AXIS_LEFT = 52;
 const AXIS_BOTTOM = 24;
 
-function TrendChart({ overview, metric }: { overview: Overview; metric: Metric }) {
+function TrendChart({
+  overview,
+  metric,
+  hovered,
+  onHover: setHovered,
+}: {
+  overview: Overview;
+  metric: Metric;
+  hovered: number | null;
+  onHover: (index: number | null) => void;
+}) {
   const [ref, width] = useWidth<HTMLDivElement>();
-  const [hovered, setHovered] = useState<number | null>(null);
   const titleId = useId();
   const buckets = overview.buckets;
   const n = buckets.length;
@@ -363,7 +390,7 @@ function TrendChart({ overview, metric }: { overview: Overview; metric: Metric }
               buckets.map((bucket, i) => {
                 const x = xCenter(i) - barWidth / 2;
                 let base = PLOT_HEIGHT;
-                const segments = STATUS_SERIES.map((s) => ({ ...s, value: bucket[s.key] })).filter((s) => s.value > 0);
+                const segments = STACK_ORDER.map((s) => ({ ...s, value: bucket[s.key] })).filter((s) => s.value > 0);
                 return (
                   <g key={bucket.start} opacity={hovered == null || hovered === i ? 1 : 0.55}>
                     {segments.map((segment, s) => {
@@ -398,7 +425,16 @@ function TrendChart({ overview, metric }: { overview: Overview; metric: Metric }
                 );
               })}
 
-            {metric === "latency" && <LatencyLine values={values} xCenter={xCenter} y={y} hovered={hovered} />}
+            {metric === "latency" && (
+              <PointLine
+                values={values}
+                runs={buckets.map((b) => b.runs)}
+                xCenter={xCenter}
+                y={y}
+                hovered={hovered}
+                color="var(--color-primary)"
+              />
+            )}
 
             {hovered != null && metric === "latency" && (
               <line x1={xCenter(hovered)} x2={xCenter(hovered)} y1={0} y2={PLOT_HEIGHT} className="stroke-muted-foreground" strokeWidth={1} />
@@ -447,18 +483,26 @@ function TrendChart({ overview, metric }: { overview: Overview; metric: Metric }
   );
 }
 
-function LatencyLine({
+function PointLine({
   values,
+  runs,
   xCenter,
   y,
   hovered,
+  color,
+  ceiling,
 }: {
   values: (number | null)[];
+  runs: number[];
   xCenter: (i: number) => number;
   y: (v: number) => number;
   hovered: number | null;
+  color: string;
+  /** Acima disto o ponto fica preso na borda de cima, como um triângulo ("passou daqui"). */
+  ceiling?: number;
 }) {
-  // Balde sem execução não tem latência: a linha quebra ali, em vez de cair a zero.
+  const clamp = (v: number) => (ceiling != null ? Math.min(v, ceiling) : v);
+  // Balde sem execução não tem latência nem taxa: a linha quebra ali, em vez de cair a zero.
   const segments: { i: number; v: number }[][] = [];
   let current: { i: number; v: number }[] = [];
   values.forEach((v, i) => {
@@ -475,27 +519,157 @@ function LatencyLine({
       {segments.map((segment) => (
         <polyline
           key={segment[0].i}
-          points={segment.map((p) => `${xCenter(p.i)},${y(p.v)}`).join(" ")}
+          points={segment.map((p) => `${xCenter(p.i)},${y(clamp(p.v))}`).join(" ")}
           fill="none"
-          className="stroke-primary"
+          style={{ stroke: color }}
           strokeWidth={2}
           strokeLinejoin="round"
           strokeLinecap="round"
         />
       ))}
       {values.map((v, i) =>
-        v == null ? null : (
-          <circle
+        v == null ? null : ceiling != null && v > ceiling ? (
+          // Fora da escala (só acontece com poucas execuções, ver RateChart): na borda, vazado.
+          <path
             key={i}
-            cx={xCenter(i)}
-            cy={y(v)}
-            r={hovered === i ? 5 : 4}
-            className="fill-primary stroke-card"
+            d={`M${xCenter(i) - 5},${y(ceiling) + 4}L${xCenter(i)},${y(ceiling) - 4}L${xCenter(i) + 5},${y(ceiling) + 4}Z`}
+            className="fill-card"
+            style={{ stroke: color }}
             strokeWidth={2}
+            strokeLinejoin="round"
           />
+        ) : runs[i] < FEW_RUNS ? (
+          // Poucas execuções: vazado, para o valor não ser lido como tendência.
+          <circle key={i} cx={xCenter(i)} cy={y(v)} r={hovered === i ? 5 : 4} className="fill-card" style={{ stroke: color }} strokeWidth={2} />
+        ) : (
+          <circle key={i} cx={xCenter(i)} cy={y(v)} r={hovered === i ? 5 : 4} className="stroke-card" style={{ fill: color }} strokeWidth={2} />
         )
       )}
     </g>
+  );
+}
+
+function FewRunsNote({ runs }: { runs: number }) {
+  if (runs === 0 || runs >= FEW_RUNS) return null;
+  return (
+    <p className="mt-1 text-muted-foreground">
+      Só {formatNumber(runs)} {runs === 1 ? "execução" : "execuções"}: um valor só, não uma tendência.
+    </p>
+  );
+}
+
+const RATE_PLOT_HEIGHT = 112;
+
+/** A segunda pergunta do volume: das execuções de cada período, quantas falharam? Mesmo eixo X e
+ * mesma largura do gráfico de cima (os períodos se alinham), eixo Y próprio em %. */
+function RateChart({
+  overview,
+  hovered,
+  onHover,
+}: {
+  overview: Overview;
+  hovered: number | null;
+  onHover: (index: number | null) => void;
+}) {
+  const [ref, width] = useWidth<HTMLDivElement>();
+  const titleId = useId();
+  const buckets = overview.buckets;
+  const n = buckets.length;
+  const plotWidth = Math.max(width - AXIS_LEFT - 8, 0);
+  const band = n ? plotWidth / n : 0;
+  const xCenter = (i: number) => AXIS_LEFT + band * i + band / 2;
+  const series = RATE_SERIES.map((s) => ({ ...s, values: buckets.map((b) => bucketRate(b, s.key)) }));
+  const average = periodFailureRate(overview.totals);
+  // A escala ignora os períodos de amostra pequena (ver `rateScale`): o ponto deles acima do teto
+  // fica na borda (triângulo vazado), e o valor real está no tooltip e na tabela.
+  const { max, clipped } = rateScale(buckets, average);
+  const y = (value: number) => RATE_PLOT_HEIGHT - (value / max) * RATE_PLOT_HEIGHT;
+  const percent = (value: number) => `${(value * 100).toLocaleString("pt-BR", { maximumFractionDigits: max < 0.1 ? 1 : 0 })}%`;
+  const runs = buckets.map((b) => b.runs);
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-border pt-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h4 id={titleId} className="text-sm font-medium">
+          Taxa de falha
+          <span className="ml-1.5 text-xs font-normal text-muted-foreground">das execuções de cada período</span>
+        </h4>
+        <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground" aria-label="Legenda da taxa de falha">
+          {RATE_SERIES.map((s) => (
+            <li key={s.key} className="inline-flex items-center gap-1.5">
+              <span className="h-0.5 w-3 rounded-full" style={{ background: s.color }} aria-hidden />
+              {s.label}
+            </li>
+          ))}
+          {average != null && average > 0 && (
+            <li className="inline-flex items-center gap-1.5">
+              <span className="h-px w-3 bg-muted-foreground/60" aria-hidden />
+              média do período: {formatRate(average)} falharam
+            </li>
+          )}
+          <li className="inline-flex items-center gap-1.5">
+            <span className="size-2 rounded-full border-2 border-muted-foreground" aria-hidden />
+            menos de {FEW_RUNS} execuções
+          </li>
+          {clipped && (
+            <li className="inline-flex items-center gap-1.5">
+              <svg width="10" height="9" aria-hidden className="overflow-visible">
+                <path d="M0,8L5,0L10,8Z" className="fill-none stroke-muted-foreground" strokeWidth={1.5} strokeLinejoin="round" />
+              </svg>
+              acima da escala (valor no tooltip)
+            </li>
+          )}
+        </ul>
+      </div>
+      <div ref={ref} className="relative w-full" onPointerLeave={() => onHover(null)}>
+        {width > 0 && (
+          <svg width={width} height={RATE_PLOT_HEIGHT + 16} role="img" aria-labelledby={titleId} className="overflow-visible">
+            <g transform="translate(0,8)">
+              {[0, max / 2, max].map((tick) => (
+                <g key={tick}>
+                  <line x1={AXIS_LEFT} x2={width - 8} y1={y(tick)} y2={y(tick)} className="stroke-border" strokeWidth={1} />
+                  <text x={AXIS_LEFT - 8} y={y(tick)} dy="0.32em" textAnchor="end" className="fill-muted-foreground text-[11px] tabular-nums">
+                    {percent(tick)}
+                  </text>
+                </g>
+              ))}
+              {average != null && average > 0 && (
+                // A média do período: o que um dia "ruim" está acima. Linha cheia e fina; o rótulo fica
+                // na legenda — dentro do gráfico ele cobria o ponto que caísse perto dele.
+                <line x1={AXIS_LEFT} x2={width - 8} y1={y(average)} y2={y(average)} className="stroke-muted-foreground/60" strokeWidth={1} />
+              )}
+              {hovered != null && (
+                <line x1={xCenter(hovered)} x2={xCenter(hovered)} y1={0} y2={RATE_PLOT_HEIGHT} className="stroke-muted-foreground" strokeWidth={1} />
+              )}
+              {series.map((s) => (
+                <PointLine key={s.key} values={s.values} runs={runs} xCenter={xCenter} y={y} hovered={hovered} color={s.color} ceiling={max} />
+              ))}
+              {buckets.map((bucket, i) => (
+                <rect
+                  key={bucket.start}
+                  x={AXIS_LEFT + band * i}
+                  y={0}
+                  width={band}
+                  height={RATE_PLOT_HEIGHT}
+                  fill="transparent"
+                  tabIndex={0}
+                  aria-label={
+                    bucket.runs
+                      ? `${bucketLabel(bucket.start, overview.granularity, true)}: ${formatRate(bucketRate(bucket, "failed"))} falharam, ` +
+                        `${formatRate(bucketRate(bucket, "tool"))} com tool falhando, em ${formatNumber(bucket.runs)} execuções`
+                      : `${bucketLabel(bucket.start, overview.granularity, true)}: sem execuções`
+                  }
+                  onPointerEnter={() => onHover(i)}
+                  onFocus={() => onHover(i)}
+                  onBlur={() => onHover(null)}
+                  className="outline-none"
+                />
+              ))}
+            </g>
+          </svg>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -527,11 +701,19 @@ function TrendTooltip({
               <span className="truncate text-muted-foreground">{s.label}</span>
             </p>
           ))}
+          {bucket.runs > 0 && (
+            <p className="mt-1 border-t border-border pt-1 text-muted-foreground">
+              <span className="font-medium text-foreground tabular-nums">{formatRate(bucketRate(bucket, "failed"))}</span> falharam ·{" "}
+              <span className="font-medium text-foreground tabular-nums">{formatRate(bucketRate(bucket, "tool"))}</span> com tool falhando
+            </p>
+          )}
+          <FewRunsNote runs={bucket.runs} />
         </>
       ) : (
         <>
           <p className="text-sm font-semibold">{formatMetric(metricValue(bucket, metric), metric)}</p>
           <p className="text-muted-foreground">{formatNumber(bucket.runs)} execuções</p>
+          {metric === "latency" && <FewRunsNote runs={bucket.runs} />}
         </>
       )}
     </div>
@@ -550,6 +732,8 @@ function TrendTable({ overview, metric }: { overview: Overview; metric: Metric }
             <th className="px-3 py-2 text-right font-medium">Sucesso</th>
             <th className="px-3 py-2 text-right font-medium">Tool falhando</th>
             <th className="px-3 py-2 text-right font-medium">Erro / interrompida</th>
+            <th className="px-3 py-2 text-right font-medium">Falharam</th>
+            <th className="px-3 py-2 text-right font-medium">Com tool falhando</th>
             <th className="px-3 py-2 text-right font-medium">Custo</th>
             <th className="px-3 py-2 text-right font-medium">p95</th>
           </tr>
@@ -562,13 +746,17 @@ function TrendTable({ overview, metric }: { overview: Overview; metric: Metric }
               <td className="px-3 py-1.5 text-right">{formatNumber(b.success)}</td>
               <td className="px-3 py-1.5 text-right">{formatNumber(b.tool_failure_runs)}</td>
               <td className="px-3 py-1.5 text-right">{formatNumber(b.errors)}</td>
+              <td className="px-3 py-1.5 text-right">{formatRate(bucketRate(b, "failed"))}</td>
+              <td className="px-3 py-1.5 text-right">{formatRate(bucketRate(b, "tool"))}</td>
               <td className="px-3 py-1.5 text-right">{formatCost(b.cost_usd)}</td>
               <td className="px-3 py-1.5 text-right">{formatMs(b.p95_latency_ms)}</td>
             </tr>
           ))}
         </tbody>
       </table>
-      <p className="px-3 py-2 text-xs text-muted-foreground">Períodos sem execução não aparecem na tabela.</p>
+      <p className="px-3 py-2 text-xs text-muted-foreground">
+        Períodos sem execução não aparecem na tabela. As taxas são sobre as execuções de cada período.
+      </p>
     </div>
   );
 }

@@ -33,6 +33,13 @@ Para o comportamento antigo (503 na hora), use `QUEUE_MAX_WAIT_SECONDS=0`.
 
 ### Novo
 
+- **Gráfico dos Logs: volume e taxa de falha separados.** Na aba Volume, as barras empilham as
+  falhas na base, junto ao eixo (antes ficavam no topo, um fio invisível num dia de muito volume),
+  e um segundo gráfico, alinhado ao primeiro, mostra a taxa de falha e a de tool falhando de cada
+  período, em %, com a média do período como referência. Período com menos de 5 execuções sai
+  com o ponto vazado e não define a escala; o mesmo vale na latência p95. O hover marca o mesmo
+  período nos dois gráficos, e a tabela ganhou as colunas das taxas. Ver
+  [console](console.md#o-gráfico-do-panorama-logs).
 - **`kuro dash` de cara nova**: tema com as cores do console, um cabeçalho com o corvo do Kuro (o
   humor dele mostra o estado do painel: execuções chegando, erro, pausado ou serviço fora do ar),
   a aba Execuções virou **Ao vivo**, com um resumo do que está na tela, e o **Panorama** virou
